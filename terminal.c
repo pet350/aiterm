@@ -4,7 +4,7 @@
 #include <string.h>
 #include <vte/vte.h>
 #include <gtk/gtk.h>
-
+#include "utils.h"    // <--- THIS IS MISSING
 #include "terminal.h"
 #include "gui.h"
 
@@ -31,7 +31,7 @@ static void on_terminal_input(VteTerminal *terminal,
     buf[len] = '\0';
 
     // Debug
-    printf("DEBUG: INPUT chunk: [%s]\n", buf);
+    DEBUG_PRINT("DEBUG: INPUT chunk: [%s]\n", buf);
 
     // Send to tee
     process_for_ai(app, buf);
@@ -66,7 +66,7 @@ static void on_terminal_output(VteTerminal *terminal,
 
         // Filter out empty/noise chunks
         if (strlen(delta) > 1) {
-            printf("DEBUG: OUTPUT delta:\n%s\n", delta);
+            DEBUG_PRINT("DEBUG: OUTPUT delta:\n%s\n", delta);
 
             process_for_ai(app, delta);
         }

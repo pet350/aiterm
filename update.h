@@ -18,4 +18,7 @@ void on_input_activate(GtkEntry *entry, gpointer data);
 // Callback function
 size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp);
 
+void display_all_history(AppContext *app);
+void append_to_view(GtkWidget *view, const char *prefix, const char *text);
+
 #endif

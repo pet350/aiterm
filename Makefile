@@ -3,8 +3,8 @@ CC = gcc
 
 #CFLAGS = `pkg-config --cflags gtk+-3.0 vte-2.91 libcurl json-c` -Wall
 
-CFLAGS = `pkg-config --cflags gtk+-3.0 vte-2.91 libcurl json-c` -Wall -Wno-deprecated-declarations
-LIBS   = `pkg-config --libs gtk+-3.0 vte-2.91 libcurl json-c`
+CFLAGS = `pkg-config --cflags gtk+-3.0 vte-2.91 libcurl json-c mariadb` -Wall -Wno-deprecated-declarations
+LIBS   = `pkg-config --libs gtk+-3.0 vte-2.91 libcurl json-c mariadb`
 
 # CFLAGS = `pkg-config --cflags gtk+-3.0 vte-2.91 libcurl` -Wall
 # LIBS = `pkg-config --libs gtk+-3.0 vte-2.91 libcurl`
@@ -25,6 +25,6 @@ $(TARGET): $(OBJ)
 	$(CC) -c -o $@ $< $(CFLAGS)
 
 clean:
-	rm -f *.o $(TARGET)
+	rm -fv *.o $(TARGET)
 
 .PHONY: all clean

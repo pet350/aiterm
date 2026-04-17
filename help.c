@@ -3,22 +3,21 @@
 #include <sys/sysinfo.h>
 #include <sys/utsname.h>
 #include "help.h"
+#include "utils.h"
+
+
+const char* FEATURES="Features:\n  - GTK Terminal + AI Panel\n  - OpenAI Integration\n  - AI Tee Mode (Buffered Analysis)\n  - Menu System\n";
+
 
 const char* get_version_info() {
-    return
-        "AI-Term GTK v0.4\n"
-        "Location: Weston, WV\n"
-        "Platform: UbuntuMini\n"
-        "Features:\n"
-        "  - GTK Terminal + AI Panel\n"
-        "  - OpenAI Integration\n"
-        "  - AI Tee Mode (Buffered Analysis)\n"
-        "  - Menu System\n";
+    static char v_buf[256];
+    snprintf(v_buf, sizeof(v_buf), "AI-Term GTK v%s\nLocation: Weston, WV\n%s", AITERM_VERSION, FEATURES);
+    return(v_buf);
 }
 
 const char* get_help_text() {
+    get_version_info();
     return
-        "--- AI-Term GTK v0.2 Commands ---\n"
         "\n"
         "Core:\n"
         "  help        : Show this menu\n"
@@ -28,6 +27,7 @@ const char* get_help_text() {
         "\n"
         "System:\n"
         "  hw          : Show system hardware stats\n"
+	"  history     : Display history from MYSQL\n"
         "\n"
         "AI Features:\n"
         "  tee on      : Enable AI Tee mode\n"
