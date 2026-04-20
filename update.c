@@ -10,6 +10,7 @@
 #include "gemini.h"
 #include "help.h"
 #include "utils.h"
+#include "tee_handler.h"
 
 // --- Rate limiting ---
 static time_t last_request_time = 0;
@@ -91,20 +92,30 @@ void flush_to_ai(AppContext *app) {
 }
 
 // --- Tee buffer processing ---
-void process_for_ai(AppContext *app, const char *text) {
+//void process_for_ai(AppContext *app, const char *text) {
+//    if (!tee_enabled || !text) return;
+//
+//    size_t len = strlen(text);
+//    if (tee_index + len >= TEE_BUFFER_SIZE - 1) {
+//        flush_to_ai(app);
+//    }
+//
+//    memcpy(tee_buffer + tee_index, text, len);
+//    tee_index += len;
+//    tee_buffer[tee_index] = '\0';
+//
+//    if (strchr(text, '\n') || strchr(text, '\r')) {
+//        flush_to_ai(app);
+//    }
+//}
+
+void process_for_ai(AppContext *app, const char *text, gboolean is_input) {
     if (!tee_enabled || !text) return;
 
-    size_t len = strlen(text);
-    if (tee_index + len >= TEE_BUFFER_SIZE - 1) {
-        flush_to_ai(app);
-    }
-
-    memcpy(tee_buffer + tee_index, text, len);
-    tee_index += len;
-    tee_buffer[tee_index] = '\0';
-
-    if (strchr(text, '\n') || strchr(text, '\r')) {
-        flush_to_ai(app);
+    if (is_input) {
+        tee_handle_input(text);
+    } else {
+        tee_handle_output(text);
     }
 }
 

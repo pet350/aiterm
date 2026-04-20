@@ -6,8 +6,14 @@
 typedef struct {
     AppContext *app;
     char *response_text;
-    char *original_prompt; 
+    char *original_prompt;
 } AIResponseData;
+
+typedef struct {
+    AppContext *app;
+    char *response_text;
+    char *terminal_output; // Add this to pass the command output to the UI thread
+} TeeResponseData;
 
 // Add this line so menu.c knows what this function is
 void append_to_view(GtkWidget *view, const char *prefix, const char *text);
@@ -20,5 +26,8 @@ size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *user
 
 void display_all_history(AppContext *app);
 void append_to_view(GtkWidget *view, const char *prefix, const char *text);
+
+// ADD THIS FOR v0.6-alpha
+void process_for_ai(AppContext *app, const char *text, gboolean is_input);
 
 #endif

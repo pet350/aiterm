@@ -3,9 +3,10 @@
 #include "gui.h"
 #include "update.h"
 #include "utils.h"
+#include "tee_handler.h"
 
 // Current AITERM version
-const char* AITERM_VERSION = "0.5-stable";
+const char* AITERM_VERSION = "0.7-alpha";
 
 int debug_mode = 0; // Global flag
 AppContext *global_app = NULL; // The actual definition
@@ -34,6 +35,9 @@ int main(int argc, char *argv[]) {
     // 2.1) Provision the remote database on the XEN VM
     // Add this line here:
     init_remote_db(app);
+
+    // 2.2 INITIALIZE THE TEE HANDLER HERE
+    tee_handler_init(app); //
 
     // 3.0) FALLBACK: Only check env vars if config key is still NULL
     if (!app->api_key || strlen(app->api_key) == 0) {

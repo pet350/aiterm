@@ -70,30 +70,44 @@ void init_remote_db(AppContext *app) {
 HistoryEntry history[5];
 int history_count = 0;
 
+//char* strip_prompt(const char *input) {
+//    if (!input) return NULL;
+//
+//    // Look for the last occurrence of '#' (root) or '$' (user)
+//    char *last_hash = strrchr(input, '#');
+//    char *last_dollar = strrchr(input, '$');
+//
+//    char *start = NULL;
+//
+//    // Determine which delimiter comes last in the string
+//    if (last_hash > last_dollar) {
+//        start = last_hash;
+//    } else {
+//        start = last_dollar;
+//    }
+//
+//    // If we found a prompt delimiter, move pointer past it and any following space
+//    if (start) {
+//        start++; // Move past # or $
+//        while (*start == ' ') start++; // Skip leading spaces
+//        return strdup(start);
+//    }
+//
+//    // If no prompt found, just return the original string
+//    return strdup(input);
+//}
+
+// terminal.c or utils.c
 char* strip_prompt(const char *input) {
     if (!input) return NULL;
+    char *last_delim = strrchr(input, '$');
+    if (!last_delim) last_delim = strrchr(input, '#');
 
-    // Look for the last occurrence of '#' (root) or '$' (user)
-    char *last_hash = strrchr(input, '#');
-    char *last_dollar = strrchr(input, '$');
-
-    char *start = NULL;
-
-    // Determine which delimiter comes last in the string
-    if (last_hash > last_dollar) {
-        start = last_hash;
-    } else {
-        start = last_dollar;
-    }
-
-    // If we found a prompt delimiter, move pointer past it and any following space
-    if (start) {
-        start++; // Move past # or $
-        while (*start == ' ') start++; // Skip leading spaces
+    if (last_delim) {
+        char *start = last_delim + 1;
+        while (*start == ' ' || *start == ']') start++; // Skip the space AND the leaked bracket
         return strdup(start);
     }
-
-    // If no prompt found, just return the original string
     return strdup(input);
 }
 
@@ -377,7 +391,16 @@ void load_history_to_gemini(struct json_object *contents_array) {
                            global_app->db_pass, global_app->db_name, 0, NULL, 0)) {
         
         // Grab only standard chat entries (is_tee = 0) to save RAM and tokens
-        mysql_query(conn, "SELECT role, content FROM aiterm_history WHERE is_tee = 0 ORDER BY id DESC LIMIT 10");
+        //mysql_query(conn, "SELECT role, content FROM aiterm_history WHERE is_tee = 0 ORDER BY id DESC LIMIT 10");
+        
+        
+        // In utils.c -> load_history_to_gemini
+		// Use a subquery to get the latest 10, then sort them ASC for Gemini
+		mysql_query(conn, "SELECT role, content FROM ("
+                  "SELECT id, role, content FROM aiterm_history "
+                  "WHERE is_tee = 0 ORDER BY id DESC LIMIT 10"
+                  ") sub ORDER BY id ASC");
+        
         MYSQL_RES *res = mysql_store_result(conn);
         MYSQL_ROW row;
 

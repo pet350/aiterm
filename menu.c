@@ -1,7 +1,9 @@
+#include <vte/vte.h>
 #include "menu.h"
 #include "update.h"
 #include "help.h"
 #include "utils.h"
+#include "tee_handler.h" // ADD THIS
 
 // --- Callbacks ---
 
@@ -25,8 +27,15 @@ static void on_about(GtkWidget *widget, gpointer data) {
     append_to_view(app->gemini_view, "System: ", get_version_info());
 }
 
-// Tee controls (reuse your logic style)
-extern void flush_to_ai(AppContext *app);
+static void on_copy(GtkWidget *widget, gpointer data) {
+    AppContext *app = (AppContext *)data;
+    vte_terminal_copy_clipboard_format(VTE_TERMINAL(app->terminal_view), VTE_FORMAT_TEXT);
+}
+
+static void on_paste(GtkWidget *widget, gpointer data) {
+    AppContext *app = (AppContext *)data;
+    vte_terminal_paste_clipboard(VTE_TERMINAL(app->terminal_view));
+}
 
 static void on_tee_toggle(GtkWidget *widget, gpointer data) {
     static int tee_enabled_local = 0;
@@ -41,10 +50,17 @@ static void on_tee_toggle(GtkWidget *widget, gpointer data) {
     }
 }
 
+//static void on_tee_flush(GtkWidget *widget, gpointer data) {
+//    AppContext *app = (AppContext *)data;
+//    flush_to_ai(app);
+//    append_to_view(app->gemini_view, "System: ", "Tee buffer flushed");
+//}
+
+// In menu.c
 static void on_tee_flush(GtkWidget *widget, gpointer data) {
     AppContext *app = (AppContext *)data;
-    flush_to_ai(app);
-    append_to_view(app->gemini_view, "System: ", "Tee buffer flushed");
+    tee_flush_timed(); // Call the new handler directly
+    append_to_view(app->gemini_view, "System: ", "Tee buffer manual flush triggered.");
 }
 
 void on_clear_history(GtkWidget *widget, gpointer data) {
@@ -79,6 +95,19 @@ GtkWidget* create_menu_bar(AppContext *app) {
     g_signal_connect(clear_item, "activate", G_CALLBACK(on_clear), app);
     g_signal_connect(exit_item, "activate", G_CALLBACK(on_menu_exit), app);
 
+    // --- edit ---
+    GtkWidget *edit_menu = gtk_menu_new();
+    GtkWidget *edit_item = gtk_menu_item_new_with_label("Edit");
+    GtkWidget *copy_item = gtk_menu_item_new_with_label("Copy (Ctrl+Shift+C)");
+    GtkWidget *paste_item = gtk_menu_item_new_with_label("Paste (Ctrl+Shift+V)");
+
+    gtk_menu_shell_append(GTK_MENU_SHELL(edit_menu), copy_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(edit_menu), paste_item);
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(edit_item), edit_menu);
+
+    g_signal_connect(copy_item, "activate", G_CALLBACK(on_copy), app);
+    g_signal_connect(paste_item, "activate", G_CALLBACK(on_paste), app);
+
     // --- Tools ---
     GtkWidget *tools_menu = gtk_menu_new();
     GtkWidget *tools_item = gtk_menu_item_new_with_label("Tools");
@@ -107,6 +136,7 @@ GtkWidget* create_menu_bar(AppContext *app) {
 
     // Add to menubar
     gtk_menu_shell_append(GTK_MENU_SHELL(menubar), file_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menubar), edit_item); // ADD THIS
     gtk_menu_shell_append(GTK_MENU_SHELL(menubar), tools_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(menubar), help_item);
 
