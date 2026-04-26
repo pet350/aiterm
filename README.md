@@ -7,8 +7,10 @@ GTK Project written in pure C features:
     . Right pane API Interface to either OpenAI or Gemini
     . "TEE" mode that pipes the termial date into the AI pane
     . It is going to need an API Key for either OpenAI or for Gemini
-  This is a work in progress, cyrrently version 0.4. Its in its infancy stage 
-  but has potetial in being a very useful tool once all the features are implimented 
+  This is a work in progress, currently version 0.4. Its in its infancy stage 
+  but has potetial in being a very useful tool once all the features are implimented. 
+  
+  Version 0.7.2-beta has a lot more functionallity than the before mentioned 0.4
 
   Build Deps
   CentOS:
