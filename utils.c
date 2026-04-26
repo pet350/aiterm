@@ -6,6 +6,33 @@
 #include "openai.h"
 #include <mariadb/mysql.h>
 
+// This is the actual definition where the memory is allocated
+HistoryEntry history[5];
+int history_count = 0;
+
+// Function to save config file
+void save_config(AppContext *app) {
+    FILE *fp = fopen(CONFIG_FILE, "w");
+    if (!fp) {
+        DEBUG_PRINT("DEBUG: Error opening aiterm.conf for writing\n");
+        return;
+    }
+
+    fprintf(fp, "provider=%s\n", app->provider ? app->provider : "gemini");
+    fprintf(fp, "model=%s\n", app->model ? app->model : "gemini-flash-latest");
+    fprintf(fp, "api_key=%s\n", app->api_key ? app->api_key : "");
+    fprintf(fp, "db_host=%s\n", app->db_host ? app->db_host : "localhost");
+    fprintf(fp, "db_user=%s\n", app->db_user ? app->db_user : "root");
+    fprintf(fp, "db_pass=%s\n", app->db_pass ? app->db_pass : "");
+    fprintf(fp, "db_name=%s\n", app->db_name ? app->db_name : "aiterm_db");
+    fprintf(fp, "transparency=%f\n", app->transparency);
+    fprintf(fp, "terminal_font=%s\n", app->terminal_font);
+    fprintf(fp, "ai_font=%s\n", app->ai_font);
+
+    fclose(fp);
+    DEBUG_PRINT("DEBUG: Settings saved to aiterm.conf\n");
+}
+
 // Function to display All History
 void display_all_history(AppContext *app) {
     MYSQL *conn = mysql_init(NULL);
@@ -66,34 +93,17 @@ void init_remote_db(AppContext *app) {
     DEBUG_PRINT("DEBUG: Remote MariaDB initialized successfully on %s\n", app->db_host);
 }
 
-// This is the actual definition where the memory is allocated
-HistoryEntry history[5];
-int history_count = 0;
-
+// terminal.c or utils.c
 char* strip_prompt(const char *input) {
     if (!input) return NULL;
+    char *last_delim = strrchr(input, '$');
+    if (!last_delim) last_delim = strrchr(input, '#');
 
-    // Look for the last occurrence of '#' (root) or '$' (user)
-    char *last_hash = strrchr(input, '#');
-    char *last_dollar = strrchr(input, '$');
-
-    char *start = NULL;
-
-    // Determine which delimiter comes last in the string
-    if (last_hash > last_dollar) {
-        start = last_hash;
-    } else {
-        start = last_dollar;
-    }
-
-    // If we found a prompt delimiter, move pointer past it and any following space
-    if (start) {
-        start++; // Move past # or $
-        while (*start == ' ') start++; // Skip leading spaces
+    if (last_delim) {
+        char *start = last_delim + 1;
+        while (*start == ' ' || *start == ']') start++; // Skip the space AND the leaked bracket
         return strdup(start);
     }
-
-    // If no prompt found, just return the original string
     return strdup(input);
 }
 
@@ -135,7 +145,7 @@ char* strip_ansi(const char *input) {
 
 char* extract_ai_text(const char *json_str) {
     if (!json_str) return NULL;
-    
+
     struct json_object *root = json_tokener_parse(json_str);
     if (!root) return NULL;
 
@@ -167,7 +177,6 @@ char* extract_ai_text(const char *json_str) {
             for (int i = 0; i < len; i++) {
                 struct json_object *item = json_object_array_get_idx(output_array, i);
                 struct json_object *type_obj, *content_array;
-                
                 if (json_object_object_get_ex(item, "type", &type_obj)) {
                     if (strcmp(json_object_get_string(type_obj), "message") == 0) {
                         if (json_object_object_get_ex(item, "content", &content_array)) {
@@ -196,11 +205,15 @@ char* extract_ai_text(const char *json_str) {
 void load_config(AppContext *app) {
     // 1. Set safe defaults first!
     app->api_key = NULL;
-    app->provider = strdup("openai"); 
+    app->provider = strdup("openai");
 
-    FILE *fp = fopen("aiterm.conf", "r");
+    // Set safe defaults first!
+    app->terminal_font = strdup("Monospace 10");
+    app->ai_font = strdup("Monospace 10");
+
+    FILE *fp = fopen(CONFIG_FILE, "r");
     if (!fp) {
-        DEBUG_PRINT("DEBUG: Config file aiterm.conf not found\n");
+        DEBUG_PRINT("DEBUG: Config file %s not found\n", CONFIG_FILE);
         return;
     }
 
@@ -214,14 +227,13 @@ void load_config(AppContext *app) {
             if (app->api_key) free(app->api_key);
             app->api_key = strdup(val);
             DEBUG_PRINT("DEBUG: Loaded API Key\n");
-        } 
+        }
         else if (strstr(line, "provider=")) {
             char *val = strchr(line, '=') + 1;
             if (app->provider) free(app->provider);
             app->provider = strdup(val);
             DEBUG_PRINT("DEBUG: Loaded Provider: [%s]\n", app->provider);
         }
-            // --- ADD THIS BLOCK ---
         else if (strstr(line, "model=")) {
            char *val = strchr(line, '=') + 1;
            if (app->model) free(app->model);
@@ -229,31 +241,48 @@ void load_config(AppContext *app) {
            DEBUG_PRINT("DEBUG: Loaded Model: [%s]\n", app->model);
         }
     	// Inside load_config in utils.c
-	    else if (strstr(line, "db_host=")) {
-	        char *val = strchr(line, '=') + 1;
-	        if (app->db_host) free(app->db_host);
+	else if (strstr(line, "db_host=")) {
+	    char *val = strchr(line, '=') + 1;
+	    if (app->db_host) free(app->db_host);
 	        app->db_host = strdup(val);
 	        DEBUG_PRINT("DEBUG: Loaded DB Host: [%s]\n", app->db_host);
-	    }
-	    else if (strstr(line, "db_user=")) {
-	        char *val = strchr(line, '=') + 1;
-	        if (app->db_user) free(app->db_user);
+	}
+	else if (strstr(line, "db_user=")) {
+	    char *val = strchr(line, '=') + 1;
+	    if (app->db_user) free(app->db_user);
 	        app->db_user = strdup(val);
 	        DEBUG_PRINT("DEBUG: Loaded DB User: [%s]\n", app->db_user);
-	    }  
-	    else if (strstr(line, "db_pass=")) {
-	        char *val = strchr(line, '=') + 1;
-	        if (app->db_pass) free(app->db_pass);
+	}
+	else if (strstr(line, "db_pass=")) {
+	    char *val = strchr(line, '=') + 1;
+	    if (app->db_pass) free(app->db_pass);
 	        app->db_pass = strdup(val);
 	        DEBUG_PRINT("DEBUG: Loaded DB Password: [xxxxxx]\n");
-	    }
-	    else if (strstr(line, "db_name")) {
-	        char *val = strchr(line, '=') + 1;
-	        if (app->db_name) free(app->db_name);
+	}
+	else if (strstr(line, "db_name")) {
+	    char *val = strchr(line, '=') + 1;
+	    if (app->db_name) free(app->db_name);
 	        app->db_name = strdup(val);
 	        DEBUG_PRINT("DEBUG: Loaded DB Name: [%s]\n", app->db_name);
-	    }  
-	// ... repeat for db_pass and db_name ...
+	}
+	else if (strstr(line, "transparency=")) {
+            char *val = strchr(line, '=') + 1;
+	    app->transparency = atof(val);
+	    if (app->transparency < 0.1) app->transparency = 1.0; // Default to opaque if error
+	    DEBUG_PRINT("DEBUG: Loaded transparency: [%f]\n", app->transparency);
+    	}
+	else if (strstr(line, "terminal_font=")) {
+	    char *val = strchr(line, '=') + 1;
+	    if (app->terminal_font) free(app->terminal_font);
+	    app->terminal_font = strdup(val);
+	    DEBUG_PRINT("DEBUG: Loaded terminal font: [%s]\n", app->terminal_font);
+	}
+	else if (strstr(line, "ai_font=")) {
+	    char *val = strchr(line, '=') + 1;
+	    if (app->ai_font) free(app->ai_font);
+	    app->ai_font = strdup(val);
+	    DEBUG_PRINT("DEBUG: Loaded AI font: [%s]\n", app->ai_font);
+	}
     }
     fclose(fp);
 }
@@ -264,16 +293,16 @@ void save_to_history(const char *user_text, const char *ai_text) {
 
     if (mysql_real_connect(conn, global_app->db_host, global_app->db_user, 
                            global_app->db_pass, global_app->db_name, 0, NULL, 0)) {
-        
+
         // Allocate enough space for escaped strings (2x + 1 is the standard)
         char *esc_user = malloc(strlen(user_text) * 2 + 1);
         char *esc_ai = malloc(strlen(ai_text) * 2 + 1);
-        
+
         mysql_real_escape_string(conn, esc_user, user_text, strlen(user_text));
         mysql_real_escape_string(conn, esc_ai, ai_text, strlen(ai_text));
 
         char query[16384]; // Terminal/AI text can be large
-        snprintf(query, sizeof(query), 
+        snprintf(query, sizeof(query),
                  "INSERT INTO aiterm_history (role, content, is_tee) VALUES ('user', '%s', 0), ('assistant', '%s', 0)",
                  esc_user, esc_ai);
 
@@ -286,18 +315,6 @@ void save_to_history(const char *user_text, const char *ai_text) {
         mysql_close(conn);
     }
 }
-// Old flat file function
-//void save_to_history(const char *user_text, const char *ai_text) {
-//    char path[256];
-//    snprintf(path, sizeof(path), "%s/.aiterm_history", getenv("HOME"));
-//
-//    FILE *fp = fopen(path, "a"); // Append mode
-//    if (fp) {
-//        // Using a simple delimiter like ::: so it's easy to parse later
-//        fprintf(fp, "USER:%s\nAI:%s\n---\n", user_text, ai_text);
-//        fclose(fp);
-//    }
-//}
 
 void load_history_to_api(struct json_object *messages_array) {
     extern AppContext *global_app;
@@ -305,7 +322,7 @@ void load_history_to_api(struct json_object *messages_array) {
 
     if (mysql_real_connect(conn, global_app->db_host, global_app->db_user, 
                            global_app->db_pass, global_app->db_name, 0, NULL, 0)) {
-        
+
         // Grab the last 10 conversational entries (not Tee data)
         mysql_query(conn, "SELECT role, content FROM aiterm_history WHERE is_tee = 0 ORDER BY created_at DESC LIMIT 10");
         MYSQL_RES *res = mysql_store_result(conn);
@@ -322,34 +339,6 @@ void load_history_to_api(struct json_object *messages_array) {
     }
 }
 
-// Old flat file
-//void load_history_to_api(struct json_object *messages_array) {
-//    char path[256];
-//    snprintf(path, sizeof(path), "%s/.aiterm_history", getenv("HOME"));
-//
-//    FILE *fp = fopen(path, "r");
-//    if (!fp) return;
-//
-//    char line[1024];
-//    // This is a simple version; in a full 'tail' you'd seek to the end,
-//    // but for 0.3, reading the last few lines works.
-//    while (fgets(line, sizeof(line), fp)) {
-//        if (strncmp(line, "USER:", 5) == 0) {
-//            struct json_object *msg = json_object_new_object();
-//            json_object_object_add(msg, "role", json_object_new_string("user"));
-//            json_object_object_add(msg, "content", json_object_new_string(line + 5));
-//            json_object_array_add(messages_array, msg);
-//        } else if (strncmp(line, "AI:", 3) == 0) {
-//            struct json_object *msg = json_object_new_object();
-//            json_object_object_add(msg, "role", json_object_new_string("assistant"));
-//            json_object_object_add(msg, "content", json_object_new_string(line + 3));
-//            json_object_array_add(messages_array, msg);
-//        }
-//    }
-//    fclose(fp);
-//}
-
-// Add to utils.c
 void save_tee_to_history(const char *terminal_output, const char *ai_analysis) {
     extern AppContext *global_app;
     MYSQL *conn = mysql_init(NULL);
@@ -375,9 +364,12 @@ void load_history_to_gemini(struct json_object *contents_array) {
 
     if (mysql_real_connect(conn, global_app->db_host, global_app->db_user, 
                            global_app->db_pass, global_app->db_name, 0, NULL, 0)) {
-        
-        // Grab only standard chat entries (is_tee = 0) to save RAM and tokens
-        mysql_query(conn, "SELECT role, content FROM aiterm_history WHERE is_tee = 0 ORDER BY id DESC LIMIT 10");
+		// Use a subquery to get the latest 10, then sort them ASC for Gemini
+		mysql_query(conn, "SELECT role, content FROM ("
+                  "SELECT id, role, content FROM aiterm_history "
+                  "WHERE is_tee = 0 ORDER BY id DESC LIMIT 10"
+                  ") sub ORDER BY id ASC");
+
         MYSQL_RES *res = mysql_store_result(conn);
         MYSQL_ROW row;
 
@@ -387,16 +379,12 @@ void load_history_to_gemini(struct json_object *contents_array) {
             struct json_object *content_obj = json_object_new_object();
             struct json_object *parts = json_object_new_array();
             struct json_object *part_obj = json_object_new_object();
-
             // Gemini role "assistant" is called "model"
             const char *role = (strcmp(row[0], "assistant") == 0) ? "model" : "user";
-            
             json_object_object_add(part_obj, "text", json_object_new_string(row[1]));
             json_object_array_add(parts, part_obj);
-            
             json_object_object_add(content_obj, "role", json_object_new_string(role));
             json_object_object_add(content_obj, "parts", parts);
-            
             // Add to the main contents array
             json_object_array_add(contents_array, content_obj);
         }

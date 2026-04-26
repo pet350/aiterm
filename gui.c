@@ -7,9 +7,11 @@
 void apply_custom_theme() {
     GtkCssProvider *provider = gtk_css_provider_new();
     const char *css = 
-        "window, box, grid { background-color: #000000; }"
+        "window, box, grid { background-color: transparent; }"
+/* FIX: Specifically target the menubar and menus to be solid black */
+        "menubar, menu, menuitem { background-color: #000000; color: #ffffff; }"
         "textview { "
-        "  background-color: #0d0d0d; "
+        "  background-color: transparent; "
         "  color: #dcdcdc; "
         "  font-family: monospace; "
         "  font-size: 10pt; "
@@ -30,16 +32,27 @@ void apply_custom_theme() {
     g_object_unref(provider);
 }
 
+
 void setup_gui(AppContext *app) {
-    // Apply the CSS first
     apply_custom_theme();
 
-    // 1. Create the Main Window
+    // 1. Create the Main Window FIRST
     app->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+
+    // 2. NOW apply transparency support while app->window is a valid object
+    GdkScreen *screen = gtk_window_get_screen(GTK_WINDOW(app->window));
+    GdkVisual *visual = gdk_screen_get_rgba_visual(screen);
+    if (visual) {
+        gtk_widget_set_visual(app->window, visual);
+    }
+    gtk_widget_set_app_paintable(app->window, TRUE);
+
+    // 3. Continue with window properties and layout
     gtk_window_set_title(GTK_WINDOW(app->window), "AI-Term C/GTK Edition");
     gtk_window_set_default_size(GTK_WINDOW(app->window), 1000, 600);
     g_signal_connect(app->window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
+    // ... (rest of your packing and setup code) ...
     // 2. Layout
     GtkWidget *main_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
     gtk_container_add(GTK_CONTAINER(app->window), main_vbox);
@@ -65,6 +78,13 @@ void setup_gui(AppContext *app) {
     gtk_container_add(GTK_CONTAINER(gem_scroll), app->gemini_view);
     gtk_paned_pack2(GTK_PANED(paned), gem_scroll, TRUE, FALSE);
 
+    app->ai_css_provider = gtk_css_provider_new();
+    gtk_style_context_add_provider(
+        gtk_widget_get_style_context(app->gemini_view),
+        GTK_STYLE_PROVIDER(app->ai_css_provider),
+        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION
+    );
+
     // 4. BOTTOM AREA
     GtkWidget *bottom_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
     gtk_box_pack_start(GTK_BOX(main_vbox), bottom_hbox, FALSE, FALSE, 5);
@@ -80,5 +100,8 @@ void setup_gui(AppContext *app) {
     extern void on_input_activate(GtkEntry *entry, gpointer data);
     g_signal_connect(app->entry, "activate", G_CALLBACK(on_input_activate), app);
 
+    // 4. Final step: ensure the terminal transparency is applied
+    apply_visual_settings(app);
+
     gtk_widget_show_all(app->window);
-} // <--- This was the missing bracket causing the "end of input" error.
+}

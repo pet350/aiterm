@@ -10,7 +10,7 @@ const char* FEATURES="Features:\n  - GTK Terminal + AI Panel\n  - OpenAI Integra
 
 
 const char* get_version_info() {
-    static char v_buf[256];
+    static char v_buf[512];
     snprintf(v_buf, sizeof(v_buf), "AI-Term GTK v%s\nLocation: Weston, WV\n%s", AITERM_VERSION, FEATURES);
     return(v_buf);
 }
@@ -36,7 +36,12 @@ const char* get_help_text() {
         "\n"
         "Notes:\n"
         "  - AI responses require a valid OpenAI API key\n"
-        "  - Tee mode sends terminal output for analysis\n";
+        "  - Tee mode sends terminal output for analysis\n"
+	"  - Changes Version 0.7-stable\n"
+	"      - MySQL history corrected\n"
+	"     -  Multithreaded Terminal pane independant from AI pane\n"
+	"  - Changes Version 0.7.1-beta\n"
+	"     - Added Transparency";
 }
 
 char* get_hw_stats() {

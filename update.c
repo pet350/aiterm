@@ -1,3 +1,6 @@
+// Update.c
+// Features multi threaded tee buffer
+
 #include <string.h>
 #include <strings.h>
 #include <ctype.h>
@@ -10,6 +13,7 @@
 #include "gemini.h"
 #include "help.h"
 #include "utils.h"
+#include "tee_handler.h"
 
 // --- Rate limiting ---
 static time_t last_request_time = 0;
@@ -33,11 +37,18 @@ void append_to_view(GtkWidget *view, const char *prefix, const char *text) {
     if (!view || !text) return;
     GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(view));
     GtkTextIter end;
+
+    // 1. Get the current end of the buffer
     gtk_text_buffer_get_end_iter(buffer, &end);
 
+    // 2. Insert the new text
     if (prefix) gtk_text_buffer_insert(buffer, &end, prefix, -1);
     gtk_text_buffer_insert(buffer, &end, text, -1);
     gtk_text_buffer_insert(buffer, &end, "\n\n", -1);
+
+    // 3. MOVE THE CURSOR: Force the 'insert' mark to the new end
+    gtk_text_buffer_get_end_iter(buffer, &end);
+    gtk_text_buffer_place_cursor(buffer, &end);
 
     GtkTextMark *mark = gtk_text_buffer_get_insert(buffer);
     gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(view), mark);
@@ -59,7 +70,7 @@ void flush_to_ai(AppContext *app) {
 
     tee_buffer[tee_index] = '\0';
     char *clean_output = sanitize(tee_buffer);
-    
+
     // Construct the actual prompt for the AI
     char final_prompt[5120];
     snprintf(final_prompt, sizeof(final_prompt),
@@ -90,21 +101,13 @@ void flush_to_ai(AppContext *app) {
     tee_buffer[0] = '\0';
 }
 
-// --- Tee buffer processing ---
-void process_for_ai(AppContext *app, const char *text) {
+void process_for_ai(AppContext *app, const char *text, gboolean is_input) {
     if (!tee_enabled || !text) return;
 
-    size_t len = strlen(text);
-    if (tee_index + len >= TEE_BUFFER_SIZE - 1) {
-        flush_to_ai(app);
-    }
-
-    memcpy(tee_buffer + tee_index, text, len);
-    tee_index += len;
-    tee_buffer[tee_index] = '\0';
-
-    if (strchr(text, '\n') || strchr(text, '\r')) {
-        flush_to_ai(app);
+    if (is_input) {
+        tee_handle_input(text);
+    } else {
+        tee_handle_output(text);
     }
 }
 
@@ -170,7 +173,7 @@ static gboolean handle_local_command(const char *input, AppContext *app) {
         gtk_text_buffer_set_text(buf, "", -1);
     } else if (strcasecmp(input, "provider") == 0) {
         char info[512];
-        snprintf(info, sizeof(info), "DEBUG INFO:\nProvider: %s\nModel: %s\nKey Length: %ld", 
+        snprintf(info, sizeof(info), "DEBUG INFO:\nProvider: %s\nModel: %s\nKey Length: %ld",
              app->provider ? app->provider : "NULL",
              app->model ? app->model : "DEFAULT",
              app->api_key ? (long)strlen(app->api_key) : -1);
@@ -188,7 +191,7 @@ static gboolean handle_local_command(const char *input, AppContext *app) {
         display_all_history(app);
         return TRUE;
     } else if (strcasecmp(input, "exit") == 0) {
-        gtk_main_quit(); // Restored exit functionality [cite: 593]
+        gtk_main_quit();
         return TRUE;
     } else {
         return FALSE;
@@ -223,3 +226,8 @@ void on_input_activate(GtkEntry *entry, gpointer data) {
     g_thread_new("ai_thread", (GThreadFunc)ai_thread_func, td);
     gtk_entry_set_text(entry, "");
 }
+
+// End of update.c
+// By: Peter Talbott
+// With assistance from Gemini and OpenAI
+// 2026

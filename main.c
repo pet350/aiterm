@@ -3,9 +3,11 @@
 #include "gui.h"
 #include "update.h"
 #include "utils.h"
+#include "tee_handler.h"
 
 // Current AITERM version
-const char* AITERM_VERSION = "0.5-stable";
+const char* AITERM_VERSION = "0.7.2-beta";
+const char* CONFIG_FILE = "/etc/aiterm.conf";
 
 int debug_mode = 0; // Global flag
 AppContext *global_app = NULL; // The actual definition
@@ -35,6 +37,9 @@ int main(int argc, char *argv[]) {
     // Add this line here:
     init_remote_db(app);
 
+    // 2.2 INITIALIZE THE TEE HANDLER HERE
+    tee_handler_init(app); //
+
     // 3.0) FALLBACK: Only check env vars if config key is still NULL
     if (!app->api_key || strlen(app->api_key) == 0) {
         app->api_key = getenv("GEMINI_API_KEY");
@@ -53,7 +58,7 @@ int main(int argc, char *argv[]) {
 
     // 5. Connect the Input Signal (from update.c)
     // This tells GTK: "When the user hits Enter in the entry, call on_input_activate"
-    g_signal_connect(app->entry, "activate", G_CALLBACK(on_input_activate), app);
+    // g_signal_connect(app->entry, "activate", G_CALLBACK(on_input_activate), app);
 
     // 6. Enter the GTK Main Event Loop
     // This blocks until the window is closed

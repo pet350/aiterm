@@ -18,6 +18,7 @@ typedef struct {
 extern HistoryEntry history[5];
 extern int history_count;
 extern const char* AITERM_VERSION;
+extern const char* CONFIG_FILE;
 
 size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp);
 void load_history_to_api(struct json_object *messages_array);
@@ -29,5 +30,6 @@ void init_remote_db(AppContext *app); // Add this line
 void save_tee_to_history(const char *terminal_output, const char *ai_analysis);
 void load_history_to_gemini(struct json_object *contents_array);
 void append_to_view(GtkWidget *view, const char *prefix, const char *text);
+void save_config(AppContext *app); 
 
 #endif

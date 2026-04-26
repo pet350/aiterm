@@ -10,7 +10,7 @@ LIBS   = `pkg-config --libs gtk+-3.0 vte-2.91 libcurl json-c mariadb`
 # LIBS = `pkg-config --libs gtk+-3.0 vte-2.91 libcurl`
 
 # List of object files based on your modular structure
-OBJ = main.o gui.o terminal.o openai.o gemini.o update.o help.o menu.o utils.o
+OBJ = main.o gui.o terminal.o openai.o gemini.o update.o help.o menu.o utils.o tee_handler.o
 
 # The final executable name
 TARGET = aiterm
