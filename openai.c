@@ -3,6 +3,7 @@
 #include <string.h>
 #include <curl/curl.h>
 #include <json-c/json.h>
+#include <mariadb/mysql.h>
 #include "openai.h"
 #include "gemini.h"  // <--- Ensure this exists and is included
 #include "utils.h"
@@ -57,3 +58,5 @@ char* send_to_openai(const char *api_key, const char *prompt) {
     json_object_put(root);
     return chunk.memory; // Fixes "control reaches end of non-void function"
 }
+
+

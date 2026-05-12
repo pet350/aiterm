@@ -8,3 +8,5 @@
 GtkWidget* create_menu_bar(AppContext *app);
 
 #endif
+
+
