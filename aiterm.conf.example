@@ -1,0 +1,22 @@
+# Provider [openai/gemini]
+provider=gemini
+
+# AI Model name. (Working Gemini model listed} 
+model=gemini-flash-latest
+
+# API Key
+api_key={ Paste Your API Key here }
+
+# New version 0.5 MariaDB config
+# Database Host
+db_host={IP Address of your mysql server}
+
+# Database User
+db_user={db username}
+
+# Database Password
+db_pass={db users password}
+
+# Database Name
+db_name={database name. Example: aiterm_db}
+

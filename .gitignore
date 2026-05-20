@@ -1,0 +1,15 @@
+# ignore Binaries, config and Objects
+aiterm
+*.o
+*.xml.o
+
+# Private Credentials (CRITICAL)
+aiterm.conf
+key/
+key
+
+# Backups
+*.bak
+*.old
+
+*~
