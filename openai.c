@@ -1,14 +1,23 @@
+// openai.c
+// Part of the aiterm project
+// C Program file for communicating with OpenAI
+// By: Peter Talbott
+// With assistance from Gemini and OpenAI
+// May 2026
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <curl/curl.h>
 #include <json-c/json.h>
+#include <mariadb/mysql.h>
 #include "openai.h"
 #include "gemini.h"  // <--- Ensure this exists and is included
 #include "utils.h"
 
 char* send_to_openai(const char *api_key, const char *prompt) {
     CURL *curl_handle;
+    CURLcode res; // Added for 0.7.5-delta error tracking
     struct MemoryStruct chunk = { malloc(1), 0 }; // Now compiler knows what this is
     const char *url = "https://api.openai.com/v1/chat/completions";
 
@@ -49,7 +58,15 @@ char* send_to_openai(const char *api_key, const char *prompt) {
         curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
         curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
 
-        curl_easy_perform(curl_handle);
+        // --- 0.7.5-DELTA FAIL-SAFE BOUNDARIES ---
+        curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10L); // Max 10 seconds to connect
+        curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 30L);        // Max 30 seconds for entire transfer
+
+        res = curl_easy_perform(curl_handle);
+        if (res != CURLE_OK) {
+            DEBUG_PRINT("CURL OpenAI Error: %s\n", curl_easy_strerror(res));
+        }
+
         curl_easy_cleanup(curl_handle);
         curl_slist_free_all(headers);
     }

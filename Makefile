@@ -1,30 +1,29 @@
 CC = gcc
-# Fetch flags for all three major libraries
-
-#CFLAGS = `pkg-config --cflags gtk+-3.0 vte-2.91 libcurl json-c` -Wall
-
 CFLAGS = `pkg-config --cflags gtk+-3.0 vte-2.91 libcurl json-c mariadb` -Wall -Wno-deprecated-declarations
-LIBS   = `pkg-config --libs gtk+-3.0 vte-2.91 libcurl json-c mariadb`
+LIBS = $(shell pkg-config --libs gtk+-3.0 vte-2.91 libcurl json-c mariadb) -lpthread
 
-# CFLAGS = `pkg-config --cflags gtk+-3.0 vte-2.91 libcurl` -Wall
-# LIBS = `pkg-config --libs gtk+-3.0 vte-2.91 libcurl`
-
-# List of object files based on your modular structure
-OBJ = main.o gui.o terminal.o openai.o gemini.o update.o help.o menu.o utils.o
-
-# The final executable name
+# Centralize objects
+OBJ = main.o gui.o terminal.o openai.o gemini.o update.o help.o menu.o utils.o tee_handler.o crypto.o resources.o
 TARGET = aiterm
 
+# 1. The DEFAULT target (must be first)
 all: $(TARGET)
 
+# 2. Link the binary
 $(TARGET): $(OBJ)
 	$(CC) -o $(TARGET) $(OBJ) $(LIBS)
 
-# Pattern rule to compile .c to .o
+# 3. Rule for the generated resource source
+# This MUST exist for resources.o to know how to be built
+resources.c: resources.xml aiterm-icon.png
+	glib-compile-resources resources.xml --target=resources.c --generate-source
+
+# 4. Pattern rule for all other .c files
 %.o: %.c
 	$(CC) -c -o $@ $< $(CFLAGS)
 
+# 5. Clean rule
 clean:
-	rm -fv *.o $(TARGET)
+	rm -fv *.o $(TARGET) resources.c
 
 .PHONY: all clean
