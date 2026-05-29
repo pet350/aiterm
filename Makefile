@@ -1,9 +1,11 @@
 CC = gcc
 CFLAGS = `pkg-config --cflags gtk+-3.0 vte-2.91 libcurl json-c mariadb` -Wall -Wno-deprecated-declarations
-LIBS = $(shell pkg-config --libs gtk+-3.0 vte-2.91 libcurl json-c mariadb) -lpthread
+# Example
+LIBS=`pkg-config --libs gtk+-3.0 vte-2.91 mariadb` -ljson-c -lpthread -lcurl -lcrypto
+# LIBS = $(shell pkg-config --libs gtk+-3.0 vte-2.91 libcurl json-c mariadb) -lpthread
 
 # Centralize objects
-OBJ = main.o gui.o terminal.o openai.o gemini.o update.o help.o menu.o utils.o tee_handler.o crypto.o resources.o
+OBJ = main.o gui.o terminal.o openai.o gemini.o update.o help.o menu.o utils.o tee_handler.o crypto.o resources.o policy_dao.o
 TARGET = aiterm
 
 # 1. The DEFAULT target (must be first)

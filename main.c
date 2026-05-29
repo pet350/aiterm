@@ -7,16 +7,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <getopt.h>
+#include <unistd.h>
 #include <mariadb/mysql.h>
 #include "gui.h"
 #include "update.h"
 #include "utils.h"
 #include "tee_handler.h"
-#include "crypto.h" // Add this include
+#include "crypto.h"
 #include "help.h"
 
 // Current AITERM version
-const char* AITERM_VERSION = "0.8.3-stable";
+const char* AITERM_VERSION = "0.8.4-alpha";
 const char* CONFIG_FILE = "/etc/aiterm.conf";
 
 int debug_mode = 0;
@@ -28,6 +30,8 @@ int main(int argc, char *argv[]) {
 
     // Set default autoreply to OFF. Added 0.7.4-delta
     app->autoreply_enabled = FALSE;
+    app->tee_enabled = FALSE;
+    app->auto_execute_enabled = FALSE;
 
     // --- NEW: Release the lock ---
     app->is_processing = FALSE;
@@ -38,50 +42,63 @@ int main(int argc, char *argv[]) {
     app->session_uuid = strdup(session_buf);
 	app->sequence_id = 0; // NEW: Start counter at zero
 
+    char *env_key = getenv("AITERM_MASTER_KEY");
+    if (env_key) {
+        app->master_key = strdup(env_key);
+    }
     // 2. Parse command line options if any
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--debug") == 0) {
+       if (strcmp(argv[i], "--debug") == 0) {
             debug_mode = 1;
-        }
-	    if (strcmp(argv[i], "--version") == 0) {
-	        printf("aiterm %s\n", AITERM_VERSION);
-	        exit(0);
-	    }
-
-        if (strcmp(argv[i], "--features") == 0) {
+       } else if (strcmp(argv[i], "--version") == 0) {
+            printf("aiterm %s\n", AITERM_VERSION);
+            exit(0);
+       } else if (strcmp(argv[i], "--features") == 0) {
             printf("%s\n", get_features_text());
             exit(0);
-        }
-
-        if (strcmp(argv[i], "--help") == 0) {
+       } else if (strcmp(argv[i], "--help") == 0) {
             printf("%s\n", get_cmd_help());
             exit(0);
-        }
-
-        if (strncmp(argv[i], "--crypt-pw=", 11) == 0) {
+       } else if (strncmp(argv[i], "--master=", 9) == 0) {
+            app->master_key = strdup(argv[i] + 9);
+       } else if (strncmp(argv[i], "--crypt-pw=", 11) == 0) {
+	    if (!app->master_key) {
+        	fprintf(stderr, "Error: You must provide a master key (via --master or AITERM_MASTER_KEY) before encrypting.\n");
+        	exit(1);
+    	    }
             char *plaintext = argv[i] + 11;
-            char *encrypted = crypt_to_hex(plaintext);
+            char *encrypted = crypt_to_hex(plaintext, app->master_key);
             if (encrypted) {
-                printf("%s\n", encrypted);
-                free(encrypted);
+        	printf("Encrypted string: %s\n", encrypted);
+        	free(encrypted);
+            } else {
+        	fprintf(stderr, "Error: Encryption failed.\n");
             }
             exit(0);
-        }
+       }
+    }
+    if (!app->master_key) {
+	char *pwd = getpass("Enter Master Password: ");
+	if (pwd) app->master_key = strdup(pwd);
     }
 
     // 3. Initialize GTK
+    DEBUG_PRINT("DEBUG: [MAIN] Initializing GTK...\n");
     gtk_init(&argc, &argv);
 	g_object_set(gtk_settings_get_default(),
              "gtk-application-prefer-dark-theme", TRUE,
              NULL);
 
     // 4 Initialize App Context and load config
+    DEBUG_PRINT("DEBUG: [MAIN] Invoking load_config...\n");
     load_config(app);
-
+    DEBUG_PRINT("DEBUG: [MAIN] load_config sequence complete.\n");
+    
     // 5) Provision the remote database on the XEN VM
     pthread_mutex_init(&app->db_mutex, NULL);
 
-    // 2. Call the refactored init function
+
+    DEBUG_PRINT("DEBUG: [MAIN] Invoking init_remote_db...\n");
     if (init_remote_db(app)) {
         DEBUG_PRINT("Database setup and persistent connection ready.\n");
     } else {
@@ -89,7 +106,10 @@ int main(int argc, char *argv[]) {
     }
 
     // 6) INITIALIZE THE TEE HANDLER HERE
-    tee_handler_init(app); //
+    DEBUG_PRINT("DEBUG: [MAIN] Initializing Tee Handler...\n");
+    tee_handler_init(app); 
+    DEBUG_PRINT("DEBUG: [MAIN] Tee Handler active.\n");
+
 
     // 7) FALLBACK: Only check env vars if config key is still NULL
     if (!app->api_key || strlen(app->api_key) == 0) {
@@ -105,18 +125,28 @@ int main(int argc, char *argv[]) {
     }
 
     // 8) Build the UI (from gui.c)
+    DEBUG_PRINT("DEBUG: [MAIN] Launching create_main_window GUI setup...\n");
     setup_gui(app);
 
     // 9. Enter the GTK Main Event Loop
+    DEBUG_PRINT("DEBUG: [MAIN] Passing control to gtk_main loop.\n");
     gtk_main();
 
     // 10) Clean up
     if (app->global_db_conn) {
         mysql_close(app->global_db_conn);
     }
-    pthread_mutex_destroy(&app->db_mutex);
 
+    DEBUG_PRINT("DEBUG: [MAIN] Closing threaded database connection.\n");
+    pthread_mutex_destroy(&app->db_mutex);
     g_free(app);
+
+    if (app->master_key) {
+        // Overwrite memory with zeros before freeing
+        size_t len = strlen(app->master_key);
+        memset(app->master_key, 0, len);
+        free(app->master_key);
+    }
     return 0;
 }
 

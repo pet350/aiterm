@@ -1,3 +1,10 @@
+// part of aiterm project
+// gemini.c
+// functions for sending/recieving data to and from Gemini
+// By: Peter Talbott
+// Assisted by: Gemini
+// May 2026
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

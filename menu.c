@@ -1,3 +1,10 @@
+// part of aiterm project
+// menu.c
+// Function for handling GUI Menu events
+// By: Peter Talbott
+// Assisted by: Gemini
+// May 2026
+
 #include <vte/vte.h>
 #include <mariadb/mysql.h>
 #include "gui.h"

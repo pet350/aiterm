@@ -1,18 +1,33 @@
+// part of aiterm project
+// utils.c
+// Various utilities used in this project
+// By: Peter Talbott
+// Assisted by: Gemini
+// May 2026
 
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <json-c/json.h>
+#include <vte/vte.h>
+#include <mariadb/mysql.h>
+
 #include "utils.h"
 #include "gui.h"
 #include "openai.h"
-#include <mariadb/mysql.h>
 #include "crypto.h" // Add this include
 #include "update.h"
+#include "tee_handler.h"
 
 // This is the actual definition where the memory is allocated
 HistoryEntry history[5];
 int history_count = 0;
+
+void feed_terminal_header(VteTerminal *terminal, const char *msg) {
+    char buf[1024];
+    snprintf(buf, sizeof(buf), "\r%s[AI Executing]: %s%s\n", ANSI_CYAN, msg, ANSI_RESET);
+    vte_terminal_feed(terminal, buf, -1);
+}
 
 char* trim_whitespace(char* str) {
     char* end;
@@ -41,12 +56,19 @@ void save_config(AppContext *app) {
 
     fprintf(fp, "provider=%s\n", app->provider ? app->provider : "gemini");
     fprintf(fp, "model=%s\n", app->model ? app->model : "gemini-flash-latest");
-    fprintf(fp, "api_key=%s\n", app->api_key ? app->api_key : "");
+    char *encrypted_api_key = crypt_to_hex(app->api_key ? app->api_key : "", app->master_key);
+    if (encrypted_api_key) {
+	fprintf(fp, "api_key=%s\n", encrypted_api_key);
+	free(encrypted_api_key);
+    } else {
+	fprintf(fp, "api_key=\n");
+    }
+    //fprintf(fp, "api_key=%s\n", app->api_key ? app->api_key : "");
     fprintf(fp, "db_host=%s\n", app->db_host ? app->db_host : "localhost");
     fprintf(fp, "db_user=%s\n", app->db_user ? app->db_user : "root");
 
     // NEW: Encrypt the in-memory plaintext password before writing to file
-    char *encrypted_pass = crypt_to_hex(app->db_pass ? app->db_pass : "");
+    char *encrypted_pass = crypt_to_hex(app->db_pass ? app->db_pass : "", app->master_key);
     if (encrypted_pass) {
         fprintf(fp, "db_pass=%s\n", encrypted_pass);
         free(encrypted_pass);
@@ -61,6 +83,7 @@ void save_config(AppContext *app) {
     fprintf(fp, "ai_font=%s\n", app->ai_font);
     fprintf(fp, "tee_enabled=%d\n", app->tee_enabled);
     fprintf(fp, "autoreply_enabled=%d\n", app->autoreply_enabled);
+    fprintf(fp, "auto_execute_enabled=%d\n", app->auto_execute_enabled);
 
     fclose(fp);
     DEBUG_PRINT("DEBUG: Settings saved to aiterm.conf\n");
@@ -81,67 +104,75 @@ void load_config(AppContext *app) {
 
     char line[1024];
     while (fgets(line, sizeof(line), fp)) {
-        line[strcspn(line, "\r\n")] = 0;
-        if (strstr(line, "api_key=")) {
-            char *val = strchr(line, '=') + 1;
-            if (app->api_key) free(app->api_key);
-            app->api_key = strdup(val);
-            DEBUG_PRINT("DEBUG: Loaded API Key\n");
-        } else if (strstr(line, "provider=")) {
-            char *val = strchr(line, '=') + 1;
-            if (app->provider) free(app->provider);
-            app->provider = strdup(val);
-            DEBUG_PRINT("DEBUG: Loaded Provider: [%s]\n", app->provider);
-        } else if (strstr(line, "model=")) {
-            char *val = strchr(line, '=') + 1;
-            if (app->model) free(app->model);
-            app->model = strdup(val);
-            DEBUG_PRINT("DEBUG: Loaded Model: [%s]\n", app->model);
-        } else if (strstr(line, "db_host=")) {
-	    char *val = strchr(line, '=') + 1;
-	    if (app->db_host) free(app->db_host);
-	    app->db_host = strdup(val);
-	    DEBUG_PRINT("DEBUG: Loaded DB Host: [%s]\n", app->db_host);
-        } else if (strstr(line, "db_user=")) {
-	    char *val = strchr(line, '=') + 1;
-	    if (app->db_user) free(app->db_user);
-	    app->db_user = strdup(val);
-	    DEBUG_PRINT("DEBUG: Loaded DB User: [%s]\n", app->db_user);
+	line[strcspn(line, "\r\n")] = 0;
+	if (strstr(line, "api_key=")) {
+		char *val = strchr(line, '=') + 1;
+		if (app->api_key) free(app->api_key);
+		app->api_key = hex_to_decrypt(val, app->master_key);
+		DEBUG_PRINT("DEBUG: [LOADED] API Key\n");
+	} else if (strstr(line, "provider=")) {
+		char *val = strchr(line, '=') + 1;
+		if (app->provider) free(app->provider);
+		app->provider = strdup(val);
+		DEBUG_PRINT("DEBUG: [LOADED] Provider: [%s]\n", app->provider);
+	} else if (strstr(line, "model=")) {
+		char *val = strchr(line, '=') + 1;
+		if (app->model) free(app->model);
+		app->model = strdup(val);
+		DEBUG_PRINT("DEBUG: [LOADED] Model: [%s]\n", app->model);
+	} else if (strstr(line, "db_host=")) {
+		char *val = strchr(line, '=') + 1;
+		if (app->db_host) free(app->db_host);
+		app->db_host = strdup(val);
+		DEBUG_PRINT("DEBUG: [LOADED] DB Host: [%s]\n", app->db_host);
+	} else if (strstr(line, "db_user=")) {
+		char *val = strchr(line, '=') + 1;
+		if (app->db_user) free(app->db_user);
+		app->db_user = strdup(val);
+		DEBUG_PRINT("DEBUG: [LOADED] DB User: [%s]\n", app->db_user);
 	} else if (strstr(line, "db_pass=")) {
-	    char *val = strchr(line, '=') + 1;
-	    if (app->db_pass) free(app->db_pass);
-	    app->db_pass = hex_to_decrypt(val);
-	    DEBUG_PRINT("DEBUG: Loaded DB Password: [xxxxxx]\n");
+		char *val = strchr(line, '=') + 1;
+		if (app->db_pass) free(app->db_pass);
+		app->db_pass = hex_to_decrypt(val, app->master_key);
+		DEBUG_PRINT("DEBUG: [LOADED] DB Password: [xxxxxx]\n");
 	} else if (strstr(line, "db_name")) {
-	    char *val = strchr(line, '=') + 1;
-	    if (app->db_name) free(app->db_name);
-	    app->db_name = strdup(val);
-	    DEBUG_PRINT("DEBUG: Loaded DB Name: [%s]\n", app->db_name);
+		char *val = strchr(line, '=') + 1;
+		if (app->db_name) free(app->db_name);
+		app->db_name = strdup(val);
+		DEBUG_PRINT("DEBUG: [LOADED] DB Name: [%s]\n", app->db_name);
 	} else if (strstr(line, "ai_transparency=")) {
-            char *val = strchr(line, '=') + 1;
-            app->ai_transparency = atof(val);
-            if (app->ai_transparency < 0.1) app->ai_transparency = 0.8;
-	    DEBUG_PRINT("DEBUG: Loaded AI transparency: [%f]\n", app->ai_transparency);
-        } else if (strstr(line, "term_transparency=")) {
-            char *val = strchr(line, '=') + 1;
-	    app->transparency = atof(val);
-	    if (app->transparency < 0.1) app->transparency = 0.8;
-	    DEBUG_PRINT("DEBUG: Loaded terminal transparency: [%f]\n", app->transparency);
-    	} else if (strstr(line, "terminal_font=")) {
-	    char *val = strchr(line, '=') + 1;
-	    if (app->terminal_font) free(app->terminal_font);
-	    app->terminal_font = strdup(val);
-	    DEBUG_PRINT("DEBUG: Loaded terminal font: [%s]\n", app->terminal_font);
+		char *val = strchr(line, '=') + 1;
+		app->ai_transparency = atof(val);
+		if (app->ai_transparency < 0.1) app->ai_transparency = 0.8;
+		DEBUG_PRINT("DEBUG: [LOADED] AI transparency: [%f]\n", app->ai_transparency);
+	} else if (strstr(line, "term_transparency=")) {
+		char *val = strchr(line, '=') + 1;
+		app->transparency = atof(val);
+		if (app->transparency < 0.1) app->transparency = 0.8;
+		DEBUG_PRINT("DEBUG: [LOADED] terminal transparency: [%f]\n", app->transparency);
+        } else if (strstr(line, "terminal_font=")) {
+		char *val = strchr(line, '=') + 1;
+		if (app->terminal_font) free(app->terminal_font);
+		app->terminal_font = strdup(val);
+		DEBUG_PRINT("DEBUG: [LOADED] terminal font: [%s]\n", app->terminal_font);
 	} else if (strstr(line, "ai_font=")) {
-	    char *val = strchr(line, '=') + 1;
-	    if (app->ai_font) free(app->ai_font);
-	    app->ai_font = strdup(val);
-	    DEBUG_PRINT("DEBUG: Loaded AI font: [%s]\n", app->ai_font);
+		char *val = strchr(line, '=') + 1;
+		if (app->ai_font) free(app->ai_font);
+		app->ai_font = strdup(val);
+		DEBUG_PRINT("DEBUG: [LOADED] AI font: [%s]\n", app->ai_font);
 	} else if (strstr(line, "tee_enabled=")) {
-            app->tee_enabled = atoi(strchr(line, '=') + 1);
+		app->tee_enabled = atoi(strchr(line, '=') + 1);
+		const char *tee_val = app->tee_enabled ? "ON" : "OFF";
+		DEBUG_PRINT("DEBUG: [LOADED] default tee enabled: [%s]\n", tee_val);
 	} else if (strstr(line, "autoreply_enabled=")) {
-          app->autoreply_enabled = atoi(strchr(line, '=') + 1);
-        }
+		app->autoreply_enabled = atoi(strchr(line, '=') + 1);
+		const char *auto_val = app->autoreply_enabled ? "ON" : "OFF";
+		DEBUG_PRINT("DEBUG: [LOADED] default auto reply enabled: [%s]\n", auto_val);
+	} else if (strstr(line, "auto_execute_enabled=")) {
+		app->auto_execute_enabled = atoi(strchr(line, '=') + 1);
+		const char *auto_exec_val = app->auto_execute_enabled ? "ON" : "OFF";
+		DEBUG_PRINT("DEBUG: [LOADED] Default auto execute enabled: [%s]\n", auto_exec_val);
+	}
     }
     fclose(fp);
 }
@@ -174,8 +205,8 @@ void display_all_history(AppContext *app) {
 
     while ((row = mysql_fetch_row(res))) {
         // row[0] is role, row[1] is content
-        g_string_append_printf(history_output, "[%s]: %s\n\n", 
-                               row[0] ? row[0] : "unknown", 
+        g_string_append_printf(history_output, "[%s]: %s\n\n",
+                               row[0] ? row[0] : "unknown",
                                row[1] ? row[1] : "");
     }
 
@@ -226,10 +257,6 @@ void* db_worker_thread(void *arg) {
         size_t query_len = strlen(esc_user) + strlen(esc_ai) + strlen(data->session_uuid) + 512;
         char *query = malloc(query_len);
         if (query) {
-            //snprintf(query, query_len,
-            //         "INSERT INTO aiterm_history (role, content, is_tee, session_uuid) "
-            //         "VALUES ('user', '%s', 0, '%s'), ('assistant', '%s', 0, '%s')",
-            //         esc_user, data->session_uuid, esc_ai, data->session_uuid);
 	     snprintf(query, query_len,
                      "INSERT INTO aiterm_history (role, content, is_tee, session_uuid, sequence_id) " // ADD sequence_id
                      "VALUES ('user', '%s', 0, '%s', %d), ('assistant', '%s', 0, '%s', %d)",         // ADD %d twice
@@ -242,7 +269,7 @@ void* db_worker_thread(void *arg) {
     // UNLOCK: Let the next thread in
     pthread_mutex_unlock(&global_app->db_mutex);
 
-cleanup:
+    cleanup:
     if (data->terminal_output) free(data->terminal_output);
     if (data->ai_analysis) free(data->ai_analysis);
     if (data->user_text) free(data->user_text);
@@ -259,6 +286,18 @@ int init_remote_db(AppContext *app) {
     app->global_db_conn = mysql_init(NULL);
     if (app->global_db_conn == NULL) return 0;
 
+    // === NEW: Set a 3-second connection timeout ===
+    unsigned int timeout = 3; // 3 seconds
+    mysql_options(app->global_db_conn, MYSQL_OPT_CONNECT_TIMEOUT, (const char *)&timeout);
+
+    my_bool reconnect = 1;
+    mysql_options(app->global_db_conn, MYSQL_OPT_RECONNECT, &reconnect);
+
+    // NEW: Set read/write timeouts for queries so they don't hang forever
+    // mysql_options(app->global_db_conn, MYSQL_OPT_READ_TIMEOUT, (const char *)&timeout);
+    // mysql_options(app->global_db_conn, MYSQL_OPT_WRITE_TIMEOUT, (const char *)&timeout);
+
+    DEBUG_PRINT("DEBUG: [DB] Connecting to %s (timeout: %us)...\n", app->db_host, timeout);
     // 2. Connect to the server (No DB selected yet)
     if (mysql_real_connect(app->global_db_conn, app->db_host, app->db_user, app->db_pass, NULL, 0, NULL, 0) == NULL) {
         DEBUG_PRINT("DB Connection Error: %s\n", mysql_error(app->global_db_conn));
@@ -266,14 +305,20 @@ int init_remote_db(AppContext *app) {
         app->global_db_conn = NULL;
         return 0;
     }
+    DEBUG_PRINT("DEBUG: [DB] Successfully connected to database host.\n");
 
     // 3. Create and Select Database
     char db_query[256];
     snprintf(db_query, sizeof(db_query), "CREATE DATABASE IF NOT EXISTS %s", app->db_name);
+
+    DEBUG_PRINT("DEBUG: [DB] Executing: %s\n", db_query);
     mysql_query(app->global_db_conn, db_query);
+
+    DEBUG_PRINT("DEBUG: [DB] Selecting database: %s\n", app->db_name);
     mysql_select_db(app->global_db_conn, app->db_name);
 
     // 4. Create History Table
+    DEBUG_PRINT("DEBUG: [DB] Executing: CREATE TABLE IF NOT EXISTS aiterm_history\n");
     mysql_query(app->global_db_conn, "CREATE TABLE IF NOT EXISTS aiterm_history (id INT AUTO_INCREMENT PRIMARY KEY)");
 
     // 5. Run Migrations
@@ -287,6 +332,7 @@ int init_remote_db(AppContext *app) {
     };
 
     for (int i = 0; i < sizeof(migrations)/sizeof(char*); i++) {
+        DEBUG_PRINT("DEBUG: [DB] Running migration query [%d]: %s\n", i, migrations[i]);
         mysql_query(app->global_db_conn, migrations[i]);
     }
 
@@ -297,10 +343,21 @@ int init_remote_db(AppContext *app) {
         "keyword VARCHAR(50) UNIQUE, "
         "hit_count INT DEFAULT 1, "
         "last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON DUPLICATE KEY UPDATE last_used=CURRENT_TIMESTAMP)";
-
+    DEBUG_PRINT("DEBUG: [DB] Executing: CREATE TABLE IF NOT EXISTS relevance_triggers\n");
     mysql_query(app->global_db_conn, trigger_table_query);
 
-    // CRITICAL: Connection stays open in app->global_db_conn
+    const char *command_policy_table =
+	"CREATE TABLE IF NOT EXISTS command_policies ("
+	"command VARCHAR(256) PRIMARY KEY, "
+	"type VARCHAR(32) NOT NULL, "
+	"risk_level VARCHAR(32) NOT NULL, "
+	"updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON DUPLICATE KEY UPDATE updated_at=CURRENT_TIMESTAMP"
+	")";
+    DEBUG_PRINT("DEBUG: [DB] Executing: CREATE TABLE IF NOT EXISTS command_policies\n");
+    mysql_query(app->global_db_conn, command_policy_table);
+
+
+    DEBUG_PRINT("DEBUG: [DB] init_remote_db sequence fully complete!\n");
     return 1;
 }
 
@@ -598,37 +655,97 @@ void load_history_to_api(struct json_object *messages_array) {
 }
 
 // updated 0.8.3 send status to AI as well as display it
+// modified 0.8.4 display status in color
 void display_status(AppContext *app) {
-    // 1. Build a single string containing the whole status report
+    // Lock the database mutex to ensure thread-safety during the status check
+    pthread_mutex_lock(&app->db_mutex);
+
+    gboolean is_connected = FALSE;
+    int ping_res = -1;
+
+    DEBUG_PRINT("DEBUG: [STATUS] Checking database connection status...\n");
+    DEBUG_PRINT("DEBUG: [STATUS] app->global_db_conn pointer value: %p\n", (void*)app->global_db_conn);
+
+    if (app->global_db_conn != NULL) {
+        // mysql_ping returns 0 if the connection is alive
+        ping_res = mysql_ping(app->global_db_conn);
+        DEBUG_PRINT("DEBUG: [STATUS] mysql_ping returned: %d\n", ping_res);
+        if (ping_res == 0) {
+            is_connected = TRUE;
+        } else {
+            DEBUG_PRINT("DEBUG: [STATUS] mysql_ping failed error: %s\n", mysql_error(app->global_db_conn));
+        }
+    }
+
+    pthread_mutex_unlock(&app->db_mutex);
+    // 1. Build a single raw string containing the whole status report for the AI
     GString *status_report = g_string_new("--- SYSTEM STATUS ---\n");
 
     const char *tee_val = app->tee_enabled ? "ON" : "OFF";
-    g_string_append_printf(status_report, "Tee Logging:  %s\n", tee_val);
+    g_string_append_printf(status_report, "Tee Logging:\t%s\n", tee_val);
 
     const char *auto_val = app->autoreply_enabled ? "ON" : "OFF";
-    g_string_append_printf(status_report, "Autoreply:    %s\n", auto_val);
+    g_string_append_printf(status_report, "Autoreply:\t%s\n", auto_val);
+
+    const char *auto_exec_val = app->auto_execute_enabled ? "ON" : "OFF";
+    g_string_append_printf(status_report, "Auto Execute:\t%s\n", auto_exec_val);
 
     int db_ok = (app->global_db_conn && mysql_ping(app->global_db_conn) == 0);
-    g_string_append_printf(status_report, "Database:     %s\n", db_ok ? "CONNECTED" : "DISCONNECTED");
+    g_string_append_printf(status_report, "Database:\t%s\n", db_ok ? "CONNECTED" : "DISCONNECTED");
+
+    const char *mysql_ping_val = is_connected ? "ON" : "OFF";
+    g_string_append_printf(status_report, "MariaDB Ping Results:\t%s\n", mysql_ping_val);
 
     int ai_ok = (app->api_key && strlen(app->api_key) > 0);
-    g_string_append_printf(status_report, "AI Status:    %s\n", ai_ok ? "READY" : "MISSING CONFIG");
+    g_string_append_printf(status_report, "AI Status:\t%s\n", ai_ok ? "READY" : "MISSING CONFIG");
 
-    g_string_append_printf(status_report, "Session UUID: %s\n", app->session_uuid ? app->session_uuid : "N/A");
+    g_string_append_printf(status_report, "Session UUID:\t%s\n", app->session_uuid ? app->session_uuid : "N/A");
     g_string_append(status_report, "---------------------");
 
-    // 2. Display to the User in the AI Pane
-    write_to_ai_pane(app, "[ Local Status ]\n", status_report->str, "cmd_tag", "body_tag");
+    // 2. Display to the User in the AI Pane with granular coloring
+    append_ai_text(app, "[ Local Status ]\n", "cmd_tag");
+    append_ai_text(app, "--- SYSTEM STATUS ---\n", "body_tag");
 
-    // 3. THE NEW PART: Send to Tee Handler so the AI "sees" it
-    // We call tee_handle_output just like the terminal does
+    // Tee Logging Row
+    append_ai_text(app, "Tee Logging:\t", "body_tag");
+    append_ai_text(app, tee_val, app->tee_enabled ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+
+    // Autoreply Row
+    append_ai_text(app, "Autoreply:\t", "body_tag");
+    append_ai_text(app, auto_val, app->autoreply_enabled ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+
+    // Auto Execute Row
+    append_ai_text(app, "Auto Execute:\t", "body_tag");
+    append_ai_text(app, auto_exec_val, app->auto_execute_enabled ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+
+    // mysql ping rresults
+    append_ai_text(app, "MYSQL Server:\t", "body_tag");
+    append_ai_text(app, mysql_ping_val ? "ALIVE" : "DEAD", mysql_ping_val ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+
+    // Database Row
+    append_ai_text(app, "Database:\t", "body_tag");
+    append_ai_text(app, db_ok ? "CONNECTED" : "DISCONNECTED", db_ok ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+
+    // AI Status Row
+    append_ai_text(app, "AI Status:\t", "body_tag");
+    append_ai_text(app, ai_ok ? "READY" : "MISSING CONFIG", ai_ok ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+
+    // Session UUID Row
+    append_ai_text(app, "Session UUID:\t", "body_tag");
+    append_ai_text(app, app->session_uuid ? app->session_uuid : "N/A", "body_tag");
+    append_ai_text(app, "\n---------------------\n\n", "body_tag");
+
+    // 3. Send the raw un-tagged plain text block to the AI history
     if (app->tee_enabled) {
         tee_handle_output(app, status_report->str);
-        // We add a small newline to the buffer to keep the AI history clean
         tee_handle_output(app, "\n");
-        // --- THE FIX ---
-        // This manually "pours the bucket" into the AI thread immediately
-        tee_flush_timed(app); 
+        tee_flush_timed(app);
     }
 
     // Cleanup
@@ -658,4 +775,40 @@ char* read_file_to_string(const char *path) {
     return string;
 }
 
+char* extract_cmd_name(const char *input) {
+    char *buf = strdup(input);
+    char *saveptr;
+    char *token = strtok_r(buf, " ", &saveptr);
+    char *result = strdup(token ? token : "");
+    free(buf);
+    return result;
+}
+
+// Added 0.8.4-alpha
+gboolean is_ai_command(const char *text) {
+    if (!text) return FALSE;
+    // Check if the AI returned a string containing our command delimiter
+    return (strstr(text, "<cmd>") != NULL && strstr(text, "</cmd>") != NULL);
+}
+
+char* extract_ai_command(const char *text) {
+    char *start = strstr(text, "<cmd>");
+    char *end = strstr(text, "</cmd>");
+    if (!start || !end || end < start) return NULL;
+
+    start += 5; // Skip "<cmd>"
+    size_t len = end - start;
+    char *cmd = malloc(len + 1);
+    strncpy(cmd, start, len);
+    cmd[len] = '\0';
+    return cmd;
+}
+
+// added 0.8.4-alpha
+char* copyString(const char *s) {
+    if (!s) return NULL;
+    char *res = malloc(strlen(s) + 1);
+    if (res) strcpy(res, s);
+    return res;
+}
 

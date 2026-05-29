@@ -10,6 +10,9 @@
 #ifndef HELP_H
 #define HELP_H
 
+// Set a static buffer size
+#define HELP_BUFFER_SIZE 8192
+
 // Returns the static help menu string
 char* get_hw_stats();
 const char* get_help_text();

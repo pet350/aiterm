@@ -12,11 +12,11 @@
 
 #include <stdlib.h>
 
-// Returns a hex-encoded XOR string. Caller must free().
-char* crypt_to_hex(const char *input);
 
-// Returns a decrypted plaintext string from hex. Caller must free().
-char* hex_to_decrypt(const char *hex);
+void bin_to_hex(const unsigned char *bin, size_t len, char *hex);
+void hex_to_bin(const char *hex, unsigned char *bin);
+char* hex_to_decrypt(const char *hex_encrypted, const char *master_key);
+char* crypt_to_hex(const char *plaintext, const char *master_key);
 
 #endif
 

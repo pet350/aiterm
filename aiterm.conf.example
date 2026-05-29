@@ -1,3 +1,7 @@
+# *** 0.8.4-alpha: Note: api_key and db_pass are encryped with AES-256-CBC from libssl-dev ***
+# unencrtpted/plain text passwords are no longer supposrted in the config file!
+# you must use the ouput from the built in ssl function in ./aiterm --master=<master key> --crypt-pw=<string>
+
 # Provider [openai/gemini]
 provider=gemini
 
@@ -5,7 +9,7 @@ provider=gemini
 model=gemini-flash-latest
 
 # API Key
-api_key={ Paste Your API Key here }
+api_key={ Encrypted with AES-256-CBC API Key, use ./aiterm --master=<master key> --crypt-pw=<unencrypted key> }
 
 # New version 0.5 MariaDB config
 # Database Host
@@ -15,7 +19,7 @@ db_host={IP Address of your mysql server}
 db_user={db username}
 
 # Database Password
-db_pass={db users password}
+db_pass={db Encrypted password with AES-256-CBC, use ./aiterm --master=<master key> --crypt-pw=<unencrypted password>  }
 
 # Database Name
 db_name={database name. Example: aiterm_db}

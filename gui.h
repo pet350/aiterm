@@ -29,12 +29,14 @@ typedef struct AppContext {
 
     gboolean tee_enabled;
     gboolean autoreply_enabled;
+    gboolean auto_execute_enabled;
     gboolean is_processing;
 
     GtkCssProvider *ai_css_provider;
     GString *tee_accumulator;
     GMutex buffer_mutex;
 
+    char *master_key;
     char *api_key;
     char *provider;
     char *model;
@@ -57,8 +59,6 @@ typedef struct AppContext {
     long last_processed_row;
 }AppContext;
 
-/* gui.h */
-
 typedef struct {
     AppContext *app;
     char *prompt;
@@ -69,7 +69,7 @@ typedef struct {
 typedef struct {
     AppContext *app;
     char *response_text;
-    char *original_prompt; // Required for ai_thread_func in gemini.c
+    char *original_prompt;
 } AIResponseData;
 
 void setup_gui(AppContext *app);

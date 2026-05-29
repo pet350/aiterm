@@ -1,3 +1,10 @@
+// part of aiterm project
+// terminal.c
+// Functions for setting up and managing terminal I/O
+// By: Peter Talbott
+// Assisted by: Gemini
+// May 2026
+
 #include <stdio.h>
 #include <string.h>
 #include <vte/vte.h>

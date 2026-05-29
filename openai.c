@@ -1,3 +1,10 @@
+// part of aiterm project
+// openai.c
+// Functions for sending/receiving data from OpenAI
+// By: Peter Talbott
+// Assisted by: Gemini
+// May 2026
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

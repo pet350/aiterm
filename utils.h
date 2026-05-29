@@ -8,8 +8,13 @@
 #ifndef UTILS_H
 #define UTILS_H
 #include <pthread.h>
+#include <vte/vte.h>
 #include <json-c/json.h>
 #include "gui.h"
+
+// ANSI Codes for VTE coloring
+#define ANSI_CYAN  "\033[1;36m"
+#define ANSI_RESET "\033[0m"
 
 char* extract_ai_text(const char *json);
 extern int debug_mode;
@@ -46,11 +51,17 @@ extern int history_count;
 extern const char* AITERM_VERSION;
 extern const char* CONFIG_FILE;
 size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp);
+
 char* extract_ai_text(const char *json);
 char* strip_ansi(const char *input); // Helpful for goal #2
 char* strip_prompt(const char *input);
 char* read_file_to_string(const char *path);
+char* extract_cmd_name(const char *input);
+char* extract_ai_command(const char *text);
+char* copyString(const char *s);
+
 int init_remote_db(AppContext *app); // Add this line
+
 void append_to_view(GtkWidget *view, const char *prefix, const char *text);
 void* db_worker_thread(void *arg);
 void load_config(AppContext *app);
@@ -62,10 +73,16 @@ void save_to_history(const char *user_text, const char *ai_text);
 void save_tee_to_history(const char *terminal_output, const char *ai_analysis);
 void display_all_history(AppContext *app);
 void display_status(AppContext *app);
-void tee_handle_output(AppContext *app, const char *text) ;
+void tee_handle7_output(AppContext *app, const char *text) ;
 void tee_flush_timed(AppContext *app);
+void request_human_approval(AppContext *app, const char *input_text);
+void feed_terminal_header(VteTerminal *terminal, const char *msg);
+
+gboolean is_ai_command(const char *text);
 
 #endif
 
 
 // End of utils.h
+
+
