@@ -1,3 +1,10 @@
+/* crypto.h					*/
+/* Part of project: aiterm			*/
+/* C Program file for for crypto functions	*/
+/* By: Peter Talbott				*/
+/* With assistance from Gemini and OpenAI	*/
+/* April, May 2026				*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,7 +64,7 @@ char* crypt_to_hex(const char *plaintext, const char *master_key) {
 
     int pt_len = strlen(plaintext);
     unsigned char *ciphertext = malloc(pt_len + 32); // Extra space for padding
-    
+
     int ct_len = encrypt_data((unsigned char*)plaintext, pt_len, key, iv, ciphertext);
 
     // Combine: Salt + IV + Ciphertext

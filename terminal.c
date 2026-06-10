@@ -19,6 +19,11 @@
 // External helper from gui.c to trigger a fresh notebook page setup
 extern void add_terminal_tab(AppContext *app);
 
+void clear_terminal_ghosts(VteTerminal *terminal) {
+    // \033[2J clears screen, \033[3J clears scrollback
+    vte_terminal_feed(terminal, "\033[2J\033[3J", -1);
+}
+
 void apply_terminal_transparency(AppContext *app) {
     // Guard against uninitialized active terminal view
     if (!app->terminal_view || !GTK_IS_WIDGET(app->terminal_view)) return;
@@ -108,6 +113,14 @@ static gboolean throttled_delta_check(gpointer user_data) {
 
             if (new_text && strlen(new_text) > 1) {
                 app->last_processed_row = cur_row; // Move the pointer forward
+		char *cleaned_text = strip_blank_lines(new_text);
+		free(new_text);
+		new_text=g_strdup(cleaned_text); // yet another attempt at silencing the blanks
+
+ 		// Create the XML Wrapper
+//    		char *xml_chunk = g_strdup_printf(
+//		        "<tee session_uuid=\"%s\" timestamp=\"%ld\">\n%s\n</tee>\n",
+//		        app->session_uuid, time(NULL), new_text);
 
                 if (app->tee_enabled || app->autoreply_enabled) {
                     // APPEND the new text, don't assign/overwrite!
@@ -181,6 +194,8 @@ GtkWidget* setup_terminal(AppContext *app) {
     app->last_processed_row = 0;
 
     GtkWidget *new_term = vte_terminal_new();
+
+    // vte_terminal_spawn_async(NULL, NULL, NULL, NULL, -1, NULL, on_terminal_ready, app, NULL);
     vte_terminal_set_cursor_shape(VTE_TERMINAL(new_term), VTE_CURSOR_SHAPE_BLOCK);
     vte_terminal_set_cursor_blink_mode(VTE_TERMINAL(new_term), VTE_CURSOR_BLINK_ON);
 
@@ -194,5 +209,6 @@ GtkWidget* setup_terminal(AppContext *app) {
         VTE_PTY_DEFAULT, NULL, (char *[]){"/bin/bash", NULL},
         NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, -1, NULL, NULL, NULL);
     vte_terminal_set_scrollback_lines(VTE_TERMINAL(new_term), 10000);
+
     return new_term;
 }

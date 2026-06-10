@@ -1,11 +1,9 @@
-/* help.h
-* Part of project: aiterm
-* C Program header file for help functions
-* By: Peter Talbott
-* With assistance from Gemini and OpenAI
-* April, May 2026
-*/
-
+// Part of project: aiterm
+// help.h
+// C Program header file for help functions
+// By: Peter Talbott
+// With assistance from Gemini and OpenAI
+// April, May 2026, June 2026
 
 #ifndef HELP_H
 #define HELP_H

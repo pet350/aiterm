@@ -1,12 +1,9 @@
-/* update.h
- Part of project: aiterm
-* C Program header file for updating AI functions
-* By: Peter Talbott
-* With assistance from Gemini and OpenAI
-* April, May 2026
-*/
-
-
+// Part of project: aiterm
+// openai.h
+// C Program header file for updating AI functions
+// By: Peter Talbott
+// With assistance from Gemini and OpenAI
+// April, May 2026
 
 #ifndef OPENAI_H
 #define OPENAI_H

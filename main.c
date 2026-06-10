@@ -1,8 +1,7 @@
-/* Main program file for aiterm
-** The terminal emulator with AI assistance
-** By: Peter Talbott
-** Assisted compilation from Gemini and OpenAI
-*/
+/* Main program file for aiterm			*/
+/* The terminal emulator with AI assistance	*/
+/* By: Peter Talbott				*/
+/* Assisted compilation from Gemini and OpenAI  */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,31 +9,42 @@
 #include <getopt.h>
 #include <unistd.h>
 #include <mariadb/mysql.h>
+
 #include "gui.h"
 #include "update.h"
 #include "utils.h"
 #include "tee_handler.h"
 #include "crypto.h"
 #include "help.h"
+#include "gemini.h"
+#include "build_id.h"
+#include "session_manager.h"
 
 // Current AITERM version
-const char* AITERM_VERSION = "0.8.4-alpha";
-const char* CONFIG_FILE = "/etc/aiterm.conf";
+const char* AITERM_VERSION	= "0.8.5-alpha";
+const char* AITERM_BUILDID	= BUILD_ID;
+const char* AITERM_BUILD_TIME	= BUILD_TIME;
+const char* CONFIG_FILE		= "/etc/aiterm.conf";
 
-int debug_mode = 0;
+void print_version() {
+    printf("aiterm version %-16s\n", AITERM_VERSION);
+    printf("Build ID: %s\n", AITERM_BUILDID);
+    printf("Build Time: %s\n", AITERM_BUILD_TIME);
+}
+
 AppContext *global_app = NULL;
 
 int main(int argc, char *argv[]) {
     AppContext *app = g_malloc0(sizeof(AppContext));
     global_app = app;
 
-    // Set default autoreply to OFF. Added 0.7.4-delta
+    // Set booleans to default to FALSE
     app->autoreply_enabled = FALSE;
     app->tee_enabled = FALSE;
     app->auto_execute_enabled = FALSE;
-
-    // --- NEW: Release the lock ---
+    app->debug_mode = FALSE;
     app->is_processing = FALSE;
+    app->ratelimit_enabled = FALSE;
 
     // 1. Generate the unique ID immediately
     char session_buf[64];
@@ -49,10 +59,32 @@ int main(int argc, char *argv[]) {
     // 2. Parse command line options if any
     for (int i = 1; i < argc; i++) {
        if (strcmp(argv[i], "--debug") == 0) {
-            debug_mode = 1;
+            app->debug_mode = TRUE;
        } else if (strcmp(argv[i], "--version") == 0) {
-            printf("aiterm %s\n", AITERM_VERSION);
+            print_version();
             exit(0);
+       } else if (strcmp(argv[i], "--list-models") == 0 ) {
+	    load_config(app);
+	    if (!app->master_key) {
+		printf("Error: no master key found!\n");
+		exit(1);
+	     }
+	    char *models = gemini_list_models(app);
+	    printf("Gemini Model List:\n%s\n", models);
+	    if (app->master_key) {
+        	// Overwrite memory with zeros before freeing
+        	size_t len = strlen(app->master_key);
+        	memset(app->master_key, 0, len);
+        	free(app->master_key);
+    	    }
+	    g_free(app);
+	    exit(0);
+       } else if  (strcmp(argv[i], "--provider") == 0) {
+	     load_config(app);
+	     char info[512];
+	     snprintf(info, sizeof(info), "Provider: %s\nModel: %s", app->provider, app->model);
+	     printf("%s\n", info);
+	     exit(0);
        } else if (strcmp(argv[i], "--features") == 0) {
             printf("%s\n", get_features_text());
             exit(0);
@@ -78,7 +110,7 @@ int main(int argc, char *argv[]) {
        }
     }
     if (!app->master_key) {
-	char *pwd = getpass("Enter Master Password: ");
+	char *pwd = getpass("Enter Master Encryption Key: ");
 	if (pwd) app->master_key = strdup(pwd);
     }
 
@@ -93,17 +125,20 @@ int main(int argc, char *argv[]) {
     DEBUG_PRINT("DEBUG: [MAIN] Invoking load_config...\n");
     load_config(app);
     DEBUG_PRINT("DEBUG: [MAIN] load_config sequence complete.\n");
-    
+
     // 5) Provision the remote database on the XEN VM
     pthread_mutex_init(&app->db_mutex, NULL);
-
-
-    DEBUG_PRINT("DEBUG: [MAIN] Invoking init_remote_db...\n");
-    if (init_remote_db(app)) {
-        DEBUG_PRINT("Database setup and persistent connection ready.\n");
+    pthread_t db_init_thread;
+    DEBUG_PRINT("DEBUG: [MAIN] Spawning asynchronous DB initialization thread...\n");
+    if (pthread_create(&db_init_thread, NULL, init_db_thread_worker, app) == 0) {
+        pthread_detach(db_init_thread); // Allow thread to clean itself up on exit
     } else {
-        DEBUG_PRINT("Database offline. History will not be saved.\n");
+        fprintf(stderr, "Error: Failed to spawn database initialization thread.\n");
     }
+
+    DEBUG_PRINT("DEBUG: [MAIN] Initializing Session Manager...\n");
+    session_init(app);
+    DEBUG_PRINT("DEBUG: [MAIN] Session Manager active.\n");
 
     // 6) INITIALIZE THE TEE HANDLER HERE
     DEBUG_PRINT("DEBUG: [MAIN] Initializing Tee Handler...\n");
@@ -139,7 +174,7 @@ int main(int argc, char *argv[]) {
 
     DEBUG_PRINT("DEBUG: [MAIN] Closing threaded database connection.\n");
     pthread_mutex_destroy(&app->db_mutex);
-    g_free(app);
+
 
     if (app->master_key) {
         // Overwrite memory with zeros before freeing
@@ -147,6 +182,7 @@ int main(int argc, char *argv[]) {
         memset(app->master_key, 0, len);
         free(app->master_key);
     }
+    g_free(app);
     return 0;
 }
 

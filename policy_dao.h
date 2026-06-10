@@ -10,6 +10,14 @@ typedef struct {
     int risk;
 } PolicyRecord;
 
+typedef struct {
+    AppContext *app;
+    char *cmd;
+    void (*callback)(PolicyRecord *p, gpointer data);
+    gpointer user_data;
+    PolicyRecord *result;
+} GetPolicyArgs;
+
 PolicyRecord* get_policy_for_command(AppContext *app, const char *cmd);
 gboolean set_command_policy(AppContext *app, PolicyRecord *p);
 gboolean delete_command_policy(AppContext *app, const char *cmd);

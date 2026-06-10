@@ -15,6 +15,7 @@
 
 // Reference to global version defined in main.c
 extern const char* AITERM_VERSION;
+extern const char* AITERM_BUILD_TIME;
 
 const char* FEATURES =
     "Features:\n"
@@ -26,7 +27,7 @@ const char* FEATURES =
 
 const char* get_version_info() {
     static char v_buf[512];
-    snprintf(v_buf, sizeof(v_buf), "AI-Term GTK v%s\nLocation: Weston, WV\n%s", AITERM_VERSION, FEATURES);
+    snprintf(v_buf, sizeof(v_buf), "AI-Term GTK Version: %-16s\nBuild ID: %s\nBuild Time: %s\nLocation: Weston, WV\n%s", AITERM_VERSION, AITERM_BUILDID, AITERM_BUILD_TIME, FEATURES);
     return(v_buf);
 }
 
@@ -34,7 +35,22 @@ const char* get_features_text() {
     get_version_info();
     return
         "\n"
-        "      *** Changes in Version 0.8.4-alpha (Current) ***\n"
+	"      *** Changes in Version 0.8.5-alpha (Current) ***\n"
+	"      - [New] XML Telemetry Protocol: Live terminal state (<tee>) and DB memory (<history>) \n"
+	"        now wrapped in formal semantic tags for enhanced AI perception.\n"
+	"      - [New] Session Pinning: Persistent UUID-based session management for AI thread tracking.\n"
+	"      - [New] Silent-Boot Infrastructure: OS-level shell noise suppression ensures AI context \n"
+	"        receives only user-generated terminal output.\n"
+	"      - [New] IO/Buffer Protection: Sliding-window accumulation (64KB) prevents context \n"
+	"        window overflow and protects against massive IO floods (NFS/Kernel Panics).\n"
+	"      - [Fixed] Terminal Ghosting: VTE scrollback/newline initialization plague eliminated \n"
+	"        via atomic cursor/buffer synchronization.\n"
+	"      - [Performance] Decoupled Logging: Asynchronous XML-tagging occurs outside the UI \n"
+	"        thread to maintain < 5ms latency during heavy stream processing.\n"
+	"      - [Secure] Protocol Sanitization: Automatic Unicode/JSON escaping ensures valid \n"
+	"        transmission to remote API endpoints.\n"
+	"\n"
+        "      *** Changes in Version 0.8.4-alpha ***\n"
 	"      - [New] Policy Manipulation to govern AI commands.\n"
         "      - [New] Pre-flight Auto-Migration: Executing 6 distinct schema queries safely on startup.\n"
         "      - [Fixed] DB Boot Deadlock: UI main loop decoupled from remote MariaDB infrastructure routines.\n"
@@ -82,6 +98,8 @@ const char* get_help_text() {
         "Core GUI Shell Commands", " ",
         "help", "Show this console interactive menu",
         "hw", "Show basic hardware specs",
+	"provider", "Shows selected provider (OpenAI/Gemini)",
+	"list models", "Shows available Gemini models",
         "clear", "Clear the AI history layout view",
         "status", "Display application operational toggles",
         "history", "Display historical logs cached in MariaDB",
@@ -92,12 +110,6 @@ const char* get_help_text() {
         "Ctrl + Tab", "Cycle focus (Input -> Active Tab -> AI View)",
         "Mouse Interactions:", " ",
         "Right-Click", "Pop up context menu (New Tab / Copy / Paste)",
-        "AI on/off Controls:", " ",
-        "tee", "Toggle immediate terminal capturing",
-        "autoreply", "Toggle real-time prompt analysis",
-        "auto execute", "Toggle direct execution of AI payloads",
-        "auto", "Toggle all three at once",
-        "UI Utility Toolbar Buttons:", " ",
         "Paperclip", "Launch file-chooser to upload to AI",
         "Copy Icon", "Copy the complete AI string contents",
 	"Policy Manipulation", " ",
@@ -197,6 +209,7 @@ const char* get_cmd_help() {
         "  --debug\t\t\tEnable verbose debug logging to stderr\n"
         "  --features\t\t\tShow details on features supported by current version\n"
         "  --master=<key>\t\tProvide the master password directly to decrypt saved config options\n"
+	"  --list-models\t\t\tLists available Gemini models\n"
         "  --crypt-pw=<password>\t\tEncrypt a plaintext password to AES-256-CBC encryption for aiterm.conf\n\n"
         "Environment Variables:\n"
         "  AITERM_MASTER_KEY\t\tFallback variable evaluated if the --master option flag is missing\n\n"

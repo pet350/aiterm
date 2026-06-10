@@ -18,15 +18,53 @@
 #include "crypto.h" // Add this include
 #include "update.h"
 #include "tee_handler.h"
+#include "ratelimit.h"
 
 // This is the actual definition where the memory is allocated
 HistoryEntry history[5];
 int history_count = 0;
 
+// Worker thread function for database initialization
+void* init_db_thread_worker(void *data) {
+    AppContext *app = (AppContext*)data;
+
+    // CRITICAL: Initialize thread-specific MySQL memory
+    mysql_thread_init();
+
+    DEBUG_PRINT("DEBUG: [DB_THREAD] Invoking init_remote_db...\n");
+    if (init_remote_db(app)) {
+        DEBUG_PRINT("Database setup and persistent connection ready.\n");
+    } else {
+        DEBUG_PRINT("Database offline. History will not be saved.\n");
+    }
+
+    // CRITICAL: Clean up thread-specific MySQL memory
+    mysql_thread_end();
+    return NULL;
+}
+
 void feed_terminal_header(VteTerminal *terminal, const char *msg) {
     char buf[1024];
     snprintf(buf, sizeof(buf), "\r%s[AI Executing]: %s%s\n", ANSI_CYAN, msg, ANSI_RESET);
     vte_terminal_feed(terminal, buf, -1);
+}
+
+gboolean check_rate_limit(CURL *curl) {
+    long http_code = 0;
+
+    // Extract the HTTP status code from the curl session
+    CURLcode res = curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+    if (res == CURLE_OK) {
+        if (http_code == 429) {
+            g_warning("Gemini Free Tier limit reached (HTTP 429).");
+            return TRUE;
+        }
+    } else {
+        g_printerr("Failed to get HTTP code: %s\n", curl_easy_strerror(res));
+    }
+
+    return FALSE;
 }
 
 char* trim_whitespace(char* str) {
@@ -84,6 +122,7 @@ void save_config(AppContext *app) {
     fprintf(fp, "tee_enabled=%d\n", app->tee_enabled);
     fprintf(fp, "autoreply_enabled=%d\n", app->autoreply_enabled);
     fprintf(fp, "auto_execute_enabled=%d\n", app->auto_execute_enabled);
+    fprintf(fp, "ratelimit_enabled=%d\n", app->ratelimit_enabled);
 
     fclose(fp);
     DEBUG_PRINT("DEBUG: Settings saved to aiterm.conf\n");
@@ -172,7 +211,10 @@ void load_config(AppContext *app) {
 		app->auto_execute_enabled = atoi(strchr(line, '=') + 1);
 		const char *auto_exec_val = app->auto_execute_enabled ? "ON" : "OFF";
 		DEBUG_PRINT("DEBUG: [LOADED] Default auto execute enabled: [%s]\n", auto_exec_val);
-	}
+	} else if (strstr(line, "ratelimit_enabled=")) {
+        	app->ratelimit_enabled = atoi(strchr(line, '=') + 1);
+        	DEBUG_PRINT("DEBUG: [LOADED] Rate limit enabled: [%d]\n", app->ratelimit_enabled);
+        }
     }
     fclose(fp);
 }
@@ -181,9 +223,20 @@ void load_config(AppContext *app) {
 // Modified 0.7.4-delta to use global mysql connection
 // Modified 0.7.5-alpha for autoreply and color responces
 void display_all_history(AppContext *app) {
+    // 1) FIRST THING: Initialize MySQL for this thread
+    mysql_thread_init();
+
+    //DBWorkerData *data = (DBWorkerData *)arg;
+    extern AppContext *global_app;
+
+    // If this fails, it safely jumps to cleanup where mysql_thread_end() handles it
+    if (!global_app->global_db_conn) goto cleanup;
+
+    // LOCK: Ensure only one thread uses the database pipe at a time
+    pthread_mutex_lock(&global_app->db_mutex);
     if (!app->global_db_conn) {
         write_to_ai_pane(app, "System: ", "Database connection is not active.", "cmd_tag", "cmd_tag");
-        return;
+        goto cleanup;
     }
 
     MYSQL_RES *res;
@@ -193,11 +246,11 @@ void display_all_history(AppContext *app) {
 
     if (mysql_query(app->global_db_conn, query)) {
         write_to_ai_pane(app, "System: ", "Error fetching history from database.", "cmd_tag", "cmd_tag");
-        return;
+        goto cleanup;
     }
 
     res = mysql_store_result(app->global_db_conn);
-    if (!res) return;
+    if (!res) goto cleanup;
 
     // Use a GString to build the history output
     GString *history_output = g_string_new("");
@@ -216,12 +269,21 @@ void display_all_history(AppContext *app) {
         write_to_ai_pane(app, "System: ", "History is empty.", "cmd_tag", "cmd_tag");
     }
 
+    cleanup:
     g_string_free(history_output, TRUE);
     mysql_free_result(res);
+
+    pthread_mutex_unlock(&global_app->db_mutex);
+
+    mysql_thread_end();
+    return;
 }
 
 // Modified 0.7.4-delta for global mysql connection
+// Rewritten 0.8.4-delta
+// Modified 0.7.4-delta for global mysql connection
 void* db_worker_thread(void *arg) {
+    mysql_thread_init();
     DBWorkerData *data = (DBWorkerData *)arg;
     extern AppContext *global_app;
 
@@ -276,6 +338,7 @@ void* db_worker_thread(void *arg) {
     if (data->ai_text) free(data->ai_text);
     if (data->session_uuid) free(data->session_uuid);
     free(data);
+    mysql_thread_end();
     return NULL;
 }
 
@@ -381,6 +444,7 @@ char* strip_prompt(const char *input) {
 void extract_and_save_keywords(AppContext *app, const char *text) {
     if (!text || !app || !app->global_db_conn) return;
 
+    mysql_thread_init();
     char *buf = strdup(text);
     char *token = strtok(buf, " ,.!?;:()[]\"");
 
@@ -392,7 +456,7 @@ void extract_and_save_keywords(AppContext *app, const char *text) {
             char esc_token[256];
             mysql_real_escape_string(app->global_db_conn, esc_token, token, strlen(token));
 
-            snprintf(query, sizeof(query),
+		            snprintf(query, sizeof(query),
                      "INSERT INTO relevance_triggers (keyword, hit_count) "
                      "VALUES ('%s', 1) "
                      "ON DUPLICATE KEY UPDATE hit_count = hit_count + 1, last_used = CURRENT_TIMESTAMP", 
@@ -404,6 +468,7 @@ void extract_and_save_keywords(AppContext *app, const char *text) {
 
     pthread_mutex_unlock(&app->db_mutex);
     free(buf);
+    mysql_thread_end();
 }
 
 // 0.7.3-beta: The Smart Retrieval Engine (Global Magic Version)
@@ -411,6 +476,7 @@ void extract_and_save_keywords(AppContext *app, const char *text) {
 void load_smart_history(AppContext *app, struct json_object *target_array, const char *current_prompt, int is_gemini) {
     if (!app->global_db_conn) return;
 
+    mysql_thread_init();
     pthread_mutex_lock(&app->db_mutex);
 
     const char *query =
@@ -433,6 +499,7 @@ void load_smart_history(AppContext *app, struct json_object *target_array, const
     }
 
     pthread_mutex_unlock(&app->db_mutex);
+    mysql_thread_end();
 }
 
 // Updated load_history_to_gemini
@@ -440,6 +507,7 @@ void load_smart_history(AppContext *app, struct json_object *target_array, const
 void load_history_to_gemini(AppContext *app, struct json_object *contents_array, const char *current_prompt) {
     if (!app->global_db_conn) return;
 
+    mysql_thread_init();
     pthread_mutex_lock(&app->db_mutex);
 
     const char *query =
@@ -457,17 +525,25 @@ void load_history_to_gemini(AppContext *app, struct json_object *contents_array,
             struct json_object *parts_array = json_object_new_array();
             struct json_object *part = json_object_new_object();
 
-            const char* role = strcmp(row[0], "assistant") == 0 ? "model" : "user"; 
+            const char* role = strcmp(row[0], "assistant") == 0 ? "model" : "user";
 
-            json_object_object_add(part, "text", json_object_new_string(row[1]));
+	    // WRAPPING LOGIC:
+            // Wrap the database row content in the <history> tag
+            char *wrapped_content = g_strdup_printf(
+		"<history session_uuid=\"%s\">\n%s\n</history>",
+		app->session.session_uuid, row[1]);
+
+            json_object_object_add(part, "text", json_object_new_string(wrapped_content));
             json_object_array_add(parts_array, part);
             json_object_object_add(item, "role", json_object_new_string(role));
             json_object_object_add(item, "parts", parts_array);
-            json_object_array_add(contents_array, item); 
+            json_object_array_add(contents_array, item);
+	    g_free(wrapped_content);
         }
         mysql_free_result(res);
     }
     pthread_mutex_unlock(&app->db_mutex);
+    mysql_thread_end();
 }
 
 size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
@@ -584,14 +660,17 @@ char* extract_ai_text(const char *json_str) {
     return NULL;
 }
 
-// updated 0.7.4-delta to use global mysql connection
 void save_to_history(const char *user_text, const char *ai_text) {
     extern AppContext *global_app;
 
+    // Apply strip_blank_lines to clean the text before saving
+    char *cleaned_user_text = strip_blank_lines(user_text);
+    char *cleaned_ai_text = strip_blank_lines(ai_text);
+
     DBWorkerData *data = malloc(sizeof(DBWorkerData));
     memset(data, 0, sizeof(DBWorkerData));
-    data->user_text = strdup(user_text);
-    data->ai_text = strdup(ai_text);
+    data->user_text = cleaned_user_text; // Assign the cleaned text
+    data->ai_text = cleaned_ai_text;     // Assign the cleaned text
     data->session_uuid = strdup(global_app->session_uuid);
     data->is_tee = 0;
 
@@ -600,7 +679,7 @@ void save_to_history(const char *user_text, const char *ai_text) {
     pthread_detach(thread_id);
 
     // This part stays in the main thread
-    extract_and_save_keywords(global_app, ai_text);
+    extract_and_save_keywords(global_app, cleaned_ai_text); // Use cleaned text for keywords too
 }
 
 void save_tee_to_history(const char *terminal_output, const char *ai_analysis) {
@@ -608,10 +687,15 @@ void save_tee_to_history(const char *terminal_output, const char *ai_analysis) {
 
     if (!terminal_output || !ai_analysis || !global_app->session_uuid) return;
 
+    mysql_thread_init();
+    // Apply strip_blank_lines to clean the text before saving
+    char *cleaned_terminal_output = strip_blank_lines(terminal_output);
+    char *cleaned_ai_analysis = strip_blank_lines(ai_analysis);
+
     // 1. Pack the data
     DBWorkerData *data = malloc(sizeof(DBWorkerData));
-    data->terminal_output = strdup(terminal_output);
-    data->ai_analysis = strdup(ai_analysis);
+    data->terminal_output = cleaned_terminal_output; // Assign the cleaned text
+    data->ai_analysis = cleaned_ai_analysis;         // Assign the cleaned text
     data->session_uuid = strdup(global_app->session_uuid);
     data->sequence_id = global_app->sequence_id;
     global_app->sequence_id++;
@@ -624,16 +708,24 @@ void save_tee_to_history(const char *terminal_output, const char *ai_analysis) {
     pthread_t thread_id;
     if (pthread_create(&thread_id, NULL, db_worker_thread, data) != 0) {
         DEBUG_PRINT("Failed to create DB thread\n");
+        // Don't leak memory if thread creation fails
+        g_free(cleaned_terminal_output);
+        g_free(cleaned_ai_analysis);
+        g_free(data->session_uuid); // Assuming it was strdup'd
+        free(data);
     } else {
         pthread_detach(thread_id); // Thread cleans up itself
     }
+    mysql_thread_end();
 }
+
 
 // updated 0.7.4-delta to use global mysql connection
 void load_history_to_api(struct json_object *messages_array) {
     extern AppContext *global_app;
     if (!global_app || !global_app->global_db_conn) return;
 
+    mysql_thread_init();
     pthread_mutex_lock(&global_app->db_mutex);
 
     const char *query = "SELECT role, content FROM aiterm_history WHERE is_tee = 0 ORDER BY created_at DESC LIMIT 100";
@@ -652,12 +744,14 @@ void load_history_to_api(struct json_object *messages_array) {
     }
 
     pthread_mutex_unlock(&global_app->db_mutex);
+    mysql_thread_end();
 }
 
 // updated 0.8.3 send status to AI as well as display it
 // modified 0.8.4 display status in color
 void display_status(AppContext *app) {
     // Lock the database mutex to ensure thread-safety during the status check
+    mysql_thread_init();
     pthread_mutex_lock(&app->db_mutex);
 
     gboolean is_connected = FALSE;
@@ -690,6 +784,9 @@ void display_status(AppContext *app) {
     const char *auto_exec_val = app->auto_execute_enabled ? "ON" : "OFF";
     g_string_append_printf(status_report, "Auto Execute:\t%s\n", auto_exec_val);
 
+    const char *ratelimit_val = app->ratelimit_enabled ? "ON" : "OFF";
+    g_string_append_printf(status_report, "Rate Limit Enabled:\t%s\n", ratelimit_val);
+
     int db_ok = (app->global_db_conn && mysql_ping(app->global_db_conn) == 0);
     g_string_append_printf(status_report, "Database:\t%s\n", db_ok ? "CONNECTED" : "DISCONNECTED");
 
@@ -721,6 +818,11 @@ void display_status(AppContext *app) {
     append_ai_text(app, auto_exec_val, app->auto_execute_enabled ? "ai_tag" : "cmd_tag");
     append_ai_text(app, "\n", "body_tag");
 
+    // Ratelimit Row
+    append_ai_text(app, "Ratelimit:\t", "body_tag");
+    append_ai_text(app, ratelimit_val, app->ratelimit_enabled ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+
     // mysql ping rresults
     append_ai_text(app, "MYSQL Server:\t", "body_tag");
     append_ai_text(app, mysql_ping_val ? "ALIVE" : "DEAD", mysql_ping_val ? "ai_tag" : "cmd_tag");
@@ -750,6 +852,7 @@ void display_status(AppContext *app) {
 
     // Cleanup
     g_string_free(status_report, TRUE);
+    mysql_thread_end();
 }
 
 // Helper to read file for analysis, Added 0.7.5-beta
@@ -812,3 +915,60 @@ char* copyString(const char *s) {
     return res;
 }
 
+/*
+ * @brief Removes blank lines (empty or containing only whitespace) from a string.
+ *
+ * This function iterates through the input string line by line. If a line
+ * is found to be empty or contain only whitespace characters, it is
+ * discarded. Non-blank lines are retained with their original content
+ * and internal whitespace (including leading/trailing on non-blank lines).
+ *
+ * @param input_string The original string potentially containing blank lines.
+ * @return A new Glib-allocated string with blank lines removed. The caller
+ *         is responsible for freeing this string using g_free(). Returns NULL
+ *         if input_string is NULL. Returns an empty string if input_string
+ *         contains only blank lines or is empty.
+ */
+char* strip_blank_lines(const char *input_string) {
+    if (!input_string) {
+        return NULL;
+    }
+    int trimmed_count=0;
+
+    // If the input is an empty string, return an empty string
+    if (input_string[0] == '\0') {
+        return g_strdup("");
+    }
+
+    GString *output_buffer = g_string_new("");
+    char **lines = g_strsplit(input_string, "\n", -1); // Split by newline, -1 means no limit
+
+    for (int i = 0; lines[i] != NULL; i++) {
+        char *current_line = lines[i];
+
+        // Create a temporary mutable copy for trimming to check if it's blank.
+        // g_strstrip modifies in place, so we need a copy to not alter original line array.
+        char *trimmed_line_copy = g_strdup(current_line);
+        g_strstrip(trimmed_line_copy); // Remove leading/trailing whitespace from the copy
+
+        // If the trimmed copy is not empty, then the original line was not blank.
+        if (trimmed_line_copy[0] != '\0') {
+            // Append the original line (with its original whitespace) and a newline
+            g_string_append(output_buffer, current_line);
+            g_string_append_c(output_buffer, '\n');
+        } else {
+           trimmed_count++;
+        }
+        g_free(trimmed_line_copy); // Free the temporary trimmed copy
+    }
+
+    g_strfreev(lines); // Free the array of lines returned by g_strsplit
+
+    // Remove the trailing newline character if any lines were appended.
+    // This prevents an extra blank line at the end if the last actual line wasn't blank.
+    if (output_buffer->len > 0 && output_buffer->str[output_buffer->len - 1] == '\n') {
+        g_string_set_size(output_buffer, output_buffer->len - 1);
+    }
+    DEBUG_PRINT("[DEBUG] Stripped %d blank lines\n", trimmed_count);
+    return g_string_free(output_buffer, FALSE); // Return the C string and free the GString object
+}

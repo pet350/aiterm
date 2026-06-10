@@ -352,6 +352,7 @@ void setup_gui(AppContext *app) {
     gtk_widget_show_all(app->window);
 }
 
+
 void append_ai_text(AppContext *app, const char *text, const char *tag_name) {
     GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gemini_view));
     GtkTextIter end;
@@ -366,4 +367,19 @@ void append_ai_text(AppContext *app, const char *text, const char *tag_name) {
 
     GtkTextMark *mark = gtk_text_buffer_get_insert(buffer);
     gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(app->gemini_view), mark);
+}
+
+gboolean scroll_ai_pane_to_bottom(AppContext *app) {
+    // Get the parent of the gemini_view, which is the ScrolledWindow
+    GtkWidget *parent = gtk_widget_get_parent(app->gemini_view);
+
+    // Safety check
+    if (GTK_IS_SCROLLED_WINDOW(parent)) {
+        GtkAdjustment *adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(parent));
+        double upper = gtk_adjustment_get_upper(adj);
+        gtk_adjustment_set_value(adj, upper);
+    } else {
+        g_print("Error: gemini_view parent is not a ScrolledWindow!\n");
+    }
+    return FALSE; // Return FALSE so the idle source is removed and doesn't run again!
 }

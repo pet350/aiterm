@@ -1,11 +1,9 @@
-/* terminal.h
-* Part of project: aiterm
-* C Program header file for terminal functions
-* By: Peter Talbott
-* With assistance from Gemini and OpenAI
-* April, May 2026
-*/
-
+// Part of project: aiterm
+// terminal.h
+// C Program header file for terminal functions
+// By: Peter Talbott
+// With assistance from Gemini and OpenAI
+// April, May 2026
 
 #ifndef TERMINAL_H
 #define TERMINAL_H
@@ -21,5 +19,3 @@ void apply_terminal_transparency(AppContext *app);
 void apply_visual_settings(AppContext *app);
 
 #endif
-
-

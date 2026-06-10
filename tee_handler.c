@@ -12,6 +12,7 @@
 #include "gemini.h"
 #include "openai.h"
 #include "utils.h"
+#include "session_manager.h"
 
 // --- FORWARD DECLARATIONS (Private callbacks for 0.8.3) ---
 static gboolean update_tee_ui(gpointer data);
@@ -24,32 +25,27 @@ void tee_handler_init(AppContext *app) {
     DEBUG_PRINT("DEBUG: Tee Handler initialized.\n");
 }
 
-/* 
- * ATOMIC SNAPSHOT (The 0.8.2 fix):
- * Grabs text and clears the buffer in one locked operation
- * to prevent splicing and duplication bugs.
- */
+// ATOMIC SNAPSHOT (The 0.8.2 fix):
+// Grabs text and clears the buffer in one locked operation
+// to prevent splicing and duplication bugs.
 char* tee_extract_for_ai(AppContext *app) {
     if (!app || !app->tee_accumulator) return NULL;
     char *snapshot = NULL;
 
     g_mutex_lock(&app->buffer_mutex);
+    DEBUG_PRINT("[DEBUG] TEE_EXTRACT_FOR_AI: Locked buffer mutex\n");
     if (app->tee_accumulator->len > 5) {
-        // Snapshot the current buffer
         snapshot = g_strdup(app->tee_accumulator->str);
-        // Atomic Clear: Wipe accumulator while still locked
         g_string_assign(app->tee_accumulator, "");
     }
     g_mutex_unlock(&app->buffer_mutex);
-
-    return snapshot;
+    DEBUG_PRINT("[DEBUG] TEE_EXTRACT_FOR_AI: Unlocked buffer mutex\n");
+    return strip_blank_lines(snapshot);
 }
 
-/*
- * THREADED FLUSH (The 0.8.3 fix):
- * This returns INSTANTLY to the UI thread, spawning a background
- * worker to handle the network latency of the AI API.
- */
+// THREADED FLUSH (The 0.8.3 fix):
+// This returns INSTANTLY to the UI thread, spawning a background
+// worker to handle the network latency of the AI API.
 void tee_flush_timed(AppContext *app) {
     if (!app || app->is_processing) return;
 
@@ -64,17 +60,15 @@ void tee_flush_timed(AppContext *app) {
     // Package data for the background thread
     TeeResponseData *trd = g_malloc0(sizeof(TeeResponseData));
     trd->app = app;
-    trd->terminal_output = local_out; // Hand off memory ownership to thread
+    trd->terminal_output = strip_blank_lines(local_out); // Hand off memory ownership to thread
 
     // START BACKGROUND THREAD: This is what stops the terminal from hanging!
     g_thread_new("tee_background_worker", (GThreadFunc)tee_ai_thread_func, trd);
 }
 
-/*
- * BACKGROUND WORKER:
- * This runs on a separate CPU thread. It can "hang" waiting for
- * the internet/API without affecting the terminal UI responsiveness.
- */
+// BACKGROUND WORKER:
+// This runs on a separate CPU thread. It can "hang" waiting for
+// the internet/API without affecting the terminal UI responsiveness.
 static gpointer tee_ai_thread_func(gpointer data) {
     TeeResponseData *trd = (TeeResponseData*)data;
     AppContext *app = trd->app;
@@ -93,7 +87,7 @@ static gpointer tee_ai_thread_func(gpointer data) {
     }
 
     if (response) {
-        trd->response_text = response;
+        trd->response_text = strip_blank_lines(response);
         // Signal the UI thread to display results safely
         g_idle_add(update_tee_ui, trd);
     } else {
@@ -108,10 +102,8 @@ static gpointer tee_ai_thread_func(gpointer data) {
     return NULL;
 }
 
-/*
- * GUI UPDATE CALLBACK:
- * Safely runs on the Main UI Thread to update GTK widgets.
- */
+// GUI UPDATE CALLBACK:
+// Safely runs on the Main UI Thread to update GTK widgets.
 static gboolean update_tee_ui(gpointer data) {
     TeeResponseData *trd = (TeeResponseData *)data;
     if (!trd || !trd->app) return FALSE;
@@ -144,24 +136,29 @@ static gboolean update_tee_ui(gpointer data) {
 
 void tee_handle_input(AppContext *app, const char *text) {
     if (!text || !app->tee_accumulator) return;
+    char *clean_text = strip_blank_lines(text);
+    DEBUG_PRINT("[DEBUG] TEE_HANDLE_INPUT: Locked buffer mutex\n");
     g_mutex_lock(&app->buffer_mutex);
-    g_string_append(app->tee_accumulator, text);
+    g_string_append(app->tee_accumulator, clean_text);
     g_mutex_unlock(&app->buffer_mutex);
+    DEBUG_PRINT("[DEBUG] TEE_HANDLE_INPUT: Unlocked buffer mutex\n");
 }
 
 void tee_handle_output(AppContext *app, const char *text) {
     if (!text || !app->tee_accumulator) return;
+    if (text[0] == '\n' && text[1] == '\0') return;
 
     g_mutex_lock(&app->buffer_mutex);
-
+    DEBUG_PRINT("[DEBUG] TEE_HANDLE_OUTPUT: Locked buffer mutex\n");
     // Delta Upgrade: If AI is already busy, ignore heavy stream chatter
     // to protect context integrity and memory.
     if (app->is_processing && app->tee_accumulator->len > 51200) {
         g_mutex_unlock(&app->buffer_mutex);
+	DEBUG_PRINT("[DEBUG] TEE_HANDLE_OUTPUT: Unlocked buffer mutex\n");
         return;
     }
-
-    g_string_append(app->tee_accumulator, text);
+    char *clean_text = strip_blank_lines(text);
+    g_string_append(app->tee_accumulator, clean_text);
 
     // Hard limit safety: 64KB max buffer per flush
     if (app->tee_accumulator->len > 65536) {
@@ -175,4 +172,5 @@ void tee_handle_output(AppContext *app, const char *text) {
     }
 
     g_mutex_unlock(&app->buffer_mutex);
+    DEBUG_PRINT("[DEBUG] TEE_HANDLE_OUTPUT: Unlocked buffer mutex\n");
 }

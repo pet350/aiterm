@@ -1,11 +1,9 @@
-/* tee_handler.h
-* Part of project: aiterm
-* C Program header file for tee functions
-* By: Peter Talbott
-* With assistance from Gemini and OpenAI
-* April, May 2026
-*/
-
+// Part of project: aiterm
+// tee_handler.h
+// C Program header file for tee functions
+// By: Peter Talbott
+// With assistance from Gemini and OpenAI
+// April, May 2026
 
 #ifndef TEE_HANDLER_H
 #define TEE_HANDLER_H
