@@ -68,9 +68,16 @@ char* perform_gemini_request(AppContext *app, const char *prompt) {
 
     const char *post_data = json_object_to_json_string(root);
 
-    snprintf(url, sizeof(url),
-        "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s",
-        app->model ? app->model : "gemini-3.1-flash-lite", app->api_key);
+    ProviderConfig *provider = &app->provider_config;
+    const char *base_url = provider->base_url ? provider->base_url : "https://generativelanguage.googleapis.com/v1beta";
+    const char *endpoint = provider->endpoint ? provider->endpoint : "models/%s:generateContent";
+    const char *model = provider->model ? provider->model : "gemini-3.1-flash-lite";
+    const char *query_key = provider->query_key_name ? provider->query_key_name : "key";
+    const char *api_key = provider->api_key ? provider->api_key : app->api_key;
+
+    char endpoint_path[512];
+    snprintf(endpoint_path, sizeof(endpoint_path), endpoint, model);
+    snprintf(url, sizeof(url), "%s/%s?%s=%s", base_url, endpoint_path, query_key, api_key ? api_key : "");
 
     if (app->ratelimit_enabled) {
         ratelimit_wait_if_needed(&app->limiter);
@@ -92,9 +99,9 @@ char* perform_gemini_request(AppContext *app, const char *prompt) {
 
         res = curl_easy_perform(curl_handle);
         if (res != CURLE_OK) {
-            DEBUG_PRINT("CURL Error: %s\n", curl_easy_strerror(res));
+            DEBUG_PRINT("[DEBUG]: CURL Error: %s\n", curl_easy_strerror(res));
         } else {
-            DEBUG_PRINT("\n--- RAW GEMINI RESPONSE ---\n%s\n--------------------------\n", chunk.memory);
+            DEBUG_PRINT("[DEBUG]: \n--- RAW GEMINI RESPONSE ---\n%s\n--------------------------\n", chunk.memory);
         }
         curl_slist_free_all(headers);
         curl_easy_cleanup(curl_handle);
@@ -116,11 +123,11 @@ gpointer ai_thread_func(gpointer data) {
     char *raw_json = NULL;
 
     // Route to correct provider
-    if (td->app->provider && strcasecmp(td->app->provider, "gemini") == 0) {
+    if (td->app->provider_config.kind == PROVIDER_KIND_GEMINI_GENERATE) {
         raw_json = perform_gemini_request(td->app, td->prompt);
     } else {
         // Assuming OpenAI also returns raw JSON or needs similar wrapping
-        raw_json = send_to_openai(td->app->api_key, td->prompt);
+        raw_json = send_to_openai(td->app, td->prompt);
     }
 
     char *final_text = NULL;
@@ -151,7 +158,16 @@ char* send_to_gemini(AppContext *app, const char *prompt) {
     if (app->ratelimit_enabled) {
         ratelimit_wait_if_needed(&app->limiter);
     }
-    return perform_gemini_request(app, prompt);
+    if (app->ai_busy) {
+        DEBUG_PRINT("[DEBUG] SEND_TO_GEMINI: ai_busy flag set not executing perform_gemini_request\n");
+        return NULL;
+    }
+    app->ai_busy = TRUE;
+    DEBUG_PRINT("[DEBUG] SEND_TO_GEMINI: set ai_busy flag TRUE\n");
+    char *data = g_strdup(perform_gemini_request(app, prompt));
+    app->ai_busy = FALSE;
+    DEBUG_PRINT("[DEBUG] SEND_TO_GEMINI: Cleared ai_busy flag, returning %ld bytes\n", sizeof(data));
+    return data;
 }
 
 
@@ -185,17 +201,17 @@ char* gemini_list_models(AppContext *app) {
         headers = curl_slist_append(headers, api_key_header);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-        DEBUG_PRINT("DEBUG: [Gemini Models] Fetching models from: %s\n", url);
+        DEBUG_PRINT("[DEBUG]: [Gemini Models] Fetching models from: %s\n", url);
         // snprintf(out, sizeof(out), "[Gemini Model List]\n");
 
         res = curl_easy_perform(curl);
 
         if (res != CURLE_OK) {
-            DEBUG_PRINT("DEBUG: [Gemini Models] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+            DEBUG_PRINT("[DEBUG]: [Gemini Models] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
             g_string_append_printf(model_output_str, "Error: Failed to fetch models from Gemini API: %s\n", curl_easy_strerror(res));
 	    //snprintf(out, sizeof(out), "curl list failed!\n");
         } else {
-            DEBUG_PRINT("DEBUG: [Gemini Models] Raw response: %s\n", chunk.memory);
+            DEBUG_PRINT("[DEBUG]: [Gemini Models] Raw response: %s\n", chunk.memory);
             root = json_tokener_parse(chunk.memory);
             if (root == NULL) {
                 g_string_append(model_output_str, "Error: Failed to parse Gemini API response (invalid JSON).\n");
@@ -256,41 +272,3 @@ char* gemini_list_models(AppContext *app) {
 }
 
 
-
-
-//    chunk.memory = malloc(1);
-//    chunk.size = 0;
-
-//    char *screen_text = NULL;
-//    if (VTE_IS_TERMINAL(app->terminal_view)) {
-//        VteTerminal *vte = VTE_TERMINAL(app->terminal_view);
-//        long row, col;
-//        vte_terminal_get_cursor_position(vte, &col, &row);
-//        long context_depth = 1000;
-//        long start_row = (row > context_depth) ? (row - context_depth) : 0;
-//        screen_text = vte_terminal_get_text_range(vte, start_row, 0, row, col, NULL, NULL, NULL);
-//    }
-
-//    struct json_object *root = json_object_new_object();
-//    struct json_object *contents = json_object_new_array();
-
-    // Inject history from MariaDB
-//    load_history_to_gemini(app, contents, prompt);
-
-//    struct json_object *content_obj = json_object_new_object();
-//    struct json_object *parts = json_object_new_array();
-//    struct json_object *part_text = json_object_new_object();
-
-//    char *full_prompt = g_strdup_printf(
-//        "CURRENT TERMINAL OUTPUT:\n%s\n\nUSER INSTRUCTION: %s",
-//        screen_text ? screen_text : "None", prompt);
-
-//    json_object_object_add(part_text, "text", json_object_new_string(full_prompt));
-//    json_object_array_add(parts, part_text);
-//    json_object_object_add(content_obj, "parts", parts);
-//    json_object_array_add(contents, content_obj);
-//    json_object_object_add(root, "contents", contents);
-//
-//    const char *post_data = json_object_to_json_string(root);
-//
-//    snprintf(url, sizeof(url),

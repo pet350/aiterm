@@ -31,3 +31,4 @@ gboolean update_gui_with_response(gpointer data);
 gboolean request_human_approval(AppContext *app, const char *input_text);
 
 #endif
+

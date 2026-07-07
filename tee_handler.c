@@ -13,6 +13,7 @@
 #include "openai.h"
 #include "utils.h"
 #include "session_manager.h"
+#include "noisefilter.h"
 
 // --- FORWARD DECLARATIONS (Private callbacks for 0.8.3) ---
 static gboolean update_tee_ui(gpointer data);
@@ -22,7 +23,7 @@ void tee_handler_init(AppContext *app) {
     if (!app) return;
     app->tee_accumulator = g_string_new("");
     g_mutex_init(&app->buffer_mutex);
-    DEBUG_PRINT("DEBUG: Tee Handler initialized.\n");
+    DEBUG_PRINT("[DEBUG]: Tee Handler initialized.\n");
 }
 
 // ATOMIC SNAPSHOT (The 0.8.2 fix):
@@ -33,13 +34,13 @@ char* tee_extract_for_ai(AppContext *app) {
     char *snapshot = NULL;
 
     g_mutex_lock(&app->buffer_mutex);
-    DEBUG_PRINT("[DEBUG] TEE_EXTRACT_FOR_AI: Locked buffer mutex\n");
+    DEBUG_PRINT("[DEBUG]: TEE_EXTRACT_FOR_AI: Locked buffer mutex\n");
     if (app->tee_accumulator->len > 5) {
         snapshot = g_strdup(app->tee_accumulator->str);
         g_string_assign(app->tee_accumulator, "");
     }
     g_mutex_unlock(&app->buffer_mutex);
-    DEBUG_PRINT("[DEBUG] TEE_EXTRACT_FOR_AI: Unlocked buffer mutex\n");
+    DEBUG_PRINT("[DEBUG]: TEE_EXTRACT_FOR_AI: Unlocked buffer mutex\n");
     return strip_blank_lines(snapshot);
 }
 
@@ -80,10 +81,10 @@ static gpointer tee_ai_thread_func(gpointer data) {
     );
 
     char *response = NULL;
-    if (app->provider && strcasecmp(app->provider, "gemini") == 0) {
+    if (app->provider_config.kind == PROVIDER_KIND_GEMINI_GENERATE) {
         response = send_to_gemini(app, final_prompt);
     } else {
-        response = send_to_openai(app->api_key, final_prompt);
+        response = send_to_openai(app, final_prompt);
     }
 
     if (response) {
@@ -137,24 +138,25 @@ static gboolean update_tee_ui(gpointer data) {
 void tee_handle_input(AppContext *app, const char *text) {
     if (!text || !app->tee_accumulator) return;
     char *clean_text = strip_blank_lines(text);
-    DEBUG_PRINT("[DEBUG] TEE_HANDLE_INPUT: Locked buffer mutex\n");
+    DEBUG_PRINT("[DEBUG]: TEE_HANDLE_INPUT: Locked buffer mutex\n");
     g_mutex_lock(&app->buffer_mutex);
     g_string_append(app->tee_accumulator, clean_text);
     g_mutex_unlock(&app->buffer_mutex);
-    DEBUG_PRINT("[DEBUG] TEE_HANDLE_INPUT: Unlocked buffer mutex\n");
+    DEBUG_PRINT("[DEBUG]: TEE_HANDLE_INPUT: Unlocked buffer mutex\n");
 }
 
 void tee_handle_output(AppContext *app, const char *text) {
     if (!text || !app->tee_accumulator) return;
     if (text[0] == '\n' && text[1] == '\0') return;
+    if (ignore_tee_line(app, text)) return;
 
     g_mutex_lock(&app->buffer_mutex);
-    DEBUG_PRINT("[DEBUG] TEE_HANDLE_OUTPUT: Locked buffer mutex\n");
+    DEBUG_PRINT("[DEBUG]: TEE_HANDLE_OUTPUT: Locked buffer mutex\n");
     // Delta Upgrade: If AI is already busy, ignore heavy stream chatter
     // to protect context integrity and memory.
     if (app->is_processing && app->tee_accumulator->len > 51200) {
         g_mutex_unlock(&app->buffer_mutex);
-	DEBUG_PRINT("[DEBUG] TEE_HANDLE_OUTPUT: Unlocked buffer mutex\n");
+	DEBUG_PRINT("[DEBUG]: TEE_HANDLE_OUTPUT: Unlocked buffer mutex\n");
         return;
     }
     char *clean_text = strip_blank_lines(text);
@@ -172,5 +174,5 @@ void tee_handle_output(AppContext *app, const char *text) {
     }
 
     g_mutex_unlock(&app->buffer_mutex);
-    DEBUG_PRINT("[DEBUG] TEE_HANDLE_OUTPUT: Unlocked buffer mutex\n");
+    DEBUG_PRINT("[DEBUG]: TEE_HANDLE_OUTPUT: Unlocked buffer mutex\n");
 }

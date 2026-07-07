@@ -1,10 +1,11 @@
 ## Part of aiterm
 ## Makefile
 CC = gcc
-CFLAGS = `pkg-config --cflags gtk+-3.0 vte-2.91 libcurl json-c mariadb` -Wall -Wno-deprecated-declarations
-LIBS = `pkg-config --libs gtk+-3.0 vte-2.91 mariadb` -ljson-c -lpthread -lcurl -lcrypto -luuid
+CFLAGS = $(shell pkg-config --cflags gtk+-3.0 glib-2.0 vte-2.91 libcurl json-c libmariadb) -Wall -Wno-deprecated-declarations
 
-OBJ = main.o gui.o config.o terminal.o openai.o gemini.o status.o noisefilter.o commands.o update.o help.o menu.o utils.o tee_handler.o crypto.o session_manager.o session_manager_gui.o toggles.o resources.o policy_dao.o ratelimit.o
+LIBS = $(shell pkg-config --libs gtk+-3.0 vte-2.91 libmariadb) -ljson-c -lpthread -lcurl -lcrypto -luuid
+
+OBJ = main.o gui.o terminal.o openai.o gemini.o commands.o update.o help.o menu.o utils.o tee_handler.o crypto.o session_manager.o resources.o policy_dao.o ratelimit.o
 TARGET = aiterm
 
 # 1. The DEFAULT target

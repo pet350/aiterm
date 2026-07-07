@@ -8,12 +8,43 @@
 #ifndef MENU_H
 #define MENU_H
 
+#include <stdio.h>
 #include <gtk/gtk.h>
+#include <string.h>
+#include <stdlib.h>
 #include "gui.h"
+#include "menu.h"
+#include "commands.h"
 
-// Creates and returns the menu bar widget
+// Callback data container to map menu actions to command strings safely
+typedef struct {
+    AppContext *app;
+    char *cmd_base;
+    gboolean requires_arg;
+} MenuCommandData;
+
+// Function Prototypes
 GtkWidget* create_menu_bar(AppContext *app);
 
+char* prompt_for_argument(GtkWindow *parent, char *action_title, char *placeholder);
+void free_menu_data(gpointer data, GClosure *closure);
+void on_clear(GtkWidget *widget, gpointer data);
+void on_menu_exit(GtkWidget *widget, gpointer data);
+void on_help(GtkWidget *widget, gpointer data);
+void on_about(GtkWidget *widget, gpointer data);
+void on_copy(GtkWidget *widget, gpointer data);
+void on_paste(GtkWidget *widget, gpointer data);
+void on_tee_toggle(GtkWidget *widget, gpointer data);
+void on_autoreply_toggle(GtkWidget *widget, gpointer data);
+void on_tee_toggle(GtkWidget *widget, gpointer data);
+void on_autoreply_toggle(GtkWidget *widget, gpointer data);
+void on_menu_command_clicked(GtkMenuItem *menuitem, gpointer user_data);
+void on_transparency_changed(GtkRange *range, gpointer data);
+void on_ai_transparency_changed(GtkRange *range, gpointer data);
+void on_terminal_font_set(GtkFontButton *btn, gpointer data);
+void on_ai_font_set(GtkFontButton *btn, gpointer data);
+void on_preferences(GtkWidget *widget, gpointer data);
+void on_tee_flush(GtkWidget *widget, gpointer data);
+void on_menu_session_manager(GtkMenuItem *item, gpointer data);
+
 #endif
-
-

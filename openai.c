@@ -15,14 +15,20 @@
 #include "gemini.h"  // <--- Ensure this exists and is included
 #include "utils.h"
 
-char* send_to_openai(const char *api_key, const char *prompt) {
+char* send_to_openai(AppContext *app, const char *prompt) {
+    if (!app || !prompt) return NULL;
+
+    ProviderConfig *provider = &app->provider_config;
     CURL *curl_handle;
-    CURLcode res; // Added for 0.7.5-delta error tracking
-    struct MemoryStruct chunk = { malloc(1), 0 }; // Now compiler knows what this is
-    const char *url = "https://api.openai.com/v1/chat/completions";
+    CURLcode res;
+    struct MemoryStruct chunk = { malloc(1), 0 };
+
+    const char *base_url = provider->base_url ? provider->base_url : "https://api.openai.com/v1";
+    const char *endpoint = provider->endpoint ? provider->endpoint : "chat/completions";
+    char *url = g_strdup_printf("%s/%s", base_url, endpoint);
 
     struct json_object *root = json_object_new_object();
-    json_object_object_add(root, "model", json_object_new_string("gpt-4o-mini"));
+    json_object_object_add(root, "model", json_object_new_string(provider->model ? provider->model : OPENAI_MODEL));
 
     struct json_object *messages_array = json_object_new_array();
 
@@ -33,7 +39,7 @@ char* send_to_openai(const char *api_key, const char *prompt) {
     json_object_array_add(messages_array, sys_msg);
 
     // History
-    load_history_to_api(messages_array); 
+    load_history_to_api(messages_array);
 
     // Current user prompt
     struct json_object *user_msg = json_object_new_object();
@@ -47,30 +53,38 @@ char* send_to_openai(const char *api_key, const char *prompt) {
     curl_handle = curl_easy_init();
     if(curl_handle) {
         struct curl_slist *headers = NULL;
-        char auth_header[512];
-        snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", api_key);
         headers = curl_slist_append(headers, "Content-Type: application/json");
-        headers = curl_slist_append(headers, auth_header);
+
+        if (provider->api_key && provider->auth_header) {
+            char auth_header[1024];
+            if (provider->auth_scheme && strlen(provider->auth_scheme) > 0) {
+                snprintf(auth_header, sizeof(auth_header), "%s: %s %s",
+                         provider->auth_header, provider->auth_scheme, provider->api_key);
+            } else {
+                snprintf(auth_header, sizeof(auth_header), "%s: %s",
+                         provider->auth_header, provider->api_key);
+            }
+            headers = curl_slist_append(headers, auth_header);
+        }
 
         curl_easy_setopt(curl_handle, CURLOPT_URL, url);
         curl_easy_setopt(curl_handle, CURLOPT_POSTFIELDS, payload);
         curl_easy_setopt(curl_handle, CURLOPT_HTTPHEADER, headers);
         curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
         curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
-
-        // --- 0.7.5-DELTA FAIL-SAFE BOUNDARIES ---
-        curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10L); // Max 10 seconds to connect
-        curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 30L);        // Max 30 seconds for entire transfer
+        curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10L);
+        curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 30L);
 
         res = curl_easy_perform(curl_handle);
         if (res != CURLE_OK) {
-            DEBUG_PRINT("CURL OpenAI Error: %s\n", curl_easy_strerror(res));
+            DEBUG_PRINT("[DEBUG]: CURL OpenAI Error: %s\n", curl_easy_strerror(res));
         }
 
         curl_easy_cleanup(curl_handle);
         curl_slist_free_all(headers);
     }
 
+    g_free(url);
     json_object_put(root);
-    return chunk.memory; // Fixes "control reaches end of non-void function"
+    return chunk.memory;
 }

@@ -1,5 +1,5 @@
-// crypto.h
 // Part of project: aiterm
+// crypto.h
 // C Program header file for crypto functions
 // By: Peter Talbott
 // With assistance from Gemini and OpenAI
@@ -16,3 +16,4 @@ char* hex_to_decrypt(const char *hex_encrypted, const char *master_key);
 char* crypt_to_hex(const char *plaintext, const char *master_key);
 
 #endif
+
