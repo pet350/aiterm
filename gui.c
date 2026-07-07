@@ -73,27 +73,45 @@ void apply_block_cursor_to_input(GtkWidget *entry) {
     g_object_unref(provider);
 }
 
-/*
- * 0.8.3 FIX: Enhanced CSS for GtkNotebook (Tab Bar)
- * Targets internal node names (header, stack, tab) to override
- * default white themes when running as root/Adwaita-light.
- */
+
+// 0.8.3 FIX: Enhanced CSS for GtkNotebook (Tab Bar)
+// Targets internal node names (header, stack, tab) to override
+// default white themes when running as root/Adwaita-light.
+// Revised 0.9.0
 void apply_custom_theme() {
     GtkCssProvider *provider = gtk_css_provider_new();
     const char *css =
+        /* 1. Main UI layout elements remain transparent for your AI pane */
         "window, box, grid { background-color: transparent; }"
         "menubar, menu, menuitem { background-color: #000000; color: #ffffff; }"
 
-        /* The main Notebook container */
+        /* 2. SPECIFICALLY TARGET THE SESSION DIALOG BY CLASS */
+        ".session-dialog, .session-dialog box, .session-dialog grid { background-color: #141414; color: #ffffff; }"
+        ".session-dialog action-area { background-color: #1a1a1a; }"
+
+        /* 3. Buttons inside the session manager dialog */
+        ".session-dialog button { background-color: #222222; border: 1px solid #444444; padding: 4px 8px; }"
+
+        /* Orange/Amber text by default (Change to #ff3b30 if you want pure Red) */
+        ".session-dialog button label { color: #ff9f0a; }"
+
+        /* Hover states - Turns green */
+        ".session-dialog button:hover { background-color: #333333; border-color: #00FF00; }"
+        ".session-dialog button:hover label { color: #00FF00; }"
+
+        /* Active/Clicked state - Stays green but goes bold */
+        ".session-dialog button:active { background-color: #000000; }"
+        ".session-dialog button:active label { color: #00FF00; font-weight: bold; }"
+
+        /* 4. Lists and Trees inside the session manager dialog */
+        ".session-dialog treeview, .session-dialog list { background-color: #1a1a1a; color: #ffffff; }"
+        ".session-dialog treeview:selected, .session-dialog list row:selected { background-color: #00FF00; color: #000000; font-weight: bold; }"
+
+        /* 5. Main Notebook container and tabs */
         "notebook { background-color: rgba(20, 20, 20, 0.6); border: none; }"
-
-        /* The header (the actual bar where tabs sit) */
         "notebook header { background-color: rgba(30, 30, 30, 0.8); border-bottom: 1px solid #333333; padding: 2px; }"
-
-        /* The content area underneath the tabs */
         "notebook stack { background-color: transparent; }"
 
-        /* The individual tabs */
         "notebook header tabs tab { "
         "  background-color: rgba(45, 45, 45, 0.5); "
         "  color: #aaaaaa; "
@@ -102,7 +120,6 @@ void apply_custom_theme() {
         "  margin: 0 2px; "
         "}"
 
-        /* The active selected tab */
         "notebook header tabs tab:checked { "
         "  background-color: #000000; "
         "  color: #00FF00; "
@@ -110,17 +127,9 @@ void apply_custom_theme() {
         "  border-bottom: 2px solid #00FF00; "
         "}"
 
-        "textview { "
-        "  background-color: transparent; "
-        "  color: #dcdcdc; "
-        "  font-family: monospace; "
-        "  font-size: 10pt; "
-        "}"
-        "entry { "
-        "  background-color: #1a1a1a; "
-        "  color: #ffffff; "
-        "  border: 1px solid #333333; "
-        "}"
+        /* 6. Text inputs and global typography fallback */
+        "textview { background-color: transparent; color: #dcdcdc; font-family: monospace; font-size: 10pt; }"
+        "entry { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333333; }"
         "label { color: #aaaaaa; }";
 
     gtk_css_provider_load_from_data(provider, css, -1, NULL);
@@ -139,13 +148,13 @@ static gboolean on_window_key_press(GtkWidget *widget, GdkEventKey *event, gpoin
     if ((event->state & GDK_CONTROL_MASK) && event->keyval == GDK_KEY_Tab) {
         if (gtk_widget_has_focus(app->entry)) {
             if (app->terminal_view) gtk_widget_grab_focus(app->terminal_view);
-            DEBUG_PRINT("Focus: Active Terminal Tab\n");
+            DEBUG_PRINT("[DEBUG]: Focus: Active Terminal Tab\n");
         } else if (app->terminal_view && gtk_widget_has_focus(app->terminal_view)) {
             gtk_widget_grab_focus(app->gemini_view);
-            DEBUG_PRINT("Focus: AI View\n");
+            DEBUG_PRINT("[DEBUG]: Focus: AI View\n");
         } else {
             gtk_widget_grab_focus(app->entry);
-            DEBUG_PRINT("Focus: Input\n");
+            DEBUG_PRINT("[DEBUG]: Focus: Input\n");
         }
         return TRUE;
     }
@@ -163,7 +172,7 @@ static void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_nu
 
     if (VTE_IS_TERMINAL(terminal)) {
         app->terminal_view = terminal;
-        DEBUG_PRINT("0.8.3: Focused tab shifted to Page #%d (Widget: %p)\n", page_num, (void*)terminal);
+        DEBUG_PRINT("[DEBUG]: 0.8.3: Focused tab shifted to Page #%d (Widget: %p)\n", page_num, (void*)terminal);
 
         // Push current fonts and transparency settings dynamically down to the new pane
         apply_visual_settings(app);
@@ -251,11 +260,28 @@ void set_icon(AppContext *app) {
     if (icon) {
         gtk_window_set_icon(GTK_WINDOW(app->window), icon);
         g_object_unref(icon);
-        DEBUG_PRINT("Embedded icon loaded from GResource successfully.\n");
+        DEBUG_PRINT("[DEBUG]: Embedded icon loaded from GResource successfully.\n");
     } else {
         g_warning("Could not load embedded icon: %s", icon_error->message);
         if (icon_error) g_error_free(icon_error);
     }
+}
+
+gboolean scroll_to_bottom_idle(gpointer data) {
+    AppContext *app = (AppContext *)data;
+    GtkWidget *parent = gtk_widget_get_parent(app->gemini_view);
+
+    if (GTK_IS_SCROLLED_WINDOW(parent)) {
+        GtkAdjustment *adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(parent));
+        gtk_adjustment_set_value(adj, gtk_adjustment_get_upper(adj));
+    }
+    return FALSE; // Remove the idle source
+}
+
+// The listener for the buffer changed signal
+void on_buffer_changed_scroll(GtkTextBuffer *buffer, gpointer data) {
+    // We defer the scroll slightly to ensure the TextView has updated its layout
+    g_idle_add(scroll_to_bottom_idle, data);
 }
 
 void setup_gui(AppContext *app) {
@@ -305,6 +331,8 @@ void setup_gui(AppContext *app) {
     GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gemini_view));
     setup_tags(buffer);
 
+    g_signal_connect(buffer, "changed", G_CALLBACK(on_buffer_changed_scroll), app);
+
     gtk_text_view_set_editable(GTK_TEXT_VIEW(app->gemini_view), FALSE);
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(app->gemini_view), GTK_WRAP_WORD);
     gtk_container_add(GTK_CONTAINER(gem_scroll), app->gemini_view);
@@ -353,10 +381,24 @@ void setup_gui(AppContext *app) {
 }
 
 
+gboolean scroll_ai_pane_to_bottom(AppContext *app) {
+    if (!app || !app->gemini_view) return FALSE;
+
+    GtkWidget *parent = gtk_widget_get_parent(app->gemini_view);
+    if (GTK_IS_SCROLLED_WINDOW(parent)) {
+        GtkAdjustment *adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(parent));
+        gdouble upper = gtk_adjustment_get_upper(adj);
+        gdouble page_size = gtk_adjustment_get_page_size(adj);
+        
+        // Scroll to the end position
+        gtk_adjustment_set_value(adj, upper - page_size);
+    }
+    return FALSE; // Essential for g_idle_add
+}
+
 void append_ai_text(AppContext *app, const char *text, const char *tag_name) {
     GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gemini_view));
     GtkTextIter end;
-
     gtk_text_buffer_get_end_iter(buffer, &end);
 
     if (tag_name) {
@@ -365,21 +407,6 @@ void append_ai_text(AppContext *app, const char *text, const char *tag_name) {
         gtk_text_buffer_insert(buffer, &end, text, -1);
     }
 
-    GtkTextMark *mark = gtk_text_buffer_get_insert(buffer);
-    gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(app->gemini_view), mark);
-}
-
-gboolean scroll_ai_pane_to_bottom(AppContext *app) {
-    // Get the parent of the gemini_view, which is the ScrolledWindow
-    GtkWidget *parent = gtk_widget_get_parent(app->gemini_view);
-
-    // Safety check
-    if (GTK_IS_SCROLLED_WINDOW(parent)) {
-        GtkAdjustment *adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(parent));
-        double upper = gtk_adjustment_get_upper(adj);
-        gtk_adjustment_set_value(adj, upper);
-    } else {
-        g_print("Error: gemini_view parent is not a ScrolledWindow!\n");
-    }
-    return FALSE; // Return FALSE so the idle source is removed and doesn't run again!
+    // Use g_idle_add to ensure the scroll happens AFTER the buffer update finishes
+    g_idle_add((GSourceFunc)scroll_ai_pane_to_bottom, app);
 }

@@ -1,5 +1,5 @@
-// gemini.h
 // Part of project: aiterm
+// gemini.h
 // C Program header file for gemini  functions
 // By: Peter Talbott
 // With assistance from Gemini and OpenAI
@@ -10,7 +10,7 @@
 
 #include "gui.h"
 
-typedef struct AppContext AppContext;
+//typedef struct AppContext AppContext;
 
 // Function prototypes
 char* perform_gemini_request(AppContext *app, const char *prompt);

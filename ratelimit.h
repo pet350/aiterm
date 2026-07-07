@@ -1,3 +1,10 @@
+// Part of project: aiterm
+// ratelimit.h
+// C Program header file for rate limiting AI functions
+// By: Peter Talbott
+// With assistance from Gemini and OpenAI
+// April, May 2026
+
 #ifndef RATELIMIT_H
 #define RATELIMIT_H
 
@@ -16,3 +23,4 @@ bool ratelimit_check(RateLimiter *rl);
 void ratelimit_wait_if_needed(RateLimiter *rl);
 
 #endif
+

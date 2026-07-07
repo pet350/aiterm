@@ -148,13 +148,7 @@ gboolean update_gui_with_response(gpointer data) {
 // Local command handler
 static gboolean handle_local_command(const char *input, AppContext *app) {
     if (strcasecmp(input, "legacy help") == 0) {
-        write_to_ai_pane(app, "[ Help System ]\n", get_help_text(), "cmd_tag", "cmd_tag");
-    } else if (strcasecmp(input, "ratelimit on") == 0) {
-        app->ratelimit_enabled = 1;
-        write_to_ai_pane(app, "System: ", "Rate limiting enabled.", "cmd_tag", "body_tag");
-    } else if (strcasecmp(input, "ratelimit off") == 0) {
-        app->ratelimit_enabled = 0;
-        write_to_ai_pane(app, "System: ", "Rate limiting disabled.", "cmd_tag", "body_tag");
+        write_to_ai_pane(app, "[ Extended Help System ]\n", get_help_text(), "cmd_tag", "cmd_tag");
     } else if (g_str_has_prefix(input, "policy")) {
         char func[32] = {0};
         char args_buf[256] = {0};

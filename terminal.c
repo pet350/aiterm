@@ -120,7 +120,7 @@ static gboolean throttled_delta_check(gpointer user_data) {
  		// Create the XML Wrapper
 //    		char *xml_chunk = g_strdup_printf(
 //		        "<tee session_uuid=\"%s\" timestamp=\"%ld\">\n%s\n</tee>\n",
-//		        app->session_uuid, time(NULL), new_text);
+//		        app->session.session_uuid, time(NULL), new_text);
 
                 if (app->tee_enabled || app->autoreply_enabled) {
                     // APPEND the new text, don't assign/overwrite!

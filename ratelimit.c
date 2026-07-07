@@ -21,7 +21,7 @@ void ratelimit_init(RateLimiter *rl, int rpm) {
 
 bool ratelimit_check(RateLimiter *rl) {
     pthread_mutex_lock(&rl->lock);
-    DEBUG_PRINT("[DEBUG] RATELIMIT_CHECK: Locked mutex");
+    DEBUG_PRINT("[DEBUG]: RATELIMIT_CHECK: Locked mutex");
     gint64 now = g_get_monotonic_time(); // Microseconds, monotonic
     gint64 interval = (60 * 1000000) / rl->requests_per_minute;
 
@@ -31,7 +31,7 @@ bool ratelimit_check(RateLimiter *rl) {
     }
     rl->last_request_time = now;
     pthread_mutex_unlock(&rl->lock);
-    DEBUG_PRINT("[DEBUG] RATELIMIT_CHECK: Unlocked mutex");
+    DEBUG_PRINT("[DEBUG]: RATELIMIT_CHECK: Unlocked mutex");
     return true;
 }
 

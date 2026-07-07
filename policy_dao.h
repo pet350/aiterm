@@ -1,3 +1,11 @@
+// Part of project: aiterm
+// policy_dao.h
+// C Program header file for policy management
+// By: Peter Talbott
+// With assistance from Gemini and OpenAI
+// April, May 2026
+
+
 #ifndef POLICY_DAO_H
 #define POLICY_DAO_H
 
@@ -25,3 +33,4 @@ GList* get_all_policies(AppContext *app);
 void free_policy_record(PolicyRecord *p);
 
 #endif
+

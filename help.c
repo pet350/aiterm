@@ -96,15 +96,7 @@ const char* get_help_text() {
 
     const char *help_array[] = {
         "Core GUI Shell Commands", " ",
-        "help", "Show this console interactive menu",
-        "hw", "Show basic hardware specs",
-	"provider", "Shows selected provider (OpenAI/Gemini)",
-	"list models", "Shows available Gemini models",
-        "clear", "Clear the AI history layout view",
-        "status", "Display application operational toggles",
-        "history", "Display historical logs cached in MariaDB",
-	"save config", "Save settings to aiterm.conf",
-	"load config", "Load settings from aiterm.conf",
+        "legacy help", "Show this list of extended commands",
         "exit", "Close the application instance safely",
         "Keyboard Shortcuts:", " ",
         "Ctrl + Tab", "Cycle focus (Input -> Active Tab -> AI View)",

@@ -1,10 +1,10 @@
 // part of the aiterm project
-//  utils.h
-//  Header file for utilities used in aiterm
-//  By: Peter Talbott
-//  Assisted by: Gemini and OpenAI
-//  aiterm The terminal emulator with an AI Pane
-//  April 2026, MMay 2026, June 2026
+// utils.h
+// Header file for utilities used in aiterm
+// By: Peter Talbott
+// Assisted by: Gemini and OpenAI
+// aiterm The terminal emulator with an AI Pane
+// April 2026, MMay 2026, June 2026
 
 #ifndef UTILS_H
 #define UTILS_H
@@ -16,6 +16,9 @@
 // ANSI Codes for VTE coloring
 #define ANSI_CYAN  "\033[1;36m"
 #define ANSI_RESET "\033[0m"
+
+// Global Seesion UUID
+#define GLOBAL_SESSION_UUID "00000000-0000-0000-0000-000000000000"
 
 char* extract_ai_text(const char *json);
 
@@ -69,30 +72,29 @@ extern const char* AITERM_BUILDID;
 extern const char* CONFIG_FILE;
 size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp);
 
+char* get_uuid_filter(AppContext *app);
+char* build_delta_sync_query(AppContext *app);
+void init_provider_config(AppContext *app);
+void free_provider_config(ProviderConfig *provider);
 char* extract_ai_text(const char *json);
 char* strip_ansi(const char *input); // Helpful for goal #2
-char* strip_prompt(const char *input);
 char* read_file_to_string(const char *path);
 char* extract_cmd_name(const char *input);
 char* extract_ai_command(const char *text);
-char* copyString(const char *s);
 char* strip_blank_lines(const char *input_string);
 
 int init_remote_db(AppContext *app); // Add this line
 
+void initialize_booleans(AppContext *app);
 void* init_db_thread_worker(void *data);
 void append_to_view(GtkWidget *view, const char *prefix, const char *text);
 void* db_worker_thread(void *arg);
-void load_config(AppContext *app);
-void load_smart_history(AppContext *app, struct json_object *target_array, const char *current_prompt, int is_gemini);
 void load_history_to_gemini(AppContext *app, struct json_object *contents_array, const char *current_prompt);
 void load_history_to_api(struct json_object *messages_array);
-void save_config(AppContext *app);
 void save_to_history(const char *user_text, const char *ai_text);
 void save_tee_to_history(const char *terminal_output, const char *ai_analysis);
 void display_all_history(AppContext *app);
-void display_status(AppContext *app);
-void tee_handle7_output(AppContext *app, const char *text) ;
+void tee_handle_output(AppContext *app, const char *text) ;
 void tee_flush_timed(AppContext *app);
 void feed_terminal_header(VteTerminal *terminal, const char *msg);
 

@@ -5,6 +5,8 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <gtk/gtk.h>
+#include <pthread.h>
 #include <time.h>
 #include <getopt.h>
 #include <unistd.h>
@@ -19,9 +21,10 @@
 #include "gemini.h"
 #include "build_id.h"
 #include "session_manager.h"
+#include "config.h"
 
 // Current AITERM version
-const char* AITERM_VERSION	= "0.8.5-alpha";
+const char* AITERM_VERSION	= "0.9.2";
 const char* AITERM_BUILDID	= BUILD_ID;
 const char* AITERM_BUILD_TIME	= BUILD_TIME;
 const char* CONFIG_FILE		= "/etc/aiterm.conf";
@@ -38,19 +41,8 @@ int main(int argc, char *argv[]) {
     AppContext *app = g_malloc0(sizeof(AppContext));
     global_app = app;
 
-    // Set booleans to default to FALSE
-    app->autoreply_enabled = FALSE;
-    app->tee_enabled = FALSE;
-    app->auto_execute_enabled = FALSE;
-    app->debug_mode = FALSE;
-    app->is_processing = FALSE;
-    app->ratelimit_enabled = FALSE;
-
-    // 1. Generate the unique ID immediately
-    char session_buf[64];
-    snprintf(session_buf, sizeof(session_buf), "sess-%ld", (long)time(NULL));
-    app->session_uuid = strdup(session_buf);
-	app->sequence_id = 0; // NEW: Start counter at zero
+    // 1. Set initial variables to their needed defaults
+    initialize_booleans(app);
 
     char *env_key = getenv("AITERM_MASTER_KEY");
     if (env_key) {
@@ -77,7 +69,8 @@ int main(int argc, char *argv[]) {
         	memset(app->master_key, 0, len);
         	free(app->master_key);
     	    }
-	    g_free(app);
+	    free_provider_config(&app->provider_config);
+            g_free(app);
 	    exit(0);
        } else if  (strcmp(argv[i], "--provider") == 0) {
 	     load_config(app);
@@ -115,36 +108,33 @@ int main(int argc, char *argv[]) {
     }
 
     // 3. Initialize GTK
-    DEBUG_PRINT("DEBUG: [MAIN] Initializing GTK...\n");
+    DEBUG_PRINT("[DEBUG]: [MAIN] Initializing GTK...\n");
     gtk_init(&argc, &argv);
-	g_object_set(gtk_settings_get_default(),
-             "gtk-application-prefer-dark-theme", TRUE,
-             NULL);
+    g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme", TRUE, NULL);
 
     // 4 Initialize App Context and load config
-    DEBUG_PRINT("DEBUG: [MAIN] Invoking load_config...\n");
+    DEBUG_PRINT("[DEBUG]: [MAIN] Invoking load_config...\n");
     load_config(app);
-    DEBUG_PRINT("DEBUG: [MAIN] load_config sequence complete.\n");
+    DEBUG_PRINT("[DEBUG]: [MAIN] load_config sequence complete.\n");
 
     // 5) Provision the remote database on the XEN VM
     pthread_mutex_init(&app->db_mutex, NULL);
     pthread_t db_init_thread;
-    DEBUG_PRINT("DEBUG: [MAIN] Spawning asynchronous DB initialization thread...\n");
+    DEBUG_PRINT("[DEBUG]: [MAIN] Spawning asynchronous DB initialization thread...\n");
     if (pthread_create(&db_init_thread, NULL, init_db_thread_worker, app) == 0) {
         pthread_detach(db_init_thread); // Allow thread to clean itself up on exit
     } else {
         fprintf(stderr, "Error: Failed to spawn database initialization thread.\n");
     }
 
-    DEBUG_PRINT("DEBUG: [MAIN] Initializing Session Manager...\n");
+    DEBUG_PRINT("[DEBUG]: [MAIN] Initializing Session Manager...\n");
     session_init(app);
-    DEBUG_PRINT("DEBUG: [MAIN] Session Manager active.\n");
+    DEBUG_PRINT("[DEBUG]: [MAIN] Session Manager active.\n");
 
     // 6) INITIALIZE THE TEE HANDLER HERE
-    DEBUG_PRINT("DEBUG: [MAIN] Initializing Tee Handler...\n");
-    tee_handler_init(app); 
-    DEBUG_PRINT("DEBUG: [MAIN] Tee Handler active.\n");
-
+    DEBUG_PRINT("[DEBUG]: [MAIN] Initializing Tee Handler...\n");
+    tee_handler_init(app);
+    DEBUG_PRINT("[DEBUG]: [MAIN] Tee Handler active.\n");
 
     // 7) FALLBACK: Only check env vars if config key is still NULL
     if (!app->api_key || strlen(app->api_key) == 0) {
@@ -158,13 +148,18 @@ int main(int argc, char *argv[]) {
     if (!app->api_key) {
         fprintf(stderr, "Error: No API key found.\n");
     }
+    // inot AI Provider config
+    init_provider_config(app);
+
+    // init rate limiter
+    ratelimit_init(&app->limiter, app->limiter.requests_per_minute);
 
     // 8) Build the UI (from gui.c)
-    DEBUG_PRINT("DEBUG: [MAIN] Launching create_main_window GUI setup...\n");
+    DEBUG_PRINT("[DEBUG]: [MAIN] Launching create_main_window GUI setup...\n");
     setup_gui(app);
 
     // 9. Enter the GTK Main Event Loop
-    DEBUG_PRINT("DEBUG: [MAIN] Passing control to gtk_main loop.\n");
+    DEBUG_PRINT("[DEBUG]: [MAIN] Passing control to gtk_main loop.\n");
     gtk_main();
 
     // 10) Clean up
@@ -172,7 +167,7 @@ int main(int argc, char *argv[]) {
         mysql_close(app->global_db_conn);
     }
 
-    DEBUG_PRINT("DEBUG: [MAIN] Closing threaded database connection.\n");
+    DEBUG_PRINT("[DEBUG]: [MAIN] Closing threaded database connection.\n");
     pthread_mutex_destroy(&app->db_mutex);
 
 
@@ -182,8 +177,7 @@ int main(int argc, char *argv[]) {
         memset(app->master_key, 0, len);
         free(app->master_key);
     }
+    free_provider_config(&app->provider_config);
     g_free(app);
     return 0;
 }
-
-
