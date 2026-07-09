@@ -162,6 +162,7 @@ static gboolean on_window_key_press(GtkWidget *widget, GdkEventKey *event, gpoin
 }
 
 // NEW: Lifecycle tracking handler syncing app->terminal_view during tab adjustments
+// Updated 0.9.4
 static void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_num, gpointer data) {
     AppContext *app = (AppContext *)data;
 
@@ -172,7 +173,8 @@ static void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_nu
 
     if (VTE_IS_TERMINAL(terminal)) {
         app->terminal_view = terminal;
-        DEBUG_PRINT("[DEBUG]: 0.8.3: Focused tab shifted to Page #%d (Widget: %p)\n", page_num, (void*)terminal);
+        app->ui.vterm = terminal; // 0.9.4 addition
+        DEBUG_PRINT("[DEBUG]: TAB_CHANGED: Focused tab shifted to Page #%d (Widget: %p)\n", page_num, (void*)terminal);
 
         // Push current fonts and transparency settings dynamically down to the new pane
         apply_visual_settings(app);
@@ -289,6 +291,7 @@ void setup_gui(AppContext *app) {
 
     // 1. Create Window Base Framework
     app->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    app->ui.window = app->window;
     g_signal_connect_after(app->window, "key-press-event", G_CALLBACK(on_window_key_press), app);
     set_icon(app);
 

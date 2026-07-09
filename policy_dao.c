@@ -9,29 +9,31 @@
 /* EXISTING SYNCHRONOUS FUNCTIONS (Internal Workers)                          */
 /* Introduced in  0.8.4-alpha						      */
 /* ========================================================================== */
-
+// updated 0.9.3
 PolicyRecord* get_policy_for_command(AppContext *app, const char *cmd) {
     if (!app->global_db_conn) return NULL;
 
     mysql_thread_init();
 
-    // LOCK: Ensure exclusive access to the database connection
-    pthread_mutex_lock(&app->db_mutex);
-
     char query[512];
     snprintf(query, sizeof(query),
              "SELECT policy_type, risk_level FROM command_policy WHERE command_name = '%s'", cmd);
 
+    // Single lock before execution
     pthread_mutex_lock(&app->db_mutex);
     if (mysql_query(app->global_db_conn, query)) {
         pthread_mutex_unlock(&app->db_mutex);
+        mysql_thread_end();
         return NULL;
     }
 
     MYSQL_RES *res = mysql_store_result(app->global_db_conn);
     pthread_mutex_unlock(&app->db_mutex);
 
-    if (!res) return NULL;
+    if (!res) {
+        mysql_thread_end();
+        return NULL;
+    }
 
     MYSQL_ROW row = mysql_fetch_row(res);
     PolicyRecord *p = NULL;
@@ -43,7 +45,6 @@ PolicyRecord* get_policy_for_command(AppContext *app, const char *cmd) {
     }
 
     mysql_free_result(res);
-    pthread_mutex_unlock(&app->db_mutex);
     mysql_thread_end();
     return p;
 }

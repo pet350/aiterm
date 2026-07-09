@@ -11,9 +11,12 @@
 #include <stdbool.h>
 #include <time.h>
 #include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <gtk/gtk.h>
 
 typedef struct {
-    time_t last_request_time;
+    gint64 last_request_time;
     int requests_per_minute;
     pthread_mutex_t lock;
 } RateLimiter;

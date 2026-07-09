@@ -22,6 +22,9 @@
 #include "tee_handler.h"
 #include "toggles.h"
 #include "config.h"
+#include "history_manager_gui.h"
+#include "noise_filter_manager_gui.h"
+#include "policy_manager_gui.h"
 
 // Memory clean up helper for signal hooks
 void free_menu_data(gpointer data, GClosure *closure) {
@@ -67,6 +70,21 @@ char* prompt_for_argument(GtkWindow *parent, char *action_title, char *placehold
 }
 
 // --- Menu Callbacks ---
+
+void on_menu_history_manager_activate(GtkMenuItem *menuitem, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    open_history_manager_window(app);
+}
+
+void on_menu_noise_filter_manager_activate(GtkMenuItem *menuitem, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    open_noise_filter_manager_window(app);
+}
+
+void on_menu_policy_manager_activate(GtkMenuItem *menuitem, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    open_policy_manager_window(app);
+}
 
 void on_clear(GtkWidget *widget, gpointer data) {
     AppContext *app = (AppContext *)data;
@@ -135,7 +153,7 @@ void on_autoreply_toggle(GtkWidget *widget, gpointer data) {
 }
 
 
-// --- Visual Preferences Callbacks (RESTORED) ---
+// --- Visual Preferences Callbacks ---
 void on_transparency_changed(GtkRange *range, gpointer data) {
     AppContext *app = (AppContext *)data;
     app->transparency = gtk_range_get_value(range);
@@ -162,22 +180,18 @@ void on_ai_font_set(GtkFontButton *btn, gpointer data) {
     apply_visual_settings(app);
 }
 
-// Asynchronous handler for non-modal preferences actions
 static void on_preferences_response(GtkDialog *dialog, gint response_id, gpointer data) {
     AppContext *app = (AppContext *)data;
 
     if (response_id == GTK_RESPONSE_ACCEPT) {
         save_config(app);
     }
-
-    // Clean up the window context smoothly
     gtk_widget_destroy(GTK_WIDGET(dialog));
 }
 
 void on_preferences(GtkWidget *widget, gpointer data) {
     AppContext *app = (AppContext *)data;
 
-    // REMOVED the GTK_DIALOG_MODAL flag so it doesn't capture/freeze input focus
     GtkWidget *dialog = gtk_dialog_new_with_buttons("Preferences", 
                                                   GTK_WINDOW(app->window),
                                                   GTK_DIALOG_DESTROY_WITH_PARENT,
@@ -185,7 +199,6 @@ void on_preferences(GtkWidget *widget, gpointer data) {
                                                   "Close", GTK_RESPONSE_CLOSE, 
                                                   NULL);
 
-    // Apply the custom theme classes
     GtkStyleContext *dialog_context = gtk_widget_get_style_context(dialog);
     gtk_style_context_add_class(dialog_context, "session-dialog");
 
@@ -200,7 +213,6 @@ void on_preferences(GtkWidget *widget, gpointer data) {
     gtk_container_set_border_width(GTK_CONTAINER(vbox), 15);
     gtk_box_pack_start(GTK_BOX(content_area), vbox, TRUE, TRUE, 0);
 
-    // Add UI Control elements
     gtk_box_pack_start(GTK_BOX(vbox), gtk_label_new("Terminal Transparency:"), FALSE, FALSE, 0);
     GtkWidget *s1 = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.1, 1.0, 0.05);
     gtk_range_set_value(GTK_RANGE(s1), app->transparency);
@@ -223,13 +235,8 @@ void on_preferences(GtkWidget *widget, gpointer data) {
     gtk_box_pack_start(GTK_BOX(vbox), f2, FALSE, FALSE, 0);
     g_signal_connect(f2, "font-set", G_CALLBACK(on_ai_font_set), app);
 
-    // Connect the response signal to our async callback function above
     g_signal_connect(dialog, "response", G_CALLBACK(on_preferences_response), app);
-
-    // Render it immediately and hand control back to the main layout
     gtk_widget_show_all(dialog);
-
-    // DELETED the blocking gtk_dialog_run wrapper loop entirely!
 }
 
 void on_tee_flush(GtkWidget *widget, gpointer data) {
@@ -272,6 +279,70 @@ void append_ai_action(GtkWidget *menu, const char *label, const char *cmd, gbool
     g_signal_connect_data(item, "activate", G_CALLBACK(on_menu_command_clicked), data, (GClosureNotify)free_menu_data, 0);
 }
 
+
+void sync_toggle_ui_elements(AppContext *app) {
+    if (!app) return;
+
+
+    // Sync Autoreply Checkbox
+    if (app->ui.toggle_autoreply) {
+        g_signal_handlers_block_by_func(app->ui.toggle_autoreply, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_autoreply), app->autoreply_enabled);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_autoreply, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+    }
+
+    // Sync Autoexe Checkbox
+    if (app->ui.toggle_autoexe) {
+        g_signal_handlers_block_by_func(app->ui.toggle_autoexe, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_autoexe), app->auto_execute_enabled);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_autoexe, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+    }
+
+    // Sync Tee Checkbox
+    if (app->ui.toggle_tee) {
+        g_signal_handlers_block_by_func(app->ui.toggle_tee, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_tee), app->tee_enabled);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_tee, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+    }
+
+    // Sync Noise Filter Checkbox
+    if (app->ui.toggle_noise_filter) {
+        g_signal_handlers_block_by_func(app->ui.toggle_noise_filter, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_noise_filter), app->noise_filter_enabled);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_noise_filter, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+    }
+
+    // Sync Smart Cache Checkbox
+    if (app->ui.toggle_smart_cache) {
+        g_signal_handlers_block_by_func(app->ui.toggle_smart_cache, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_smart_cache), app->smart_cache_enabled);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_smart_cache, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+    }
+
+    // Sync ratelimit Checkbox
+    if (app->ui.toggle_ratelimit) {
+        g_signal_handlers_block_by_func(app->ui.toggle_ratelimit, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_ratelimit), app->ratelimit_enabled);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_ratelimit, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+    }
+
+    // Sync session_write_global Checkbox
+    if (app->ui.toggle_session_write_global) {
+        g_signal_handlers_block_by_func(app->ui.toggle_session_write_global, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_session_write_global), app->session.write_to_global);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_session_write_global, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+    }
+
+    // Sync session_read_global Checkbox
+    if (app->ui.toggle_session_read_global) {
+        g_signal_handlers_block_by_func(app->ui.toggle_session_read_global, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_session_read_global), app->session.read_from_global);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_session_read_global, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+    }
+
+}
+
+
 // --- Menu Builder ---
 
 GtkWidget* create_menu_bar(AppContext *app) {
@@ -284,9 +355,14 @@ GtkWidget* create_menu_bar(AppContext *app) {
     GtkWidget *edit_item = gtk_menu_item_new_with_label("Edit");
     GtkWidget *copy_item = gtk_menu_item_new_with_label("Copy Terminal");
     GtkWidget *paste_item = gtk_menu_item_new_with_label("Paste Terminal");
-    GtkWidget *session_menu = gtk_menu_new();
-    GtkWidget *session_item = gtk_menu_item_new_with_label("Session Manager");
-    GtkWidget *session_root = gtk_menu_item_new_with_label("Sessions");
+
+    GtkWidget *managers_menu = gtk_menu_new();
+    GtkWidget *managers_root = gtk_menu_item_new_with_label("Managers");
+    GtkWidget *session_item  = gtk_menu_item_new_with_label("Session Manager");
+    GtkWidget *menu_item_history = gtk_menu_item_new_with_label("History Manager");
+    GtkWidget *menu_item_noise   = gtk_menu_item_new_with_label("Noise Filter Manager");
+    GtkWidget *menu_item_policy  = gtk_menu_item_new_with_label("Policy Manager");
+
     GtkWidget *tools_menu = gtk_menu_new();
     GtkWidget *tools_item = gtk_menu_item_new_with_label("Tools");
     GtkWidget *ai_root_item = gtk_menu_item_new_with_label("AI Controls");
@@ -317,6 +393,7 @@ GtkWidget* create_menu_bar(AppContext *app) {
     append_ai_action(sys_menu, "Application Version", "version", FALSE, app);
     append_ai_action(sys_menu, "Clear AI Response Pane", "clear", FALSE, app);
     append_ai_action(sys_menu, "Force Reset AI Async States", "reset state", FALSE, app);
+    
     append_ai_action(cfg_menu, "Show Active Provider Info", "provider", FALSE, app);
     append_ai_action(cfg_menu, "Query Available Remote Models", "list models", FALSE, app);
     append_ai_action(cfg_menu, "Reload from Conf File", "load config", FALSE, app);
@@ -326,60 +403,48 @@ GtkWidget* create_menu_bar(AppContext *app) {
 
     GtkWidget *item;
 
-    // 1. Toggle All Intercepts On/Off
-    //item = gtk_check_menu_item_new_with_label("Toggle All Intercepts On/Off");
-    //setup_menu_toggle(item, app, TOGGLE_AUTO_ALL, app->config.auto_all); 
-    //gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
-    //gtk_widget_show(item);
-
-    // 2. Toggle Real-Time Prompt Analysis
+    // --- Toggles Submenu Population via setup_menu_toggle() ---
     item = gtk_check_menu_item_new_with_label("Toggle Real-Time Prompt Analysis");
     setup_menu_toggle(item, app, TOGGLE_AUTOREPLY, app->autoreply_enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 
-    // 3. Toggle AI Payload Auto-Execution
     item = gtk_check_menu_item_new_with_label("Toggle AI Payload Auto-Execution");
     setup_menu_toggle(item, app, TOGGLE_AUTOEXE, app->auto_execute_enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 
-    // 4. Toggle Immediate Terminal Capturing (Tee)
     item = gtk_check_menu_item_new_with_label("Toggle Immediate Terminal Capturing (Tee)");
     setup_menu_toggle(item, app, TOGGLE_TEE, app->tee_enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 
-    // 5. Toggle Mitigation Noise Filters
     item = gtk_check_menu_item_new_with_label("Toggle Mitigation Noise Filters");
     setup_menu_toggle(item, app, TOGGLE_NOISE_FILTER, app->noise_filter_enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 
-    // 6. Toggle Semantic Local Caching
     item = gtk_check_menu_item_new_with_label("Toggle Semantic Local Caching");
     setup_menu_toggle(item, app, TOGGLE_SMART_CACHE, app->smart_cache_enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 
-    // 7. Toggle Active Rate Limiting Protection
     item = gtk_check_menu_item_new_with_label("Toggle Active Rate Limiting Protection");
     setup_menu_toggle(item, app, TOGGLE_RATELIMIT, app->ratelimit_enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 
-    // 8. Toggle Active Rate Limiting Protection
     item = gtk_check_menu_item_new_with_label("Toggle read from global database");
     setup_menu_toggle(item, app, TOGGLE_SESSION_READ_GLOBAL, app->session.read_from_global);
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 
-    // 9. Toggle Active Rate Limiting Protection
     item = gtk_check_menu_item_new_with_label("Toggle write to global database");
     setup_menu_toggle(item, app, TOGGLE_SESSION_WRITE_GLOBAL, app->session.write_to_global);
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 
+    // AI Context command shortcuts
     append_ai_action(sess_menu, "Initialize New Session Iteration", "session new", FALSE, app);
     append_ai_action(sess_menu, "List Saved Persistent Contexts", "session list", FALSE, app);
     append_ai_action(sess_menu, "Inspect Active Working Environment Metadata", "session show", FALSE, app);
@@ -390,70 +455,64 @@ GtkWidget* create_menu_bar(AppContext *app) {
     append_ai_action(sess_menu, "Purge Historical Database Context Loop", "session delete", TRUE, app);
     append_ai_action(sess_menu, "Toggle Reading From Global Context (0000...)", "session read from global", FALSE, app);
     append_ai_action(sess_menu, "Toggle Writing Out into Global Broadcast Stream", "session write to global", FALSE, app);
+    
     append_ai_action(noise_menu, "List Active Cleaning Filters", "noise list", FALSE, app);
     append_ai_action(noise_menu, "Register New Suppression Rule (Regex)", "noise add", TRUE, app);
     append_ai_action(noise_menu, "Remove Suppression Rule (ID/Pattern)", "noise delete", TRUE, app);
 
-    // Store in struct
-    app->tee_menu_item = gtk_check_menu_item_new_with_label("Toggle Tee Mode");
-    app->autoreply_menu_item = gtk_check_menu_item_new_with_label("Toggle Autoreply Mode");
-
-    // Sync Checkboxes with App State
-    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->tee_menu_item), app->tee_enabled);
-    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->autoreply_menu_item), app->autoreply_enabled);
-
-    // Signals
+    // Signals Binding
+    g_signal_connect(G_OBJECT(menu_item_history), "activate", G_CALLBACK(on_menu_history_manager_activate), app);
+    g_signal_connect(G_OBJECT(menu_item_noise), "activate", G_CALLBACK(on_menu_noise_filter_manager_activate), app);
+    g_signal_connect(G_OBJECT(menu_item_policy), "activate", G_CALLBACK(on_menu_policy_manager_activate), app);
     g_signal_connect(clear_item, "activate", G_CALLBACK(on_clear), app);
     g_signal_connect(exit_item, "activate", G_CALLBACK(on_menu_exit), app);
     g_signal_connect(copy_item, "activate", G_CALLBACK(on_copy), app);
     g_signal_connect(paste_item, "activate", G_CALLBACK(on_paste), app);
-    g_signal_connect(app->tee_menu_item, "activate", G_CALLBACK(on_tee_toggle), app);
-    g_signal_connect(app->autoreply_menu_item, "activate", G_CALLBACK(on_autoreply_toggle), app);
     g_signal_connect(tee_flush, "activate", G_CALLBACK(on_tee_flush), app);
     g_signal_connect(pref_item, "activate", G_CALLBACK(on_preferences), app);
     g_signal_connect(help_btn, "activate", G_CALLBACK(on_help), app);
     g_signal_connect(about_btn, "activate", G_CALLBACK(on_about), app);
     g_signal_connect(session_item, "activate", G_CALLBACK(on_menu_session_manager), app);
 
-
-    // Menu Assembly: Menu_bar
+    // Menu Assembly: Main menu_bar mapping
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), file_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), edit_item);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), session_root);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), managers_root);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), tools_item);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), ai_root_item); // Moved here between Edit & Tools
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), ai_root_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), help_item);
 
-    // Menu Assembly: File_menu
+    // Menu Assembly: Submenus
     gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), clear_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), exit_item);
 
-    // Menu Assembly: edit_menu
     gtk_menu_shell_append(GTK_MENU_SHELL(edit_menu), copy_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(edit_menu), paste_item);
 
-    // Menu Assembly: Session_menu
-    gtk_menu_shell_append(GTK_MENU_SHELL(session_menu), session_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), session_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), menu_item_history);
+    gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), menu_item_noise);
+    gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), menu_item_policy);
 
-    // Menu Assembly: ai_main_menu
     gtk_menu_shell_append(GTK_MENU_SHELL(ai_main_menu), cfg_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(ai_main_menu), toggle_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(ai_main_menu), sess_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(ai_main_menu), sys_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(ai_main_menu), noise_item);
-    gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), app->tee_menu_item);
-    gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), app->autoreply_menu_item);
+
+    // Tools Submenu layout is now concise and uniform
     gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), tee_flush);
     gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), pref_item);
+
     gtk_menu_shell_append(GTK_MENU_SHELL(help_menu), help_btn);
     gtk_menu_shell_append(GTK_MENU_SHELL(help_menu), about_btn);
 
-
+    // Connect structural branches back up to headers
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(file_item), file_menu);
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(edit_item), edit_menu);
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(tools_item), tools_menu);
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(ai_root_item), ai_main_menu);
-    gtk_menu_item_set_submenu(GTK_MENU_ITEM(session_root), session_menu);
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(managers_root), managers_menu);
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(sys_item), sys_menu);
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(cfg_item), cfg_menu);
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(toggle_item), toggle_menu);
@@ -461,6 +520,7 @@ GtkWidget* create_menu_bar(AppContext *app) {
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(sess_item), sess_menu);
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(help_item), help_menu);
 
-
     return menu_bar;
 }
+
+
