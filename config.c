@@ -24,6 +24,7 @@
 #include "commands.h"
 #include "noisefilter.h"
 #include "config.h"
+#include "menu.h"
 
 static const char *CONFIG_FILE_VERSION="1.2";
 // Function to save config file
@@ -196,4 +197,5 @@ void load_config(AppContext *app) {
 
     }
     fclose(fp);
+    sync_toggle_ui_elements(app);
 }

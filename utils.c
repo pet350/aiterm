@@ -102,7 +102,9 @@ void init_provider_config(AppContext *app) {
     if (env_auth_header && *env_auth_header) provider_replace_string(&provider->auth_header, env_auth_header);
     if (env_auth_scheme) provider_replace_string(&provider->auth_scheme, *env_auth_scheme ? env_auth_scheme : NULL);
     if (env_query_key && *env_query_key) provider_replace_string(&provider->query_key_name, env_query_key);
+    DEBUG_PRINT("[DEBUG]: [Provider_Init]: Base URL: %s\n", provider->base_url);
 }
+
 // This is the actual definition where the memory is allocated
 HistoryEntry history[5];
 int history_count = 0;
@@ -167,7 +169,7 @@ void display_all_history(AppContext *app) {
 
     // LOCK: Ensure only one thread uses the database pipe at a time
     pthread_mutex_lock(&global_app->db_mutex);
-    DEBUG_PRINT("[DEBUG] DISPLAY_ALL_HISTORY: Locked DB Mutex\n");
+    DEBUG_PRINT("[DEBUG]: DISPLAY_ALL_HISTORY: Locked DB Mutex\n");
     if (!app->global_db_conn) {
         write_to_ai_pane(app, "System: ", "Database connection is not active.", "cmd_tag", "cmd_tag");
         goto cleanup;
@@ -184,7 +186,7 @@ void display_all_history(AppContext *app) {
         write_to_ai_pane(app, "System: ", "Error fetching history from database.", "cmd_tag", "cmd_tag");
         goto cleanup;
     }
-    DEBUG_PRINT("[DEBUG] DISPLAY_ALL_HISTORY: Query %s\n", query);
+    DEBUG_PRINT("[DEBUG]: DISPLAY_ALL_HISTORY: Query %s\n", query);
     res = mysql_store_result(app->global_db_conn);
     if (!res) goto cleanup;
 
@@ -215,7 +217,7 @@ void display_all_history(AppContext *app) {
     }
 
     pthread_mutex_unlock(&global_app->db_mutex);
-    DEBUG_PRINT("[DEBUG] DISPLAY_ALL_HISTORY: Unlocked DB Mutex\n");
+    DEBUG_PRINT("[DEBUG]: DISPLAY_ALL_HISTORY: Unlocked DB Mutex\n");
     mysql_thread_end();
     return;
 }
@@ -226,7 +228,7 @@ void display_all_history(AppContext *app) {
 void* db_worker_thread(void *arg) {
     mysql_thread_init();
     DBWorkerData *data = (DBWorkerData *)arg;
-    if (!data) { DEBUG_PRINT("[DEBUG] [WORKER] Received NULL data pointer!\n"); return NULL; }
+    if (!data) { DEBUG_PRINT("[DEBUG]: [WORKER] Received NULL data pointer!\n"); return NULL; }
     extern AppContext *global_app;
 
     if (!global_app->global_db_conn) goto cleanup;
@@ -238,8 +240,8 @@ void* db_worker_thread(void *arg) {
 
     // LOCK: Ensure only one thread uses the database pipe at a time
     pthread_mutex_lock(&global_app->db_mutex);
-    DEBUG_PRINT("[DEBUG] [WORKER] Locked DB Mutex\n");
-    DEBUG_PRINT("[DEBUG] [WORKER] Starting job for seq %d, is_tee=%d\n", data->sequence_id, data->is_tee);
+    DEBUG_PRINT("[DEBUG]: [WORKER] Locked DB Mutex\n");
+    DEBUG_PRINT("[DEBUG]: [WORKER] Starting job for seq %d, is_tee=%d\n", data->sequence_id, data->is_tee);
     if (data->is_tee) {
         char *esc_out = malloc(strlen(data->terminal_output) * 2 + 1);
         char *esc_ai = malloc(strlen(data->ai_analysis) * 2 + 1);
@@ -278,14 +280,14 @@ void* db_worker_thread(void *arg) {
     }
     // UNLOCK: Let the next thread in
     pthread_mutex_unlock(&global_app->db_mutex);
-    DEBUG_PRINT("[DEBUG] [WORKER] Unlocked DB Mutex]n\n");
+    DEBUG_PRINT("[DEBUG]: [WORKER] Unlocked DB Mutex]n\n");
     cleanup:
     if (data->terminal_output) free(data->terminal_output);
     if (data->ai_analysis) free(data->ai_analysis);
     if (data->user_text) free(data->user_text);
     if (data->ai_text) free(data->ai_text);
     if (data->session_uuid) free(data->session_uuid);
-    DEBUG_PRINT("[DEBUG] [WORKER] Job completed and memory freed for seq %d\n", data->sequence_id);
+    DEBUG_PRINT("[DEBUG]: [WORKER] Job completed and memory freed for seq %d\n", data->sequence_id);
     free(data);
     mysql_thread_end();
     return NULL;
@@ -429,7 +431,7 @@ void load_history_to_gemini(AppContext *app, struct json_object *contents_array,
     int count=0;
     mysql_thread_init();
     pthread_mutex_lock(&app->db_mutex);
-    DEBUG_PRINT("[DEBUG] LOAD_HISTORY_TO_GEMINI: Locked DB Mutex\n");
+    DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_GEMINI: Locked DB Mutex\n");
     char *uuid_filter = get_uuid_filter(global_app);
     const char *query = g_strdup_printf(
         "SELECT role, content FROM ("
@@ -438,7 +440,7 @@ void load_history_to_gemini(AppContext *app, struct json_object *contents_array,
         "  ORDER BY sequence_id DESC LIMIT 100"
         ") AS sub ORDER BY created_at ASC", uuid_filter, app->session.last_sent_db_id);
 
-    DEBUG_PRINT("[DEBUG] LOAD_HISTORY_TO_GEMINI: Query %s\n", query);
+    DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_GEMINI: Query %s\n", query);
     if (mysql_query(app->global_db_conn, query) == 0) {
         MYSQL_RES *res = mysql_store_result(app->global_db_conn);
         MYSQL_ROW row;
@@ -465,9 +467,9 @@ void load_history_to_gemini(AppContext *app, struct json_object *contents_array,
         }
         mysql_free_result(res);
     }
-    DEBUG_PRINT("[DEBUG] LOAD_HISTORY_TO_GEMINI: Sent %d rows to AI\n", count);
+    DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_GEMINI: Sent %d rows to AI\n", count);
     pthread_mutex_unlock(&app->db_mutex);
-    DEBUG_PRINT("[DEBUG] LOAD_HISTORY_TO_GEMINI: Unlocked DB Mutex\n");
+    DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_GEMINI: Unlocked DB Mutex\n");
     mysql_thread_end();
 }
 
@@ -611,7 +613,7 @@ void save_tee_to_history(const char *terminal_output, const char *ai_analysis) {
     extern AppContext *global_app;
 
     if (!terminal_output || !ai_analysis || !global_app->session.session_uuid) {
-       DEBUG_PRINT("[DEBUG] [TEE_SAVE] WARNING: Invalid inputs detected. Aborting.\n");
+       DEBUG_PRINT("[DEBUG]: [TEE_SAVE] WARNING: Invalid inputs detected. Aborting.\n");
        return;
     }
 
@@ -621,12 +623,12 @@ void save_tee_to_history(const char *terminal_output, const char *ai_analysis) {
     // Apply strip_blank_lines to clean the text before saving
     char *cleaned_terminal_output = strip_blank_lines(terminal_output);
     char *cleaned_ai_analysis = strip_blank_lines(ai_analysis);
-    DEBUG_PRINT("[DEBUG] [TEE_SAVE] Data cleaned. Allocating DBWorkerData.\n");
+    DEBUG_PRINT("[DEBUG]: [TEE_SAVE] Data cleaned. Allocating DBWorkerData.\n");
 
     // 1. Pack the data
     DBWorkerData *data = malloc(sizeof(DBWorkerData));
     if (!data) {
-        DEBUG_PRINT("[DEBUG] [TEE_SAVE] FATAL: Malloc failed for DBWorkerData\n");
+        DEBUG_PRINT("[DEBUG]: [TEE_SAVE] FATAL: Malloc failed for DBWorkerData\n");
         return;
     }
 
@@ -640,10 +642,10 @@ void save_tee_to_history(const char *terminal_output, const char *ai_analysis) {
     data->ai_text = NULL;
 
     // 3. Launch the worker thread
-    DEBUG_PRINT("[DEBUG] [TEE_SAVE] Launching thread for sequence_id: %d\n", data->sequence_id);
+    DEBUG_PRINT("[DEBUG]: [TEE_SAVE] Launching thread for sequence_id: %d\n", data->sequence_id);
     pthread_t thread_id;
     if (pthread_create(&thread_id, NULL, db_worker_thread, data) != 0) {
-        DEBUG_PRINT("[DEBUG] [TEE_SAVE] FATAL: pthread_create failed!\n");
+        DEBUG_PRINT("[DEBUG]: [TEE_SAVE] FATAL: pthread_create failed!\n");
         // Don't leak memory if thread creation fails
         g_free(cleaned_terminal_output);
         g_free(cleaned_ai_analysis);
@@ -673,7 +675,7 @@ void load_history_to_api(struct json_object *messages_array) {
         "  ORDER BY sequence_id DESC LIMIT 100"
         ") AS sub ORDER BY created_at ASC", uuid_filter, global_app->session.last_sent_db_id);
 
-    DEBUG_PRINT("[DEBUG] LOAD_HISTORY_TO_GEMINI: Query %s\n", query);
+    DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_GEMINI: Query %s\n", query);
 
     if (mysql_query(global_app->global_db_conn, query) == 0) {
         MYSQL_RES *res = mysql_store_result(global_app->global_db_conn);
@@ -744,59 +746,6 @@ char* extract_ai_command(const char *text) {
     return cmd;
 }
 
-
-// New abd improved! Now with less leaks!
-// brief Removes blank lines (empty or containing only whitespace) from a string.
-/* reverting back to the rock solid old function
-char* strip_blank_lines(const char *input_string) {
-    if (!input_string) {
-        return NULL;
-    }
-    if (input_string[0] == '\0') {
-        return strdup("");
-    }
-
-    DEBUG_PRINT("[DEBUG] [STRIP] Input length: %zu\n", strlen(input_string));
-
-    int trimmed_count = 0;
-    // Allocate space for the result (worst case is original length + 1)
-    char *result = malloc(strlen(input_string) + 1);
-    result[0] = '\0';
-
-    char *input_copy = strdup(input_string);
-    char *saveptr;
-    char *line = strtok_r(input_copy, "\n", &saveptr);
-
-    while (line != NULL) {
-        // Check if the line contains only whitespace
-        char *trimmed = strdup(line);
-        g_strstrip(trimmed);
-
-        if (trimmed[0] != '\0') {
-            // Append line and newline to result
-            strcat(result, line);
-            strcat(result, "\n");
-        } else {
-            trimmed_count++;
-        }
-
-        free(trimmed);
-        line = strtok_r(NULL, "\n", &saveptr);
-    }
-
-    free(input_copy);
-
-    // Remove trailing newline if it exists
-    size_t res_len = strlen(result);
-    if (res_len > 0 && result[res_len - 1] == '\n') {
-        result[res_len - 1] = '\0';
-    }
-
-    DEBUG_PRINT("[DEBUG]: Stripped %d blank lines\n", trimmed_count);
-    return result;
-}
-*/
-
 // brief Removes blank lines (empty or containing only whitespace) from a string.
 char* strip_blank_lines(const char *input_string) {
     if (!input_string) {
@@ -805,7 +754,7 @@ char* strip_blank_lines(const char *input_string) {
     if (input_string[0] == '\0') {
         return g_strdup("");
     }
-    DEBUG_PRINT("[DEBUG] [STRIP] Input length: %zu\n", strlen(input_string));
+    DEBUG_PRINT("[DEBUG]: [STRIP] Input length: %zu\n", strlen(input_string));
     int trimmed_count=0;
     GString *output_buffer = g_string_new("");
     char **lines = g_strsplit(input_string, "\n", -1);

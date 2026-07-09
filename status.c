@@ -27,7 +27,9 @@
 void display_status(AppContext *app) {
     // Lock the database mutex to ensure thread-safety during the status check
     mysql_thread_init();
+
     pthread_mutex_lock(&app->db_mutex);
+    DEBUG_PRINT("[DEBUG]: [STATUS] Locked DB Mutex.\n");
 
     gboolean is_connected = FALSE;
     int ping_res = -1;
@@ -46,7 +48,6 @@ void display_status(AppContext *app) {
         }
     }
 
-    pthread_mutex_unlock(&app->db_mutex);
     // 1. Build a single raw string containing the whole status report for the AI
     GString *status_report = g_string_new("--- SYSTEM STATUS ---\n");
 
@@ -85,6 +86,9 @@ void display_status(AppContext *app) {
 
     g_string_append_printf(status_report, "Session UUID:\t%s\n", app->session.session_uuid ? app->session.session_uuid : "N/A");
     g_string_append(status_report, "---------------------");
+
+    pthread_mutex_unlock(&app->db_mutex);
+    DEBUG_PRINT("[DEBUG]: [STATUS] Unlocked DB Mutex.\n");
 
     // 2. Display to the User in the AI Pane with granular coloring
     append_ai_text(app, "[ Local Status ]\n", "cmd_tag");
@@ -132,7 +136,7 @@ void display_status(AppContext *app) {
 
     // mysql ping rresults
     append_ai_text(app, "MYSQL Server:\t\t", "body_tag");
-    append_ai_text(app, mysql_ping_val ? "ALIVE" : "DEAD", mysql_ping_val ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, is_connected ? "ALIVE" : "DEAD", is_connected ? "ai_tag" : "cmd_tag");
     append_ai_text(app, "\n", "body_tag");
 
     // Database Row

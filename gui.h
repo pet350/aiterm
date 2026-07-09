@@ -72,6 +72,8 @@ typedef struct {
     GtkWidget *toggle_noise_filter;
     GtkWidget *toggle_smart_cache;
     GtkWidget *toggle_ratelimit;
+    GtkWidget *toggle_session_write_global;
+    GtkWidget *toggle_session_read_global;
 } UIComponents;
 
 // AppContext the backbone of this entire application used by almost all functions

@@ -15,6 +15,9 @@
 #include "gui.h"
 #include "menu.h"
 #include "commands.h"
+#include "history_manager_gui.h"
+#include "noise_filter_manager_gui.h"
+#include "policy_manager_gui.h"
 
 // Callback data container to map menu actions to command strings safely
 typedef struct {
@@ -27,6 +30,10 @@ typedef struct {
 GtkWidget* create_menu_bar(AppContext *app);
 
 char* prompt_for_argument(GtkWindow *parent, char *action_title, char *placeholder);
+
+void on_menu_history_manager_activate(GtkMenuItem *menuitem, gpointer user_data);
+void on_menu_noise_filter_manager_activate(GtkMenuItem *menuitem, gpointer user_data);
+void on_menu_policy_manager_activate(GtkMenuItem *menuitem, gpointer user_data);
 void free_menu_data(gpointer data, GClosure *closure);
 void on_clear(GtkWidget *widget, gpointer data);
 void on_menu_exit(GtkWidget *widget, gpointer data);
@@ -46,5 +53,6 @@ void on_ai_font_set(GtkFontButton *btn, gpointer data);
 void on_preferences(GtkWidget *widget, gpointer data);
 void on_tee_flush(GtkWidget *widget, gpointer data);
 void on_menu_session_manager(GtkMenuItem *item, gpointer data);
+void sync_toggle_ui_elements(AppContext *app);
 
 #endif

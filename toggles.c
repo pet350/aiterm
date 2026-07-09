@@ -88,6 +88,7 @@ void on_menu_item_toggled(GtkCheckMenuItem *menu_item, gpointer user_data)
 
     if (app) {
         toggle_function(app, toggle_type, menu_item, NULL);
+        sync_toggle_ui_elements(app);
     }
 }
 
@@ -99,6 +100,7 @@ void on_menu_toggle_item_toggled(GtkCheckMenuItem *menu_item, gpointer user_data
 
     if (app) {
         toggle_function(app, toggle_type, menu_item, NULL);
+        sync_toggle_ui_elements(app);
     }
 }
 
@@ -113,6 +115,39 @@ void setup_menu_toggle(GtkWidget *menu_item, AppContext *app, ToggleType type, g
     // Attach contextual state objects directly into the GTK widget structure
     g_object_set_data(G_OBJECT(menu_item), "app-context", app);
     g_object_set_data(G_OBJECT(menu_item), "toggle-type", GINT_TO_POINTER(type));
+
+    switch (type) {
+        case TOGGLE_RATELIMIT:
+            app->ui.toggle_ratelimit = menu_item;
+            break;
+        case TOGGLE_NOISE_FILTER:
+            app->ui.toggle_noise_filter = menu_item;
+            break;
+        case TOGGLE_SMART_CACHE:
+            app->ui.toggle_smart_cache = menu_item;
+            break;
+        case TOGGLE_AUTOREPLY:
+            app->ui.toggle_autoreply = menu_item;
+            break;
+        case TOGGLE_TEE:
+            app->ui.toggle_tee = menu_item;
+            break;
+        case TOGGLE_AUTOEXE:
+            app->ui.toggle_autoexe = menu_item;
+            break;
+        case TOGGLE_AUTO_ALL:
+            app->ui.toggle_auto_all = menu_item;
+            break;
+        case TOGGLE_SESSION_READ_GLOBAL:
+            app->ui.toggle_session_read_global = menu_item;
+            break;
+        case TOGGLE_SESSION_WRITE_GLOBAL:
+            app->ui.toggle_session_write_global = menu_item;
+            break;
+        default:
+            // Some toggles might not have explicit UI struct members, which is fine
+            break;
+    }
 
     // Connect the uniform signal handler
     g_signal_connect(menu_item, "toggled", G_CALLBACK(on_menu_toggle_item_toggled), NULL);

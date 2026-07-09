@@ -21,10 +21,14 @@
 #include "gemini.h"
 #include "session_manager.h"
 #include "session_manager_gui.h"
+#include "history_manager_gui.h"
+#include "policy_manager_gui.h"
+#include "noise_filter_manager_gui.h"
 #include "crypto.h"
 #include "noisefilter.h"
 #include "status.h"
 #include "config.h"
+#include "menu.h"
 
 static CommandRegistry registry[] = {
     {"auto all", "Toggle (on/off): Tee, AutoReply, & AutoExecute", cmd_toggle_auto_all},
@@ -34,6 +38,7 @@ static CommandRegistry registry[] = {
     {"extended help", "Display extended help message", handle_extended_help},
     {"features", "Display new aiterm features", handle_features_wrapper},
     {"help", "Display this dynamic help menu", handle_help_wrapper},
+    {"history manager", "Open History Manager window", cmd_history_manager_wrapper},
     {"history", "Display mysql history", handle_history_wrapper},
     {"hw", "Display various hardware info", handle_hw_wrapper},
     {"list models", "Display all models from current provider", handle_list_models_wrapper},
@@ -42,6 +47,7 @@ static CommandRegistry registry[] = {
     {"noise add", "Add a pattern to the noise filter list", cmd_noise_add},
     {"noise delete", "Remove a pattern from the noise filter (TBA)", cmd_noise_delete},
     {"noise list", "List all active noise filter patterns (TBA)", cmd_noise_list},
+    {"noise manager", "Opens Noise Filter Manager window", cmd_noisefilter_manager_wrapper},
     {"save config", "Saves configuration to aiterm.conf", handle_save_config_wrapper},
     {"session default", "Sets current or specified UUID as default", cmd_session_default},
     {"session delete", "Deletes a session from the database", cmd_session_delete},
@@ -55,6 +61,7 @@ static CommandRegistry registry[] = {
     {"session show", "shows the current session uuid and description", cmd_session_show},
     {"session write to global", "Toggle writing to global (on/off)", cmd_session_write_to_global_toggle},
     {"smart cache", "Smart Cache Toggle (on/off)", cmd_toggle_smart_cache},
+    {"policy manager", "Open Policy Manager window", cmd_policy_manager_wrapper},
     {"provider", "Display AI provider [OpenAI/Gemini]", handle_provider_wrapper},
     {"ratelimit", "Toggle Raate Limiting (on/off)", cmd_toggle_ratelimit},
     {"reset db", "Reset database connection", cmd_reset_db_connect},
@@ -379,25 +386,56 @@ void cmd_session_no_default(AppContext *app, const char *args) {
 }
 
 void cmd_session_manager_wrapper(AppContext *app, const char *args) {
+    DEBUG_PRINT("[DEBUG]: [Commands]: Opening Session Manager Window\n");
     open_session_manager_window(app);
+}
+
+void cmd_history_manager_wrapper(AppContext *app, const char *args) {
+    DEBUG_PRINT("[DEBUG]: [Commands]: Opening History Manager Window\n");
+    open_history_manager_window(app);
+}
+
+void cmd_noisefilter_manager_wrapper(AppContext *app, const char *args) {
+    DEBUG_PRINT("[DEBUG]: [Commands]: Opening Noise Filter Manager Window\n");
+    open_noise_filter_manager_window(app);
+}
+
+void cmd_policy_manager_wrapper(AppContext *app, const char *args) {
+    DEBUG_PRINT("[DEBUG]: [Commands]: Opening Policy Manager Window\n");
+    open_policy_manager_window(app);
 }
 
 void cmd_set_rpm(AppContext *app, const char *args) {
     const char *ptr = args;
 
-    if (ptr && *ptr == ' ') {
+    // 1. Skip any initial spaces after the command name (e.g., "/rpm 6" or "/rpm =6")
+    while (ptr && *ptr == ' ') {
         ptr++;
     }
 
-    if (!ptr || strlen(ptr) == 0) {
-        write_to_ai_pane_wrapper(app,": Required parameter missing: ON or OFF");
+    // 2. If an equals sign is present, skip past it (e.g., "/rpm=6" or "/rpm =6")
+    if (ptr && *ptr == '=') {
+        ptr++;
+    }
+
+    // 3. Skip any spaces after the equals sign just in case (e.g., "/rpm = 6")
+    while (ptr && *ptr == ' ') {
+        ptr++;
+    }
+
+    // 4. Validation guard: Ensure we actually have characters left to parse
+    if (!ptr || strlen(ptr) == 0 || !isdigit((unsigned char)*ptr)) {
+        write_to_ai_pane_wrapper(app, ": Error: Required parameter missing or invalid. Provide a numeric RPM value.");
         return;
     }
+
+    // 5. Safely convert the sanitized string to an integer
     app->limiter.requests_per_minute = atoi(ptr);
-    DEBUG_PRINT("[DEBUG]: Ratelimit: Requests Per Minute set %s\n", ptr);
+    DEBUG_PRINT("[DEBUG]: Ratelimit: Requests Per Minute set to %d (Parsed from raw input)\n", 
+                app->limiter.requests_per_minute);
 
+    // Re-initialize the rate limiter state with the newly validated RPM
     ratelimit_init(&app->limiter, app->limiter.requests_per_minute);
-
 }
 
 // ================= Start of Toggle ON / OFF functions  ======================
@@ -432,6 +470,7 @@ void cmd_toggle_auto_all(AppContext *app, const char *args) {
     write_to_ai_pane_wrapper(app, app->tee_enabled ?          ": Tee Collection Enabled" : ": Tee Collection Disabled");
     write_to_ai_pane_wrapper(app, app->autoreply_enabled ?    ": Auto Reply Enabled"     : ": Auto Reply Disabled");
     write_to_ai_pane_wrapper(app, app->auto_execute_enabled ? ": Auto Execute Enabled"   : ": Auto Execute Disabled");
+    sync_toggle_ui_elements(app);
 }
 
 void cmd_session_read_from_gloal_toggle(AppContext *app, const char *args) {
@@ -460,6 +499,7 @@ void cmd_session_read_from_gloal_toggle(AppContext *app, const char *args) {
 
     app->session.read_from_global = state;
     write_to_ai_pane_wrapper(app, state ? ": Reading from GLOBAL history." : ": Reading STRICT history.");
+    sync_toggle_ui_elements(app);
 }
 
 void cmd_session_write_to_global_toggle(AppContext *app, const char *args) {
@@ -488,6 +528,7 @@ void cmd_session_write_to_global_toggle(AppContext *app, const char *args) {
 
     app->session.write_to_global = state;
     write_to_ai_pane_wrapper(app, state ? ": Writing to GLOBAL session." : ": Writing to STRICT session.");
+    sync_toggle_ui_elements(app);
 }
 
 void cmd_toggle_tee(AppContext *app, const char *args) {
@@ -516,6 +557,7 @@ void cmd_toggle_tee(AppContext *app, const char *args) {
 
     app->tee_enabled = state;
     write_to_ai_pane_wrapper(app, state ? ": Tee Collection Enabled" : ": Tee Collection Disabled");
+    sync_toggle_ui_elements(app);
 }
 
 void cmd_toggle_autoreply(AppContext *app, const char *args) {
@@ -544,6 +586,7 @@ void cmd_toggle_autoreply(AppContext *app, const char *args) {
 
     app->autoreply_enabled = state;
     write_to_ai_pane_wrapper(app, state ? ": Auto Reply Enabled" : ": Auto Reply Disabled");
+    sync_toggle_ui_elements(app);
 }
 
 void cmd_toggle_autoexe(AppContext *app, const char *args) {
@@ -572,6 +615,7 @@ void cmd_toggle_autoexe(AppContext *app, const char *args) {
 
     app->auto_execute_enabled = state;
     write_to_ai_pane_wrapper(app, state ? ": Auto Execute Enabled" : ": Auto Execute Disabled");
+    sync_toggle_ui_elements(app);
 }
 
 void cmd_toggle_ratelimit(AppContext *app, const char *args) {
@@ -600,6 +644,7 @@ void cmd_toggle_ratelimit(AppContext *app, const char *args) {
 
     app->ratelimit_enabled = state;
     write_to_ai_pane_wrapper(app, state ? ": Rate Limiting Enabled." : ": Rate Limiting Disabled.");
+    sync_toggle_ui_elements(app);
 }
 
 void cmd_toggle_smart_cache(AppContext *app, const char *args) {
@@ -628,6 +673,7 @@ void cmd_toggle_smart_cache(AppContext *app, const char *args) {
 
     app->smart_cache_enabled = state;
     write_to_ai_pane_wrapper(app, state ? ": Smart Cache Enabled." : ": Smart Cache Disabled.");
+    sync_toggle_ui_elements(app);
 }
 
 void cmd_toggle_noise_filter(AppContext *app, const char *args) {
@@ -656,6 +702,7 @@ void cmd_toggle_noise_filter(AppContext *app, const char *args) {
 
     app->noise_filter_enabled = state;
     write_to_ai_pane_wrapper(app, state ? ": Noise Block Enabled." : ": Noise Block Disabled.");
+    sync_toggle_ui_elements(app);
 }
 
 // ================= End of Toggle ON / OFF functions  ======================

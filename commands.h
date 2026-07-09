@@ -58,7 +58,12 @@ void cmd_session_default(AppContext *app, const char *args);
 void cmd_session_no_default(AppContext *app, const char *args);
 void cmd_session_read_from_gloal_toggle(AppContext *app, const char *args);
 void cmd_session_write_to_global_toggle(AppContext *app, const char *args);
+
+// open different manager windows
 void cmd_session_manager_wrapper(AppContext *app, const char *args);
+void cmd_history_manager_wrapper(AppContext *app, const char *args);
+void cmd_noisefilter_manager_wrapper(AppContext *app, const char *args);
+void cmd_policy_manager_wrapper(AppContext *app, const char *args);
 
 // CMD Noise Prototypes
 void cmd_noise_add(AppContext *app, const char *args);

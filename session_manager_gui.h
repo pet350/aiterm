@@ -1,11 +1,9 @@
 // part of aiterm project
-// session_manager.h
+// session_manager_gui.h
 // Header File used to manage sessions in a gui window
 // By: Peter Talbott
 // Assisted by: Gemini
-// May 2026
-
-
+// May - July  2026
 
 #ifndef SESSION_MANAGER_GUI_H
 #define SESSION_MANAGER_GUI_H
@@ -18,7 +16,7 @@
 #include "utils.h"
 #include "session_manager.h"
 
-
+// function prototypes
 gboolean refresh_list_callback(gpointer data);
 gboolean timed_refresh_list_callback(gpointer data);
 
