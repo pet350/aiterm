@@ -58,6 +58,12 @@ fi
 
 echo -e "Creating Archive: $ARCHIVE"
 tar --gzip -cvf $ARCHIVE -C $(pwd) $LIST
-echo -e "Done!\n\n"
+if [ $? -eq 0 ]; then
+    echo -e "Success"
+else
+    echo -e "Failure"
+fi
+
+echo -e "Thats all folks!\n\n"
 
 

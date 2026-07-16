@@ -121,7 +121,21 @@ void on_dialog_policy_manager_gui_destroy(GtkWidget *widget, gpointer user_data)
     PolicyDialog *dlg = (PolicyDialog *)user_data;
     g_free(dlg->selected_command);
     g_free(dlg);
+    global_app->manager.policy = NULL;
 }
+
+void close_policy_manager(AppContext *app) {
+    if (app->manager.policy != NULL) {
+        // Destroying the window will trigger the "destroy" signal, 
+        // which runs your existing on_dialog_policy_manager_gui_destroy
+        gtk_widget_destroy(app->manager.policy);
+        write_to_ai_pane(app, "System", "Closed Policy Manager Window.", "system_tag", "body_tag");
+        app->manager.policy = NULL;
+    } else {
+        write_to_ai_pane(app, "System", "Policy Manager is not open.", "system_tag", "body_tag");
+    }
+}
+
 void open_policy_manager_window(AppContext *app) {
     PolicyDialog *dlg = g_new0(PolicyDialog, 1);
     dlg->app = app;
@@ -129,6 +143,7 @@ void open_policy_manager_window(AppContext *app) {
 
     // FIX: Instantiate as a native Top-Level Window instead of a child Dialog
     dlg->dialog = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    app->manager.policy=dlg->dialog;
     gtk_window_set_title(GTK_WINDOW(dlg->dialog), "Command Security Policy Rules");
     gtk_window_set_default_size(GTK_WINDOW(dlg->dialog), 700, 460);
 

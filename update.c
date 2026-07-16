@@ -14,6 +14,7 @@
 #include <gtk/gtk.h>
 #include <vte/vte.h>
 
+#include "gui.h"
 #include "update.h"
 #include "openai.h"
 #include "gemini.h"
@@ -62,8 +63,8 @@ void execute_ai_command(AppContext *app, const char *ai_text) {
     }
     if (allowed) {
         // 2. EXECUTION (The "Allow" path)
-        vte_terminal_feed(VTE_TERMINAL(app->terminal_view), cmd, -1);
-        vte_terminal_feed(VTE_TERMINAL(app->terminal_view), "\n", 1);
+        vte_terminal_feed(VTE_TERMINAL(app->gui.terminal_view), cmd, -1);
+        vte_terminal_feed(VTE_TERMINAL(app->gui.terminal_view), "\n", 1);
         write_to_ai_pane(app, "System: ", "AI command executed.", "cmd_tag", "body_tag");
     }
     free(cmd);
@@ -93,7 +94,7 @@ const char* risk_int_to_str(int risk) {
 
 // Unified writing function for the AI Pane (Exactly 5 arguments)
 void write_to_ai_pane(AppContext *app, const char *header, const char *body, const char *header_tag, const char *body_tag) {
-    if (!app || !app->gemini_view) return;
+    if (!app || !app->gui.gemini_view) return;
     if (header) {
         append_ai_text(app, header, header_tag);
     }
@@ -106,8 +107,8 @@ void write_to_ai_pane(AppContext *app, const char *header, const char *body, con
 
 // Logic for process_for_ai (Tee Data Collection)
 void process_for_ai(AppContext *app, const char *text, gboolean is_input) {
-    if (!app->tee_enabled || !text) return;
-    // app->sequence_id++;
+    if (!app->sys.tee_enabled || !text) return;
+    // app->database.sequence_id++;
     if (is_input) {
         tee_handle_input(app, text);
     } else {
@@ -126,7 +127,7 @@ gboolean update_gui_with_response(gpointer data) {
             append_ai_text(rd->app, "System: ", "system_tag");
             append_ai_text(rd->app, rd->response_text, "body_tag");
             scroll_ai_pane_to_bottom(global_app);
-        }  else if (rd->app->auto_execute_enabled && is_ai_command(rd->response_text)) {
+        }  else if (rd->app->sys.auto_execute_enabled && is_ai_command(rd->response_text)) {
             execute_ai_command(rd->app, rd->response_text);
         } else {
             // AI Response: Header in Green, Content in Yellow
@@ -136,9 +137,9 @@ gboolean update_gui_with_response(gpointer data) {
         write_to_ai_pane(rd->app, "System: ", "No response from provider.", "cmd_tag", "cmd_tag");
     }
 
-    gtk_label_set_text(GTK_LABEL(rd->app->status_label), "Ready");
+    gtk_label_set_text(GTK_LABEL(rd->app->gui.status_label), "Ready");
 
-    rd->app->is_processing = FALSE;
+    rd->app->sys.is_processing = FALSE;
     if (rd->response_text) free(rd->response_text);
     if (rd->original_prompt) free(rd->original_prompt);
     free(rd);
@@ -268,6 +269,28 @@ void on_input_activate(GtkEntry *entry, gpointer data) {
     const char *input_text = gtk_entry_get_text(entry);
     if (strlen(input_text) == 0) return;
 
+        if (app->local.cmd_history) {
+            gboolean duplicate = FALSE;
+
+            // Avoid cluttering history if you press Enter multiple times on the same command
+            if (app->local.cmd_history->len > 0) {
+                const char *last_cmd = g_ptr_array_index(app->local.cmd_history, app->local.cmd_history->len - 1);
+                if (strcmp(last_cmd, input_text) == 0) {
+                    duplicate = TRUE;
+                }
+            }
+
+            // Append the unique command to your local array
+            if (!duplicate) {
+                g_ptr_array_add(app->local.cmd_history, g_strdup(input_text));
+            }
+
+            // Reset the tracking index cleanly to the bottom baseline
+            app->local.history_index = app->local.cmd_history->len;
+            g_free(app->local.history_temp_entry);
+            app->local.history_temp_entry = NULL;
+        }
+
     // --- NEW DYNAMIC DISPATCHER ---
     // If execute_command returns TRUE, it was a local command.
     // We clear the input and exit.
@@ -287,8 +310,10 @@ void on_input_activate(GtkEntry *entry, gpointer data) {
 
     execute_ai_command(app, input_text);
     char *cleaned_text = strip_blank_lines(input_text);
+
+
     // --- NEW: 0.7.5-beta:  Guard against double-processing ---
-    if (app->is_processing) {
+    if (app->sys.is_processing) {
         update_status_label(app, "AI is already busy...");
         return;
     }
@@ -300,7 +325,7 @@ void on_input_activate(GtkEntry *entry, gpointer data) {
     }
     last_request_time = now;
 
-    gtk_label_set_text(GTK_LABEL(app->status_label), "AI is thinking...");
+    gtk_label_set_text(GTK_LABEL(app->gui.status_label), "AI is thinking...");
     write_to_ai_pane(app, "You: ", cleaned_text, "user_tag", NULL);
 
     AIThreadData *td = g_malloc0(sizeof(AIThreadData));
@@ -312,14 +337,14 @@ void on_input_activate(GtkEntry *entry, gpointer data) {
 }
 
 void update_status_label(AppContext *app, const char *status) {
-    if (app && app->status_label) {
-        gtk_label_set_text(GTK_LABEL(app->status_label), status);
+    if (app && app->gui.status_label) {
+        gtk_label_set_text(GTK_LABEL(app->gui.status_label), status);
     }
 }
 
 // New helper function to handle user interaction
 gboolean request_human_approval(AppContext *app, const char *input_text) {
-    GtkWidget *dialog = gtk_message_dialog_new(GTK_WINDOW(app->window),
+    GtkWidget *dialog = gtk_message_dialog_new(GTK_WINDOW(app->gui.window),
                                     GTK_DIALOG_MODAL,
                                     GTK_MESSAGE_WARNING,
                                     GTK_BUTTONS_OK_CANCEL,
@@ -330,4 +355,27 @@ gboolean request_human_approval(AppContext *app, const char *input_text) {
     gtk_widget_destroy(dialog);
 
     return (result == GTK_RESPONSE_OK);
+}
+
+// Inside update.c
+gboolean refresh_token_display(gpointer data) {
+    AppContext *app = (AppContext *)data;
+    if (!app || !app->tokens.bar) return FALSE; // Guard clause
+
+    // 1. Calculate and update fill progress fraction
+    double fraction = 0.0;
+    if (app->tokens.max > 0) {
+        fraction = (double)app->tokens.current / (double)app->tokens.max;
+        if (fraction > 1.0) fraction = 1.0;
+    }
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(app->tokens.bar), fraction);
+
+    // 2. Format and commit string live
+    char tracking_str[128];
+    snprintf(tracking_str, sizeof(tracking_str), 
+             "Current Tokens: %ld \t Last AI Process Used: %ld Tokens", 
+             app->tokens.current, app->tokens.last);
+    gtk_progress_bar_set_text(GTK_PROGRESS_BAR(app->tokens.bar), tracking_str);
+
+    return FALSE; // Vital: tells GTK not to loop this function indefinitely
 }

@@ -11,7 +11,7 @@
 /* ========================================================================== */
 // updated 0.9.3
 PolicyRecord* get_policy_for_command(AppContext *app, const char *cmd) {
-    if (!app->global_db_conn) return NULL;
+    if (!app->database.global_db_conn) return NULL;
 
     mysql_thread_init();
 
@@ -20,15 +20,15 @@ PolicyRecord* get_policy_for_command(AppContext *app, const char *cmd) {
              "SELECT policy_type, risk_level FROM command_policy WHERE command_name = '%s'", cmd);
 
     // Single lock before execution
-    pthread_mutex_lock(&app->db_mutex);
-    if (mysql_query(app->global_db_conn, query)) {
-        pthread_mutex_unlock(&app->db_mutex);
+    pthread_mutex_lock(&app->access.db_mutex);
+    if (mysql_query(app->database.global_db_conn, query)) {
+        pthread_mutex_unlock(&app->access.db_mutex);
         mysql_thread_end();
         return NULL;
     }
 
-    MYSQL_RES *res = mysql_store_result(app->global_db_conn);
-    pthread_mutex_unlock(&app->db_mutex);
+    MYSQL_RES *res = mysql_store_result(app->database.global_db_conn);
+    pthread_mutex_unlock(&app->access.db_mutex);
 
     if (!res) {
         mysql_thread_end();
@@ -50,7 +50,7 @@ PolicyRecord* get_policy_for_command(AppContext *app, const char *cmd) {
 }
 
 gboolean set_command_policy(AppContext *app, PolicyRecord *p) {
-    if (!app->global_db_conn || !p) return FALSE;
+    if (!app->database.global_db_conn || !p) return FALSE;
 
     mysql_thread_init();
 
@@ -61,43 +61,43 @@ gboolean set_command_policy(AppContext *app, PolicyRecord *p) {
              "ON DUPLICATE KEY UPDATE policy_type='%s', risk_level=%d", 
              p->name, p->type, p->risk, p->type, p->risk);
 
-    pthread_mutex_lock(&app->db_mutex);
-    int status = mysql_query(app->global_db_conn, query);
-    pthread_mutex_unlock(&app->db_mutex);
+    pthread_mutex_lock(&app->access.db_mutex);
+    int status = mysql_query(app->database.global_db_conn, query);
+    pthread_mutex_unlock(&app->access.db_mutex);
 
     mysql_thread_end();
     return (status == 0);
 }
 
 gboolean delete_command_policy(AppContext *app, const char *cmd) {
-    if (!app->global_db_conn || !cmd) return FALSE;
+    if (!app->database.global_db_conn || !cmd) return FALSE;
 
     mysql_thread_init();
     char query[512];
     snprintf(query, sizeof(query),
              "DELETE FROM command_policy WHERE command_name = '%s'", cmd);
 
-    pthread_mutex_lock(&app->db_mutex);
-    int status = mysql_query(app->global_db_conn, query);
-    pthread_mutex_unlock(&app->db_mutex);
+    pthread_mutex_lock(&app->access.db_mutex);
+    int status = mysql_query(app->database.global_db_conn, query);
+    pthread_mutex_unlock(&app->access.db_mutex);
 
     mysql_thread_end();
     return (status == 0);
 }
 
 GList* get_all_policies(AppContext *app) {
-    if (!app->global_db_conn) return NULL;
+    if (!app->database.global_db_conn) return NULL;
     mysql_thread_init();
     char query[] = "SELECT command_name, policy_type, risk_level FROM command_policy ORDER BY command_name ASC";
 
-    pthread_mutex_lock(&app->db_mutex);
-    if (mysql_query(app->global_db_conn, query)) {
-        pthread_mutex_unlock(&app->db_mutex);
+    pthread_mutex_lock(&app->access.db_mutex);
+    if (mysql_query(app->database.global_db_conn, query)) {
+        pthread_mutex_unlock(&app->access.db_mutex);
         return NULL;
     }
 
-    MYSQL_RES *res = mysql_store_result(app->global_db_conn);
-    pthread_mutex_unlock(&app->db_mutex);
+    MYSQL_RES *res = mysql_store_result(app->database.global_db_conn);
+    pthread_mutex_unlock(&app->access.db_mutex);
 
     if (!res) return NULL;
 

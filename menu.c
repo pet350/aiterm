@@ -88,7 +88,7 @@ void on_menu_policy_manager_activate(GtkMenuItem *menuitem, gpointer user_data) 
 
 void on_clear(GtkWidget *widget, gpointer data) {
     AppContext *app = (AppContext *)data;
-    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gemini_view));
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gui.gemini_view));
     gtk_text_buffer_set_text(buf, "", -1);
 }
 
@@ -108,75 +108,72 @@ void on_about(GtkWidget *widget, gpointer data) {
 
 void on_copy(GtkWidget *widget, gpointer data) {
     AppContext *app = (AppContext *)data;
-    vte_terminal_copy_clipboard_format(VTE_TERMINAL(app->terminal_view), VTE_FORMAT_TEXT);
+    vte_terminal_copy_clipboard_format(VTE_TERMINAL(app->gui.terminal_view), VTE_FORMAT_TEXT);
 }
 
 void on_paste(GtkWidget *widget, gpointer data) {
     AppContext *app = (AppContext *)data;
-    vte_terminal_paste_clipboard(VTE_TERMINAL(app->terminal_view));
+    vte_terminal_paste_clipboard(VTE_TERMINAL(app->gui.terminal_view));
 }
 
 // Forward declarations for mutual dependency blocking
-void on_tee_toggle(GtkWidget *widget, gpointer data);
-void on_autoreply_toggle(GtkWidget *widget, gpointer data);
-
 void on_tee_toggle(GtkWidget *widget, gpointer data) {
     AppContext *app = (AppContext *)data;
-    app->tee_enabled = gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(widget));
+    app->sys.tee_enabled = gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(widget));
 
     // LOGIC: If Tee goes OFF, Autoreply MUST go OFF
-    if (!app->tee_enabled && app->autoreply_enabled) {
-        app->autoreply_enabled = FALSE;
-        if (app->autoreply_menu_item) {
-            g_signal_handlers_block_by_func(app->autoreply_menu_item, on_autoreply_toggle, app);
-            gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->autoreply_menu_item), FALSE);
-            g_signal_handlers_unblock_by_func(app->autoreply_menu_item, on_autoreply_toggle, app);
+    if (!app->sys.tee_enabled && app->sys.autoreply_enabled) {
+        app->sys.autoreply_enabled = FALSE;
+        if (app->gui.autoreply_menu_item) {
+            g_signal_handlers_block_by_func(app->gui.autoreply_menu_item, on_autoreply_toggle, app);
+            gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->gui.autoreply_menu_item), FALSE);
+            g_signal_handlers_unblock_by_func(app->gui.autoreply_menu_item, on_autoreply_toggle, app);
         }
     }
-    write_to_ai_pane(app, "System: ", app->tee_enabled ? "Tee Mode ENABLED" : "Tee & Autoreply DISABLED", "cmd_tag", "cmd_tag");
+    write_to_ai_pane(app, "System: ", app->sys.tee_enabled ? "Tee Mode ENABLED" : "Tee & Autoreply DISABLED", "cmd_tag", "cmd_tag");
 }
 
 void on_autoreply_toggle(GtkWidget *widget, gpointer data) {
     AppContext *app = (AppContext *)data;
-    app->autoreply_enabled = gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(widget));
+    app->sys.autoreply_enabled = gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(widget));
 
     // LOGIC: If Autoreply goes ON, Tee MUST go ON
-    if (app->autoreply_enabled && !app->tee_enabled) {
-        app->tee_enabled = TRUE;
-        if (app->tee_menu_item) {
-            g_signal_handlers_block_by_func(app->tee_menu_item, on_tee_toggle, app);
-            gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->tee_menu_item), TRUE);
-            g_signal_handlers_unblock_by_func(app->tee_menu_item, on_tee_toggle, app);
+    if (app->sys.autoreply_enabled && !app->sys.tee_enabled) {
+        app->sys.tee_enabled = TRUE;
+        if (app->gui.tee_menu_item) {
+            g_signal_handlers_block_by_func(app->gui.tee_menu_item, on_tee_toggle, app);
+            gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->gui.tee_menu_item), TRUE);
+            g_signal_handlers_unblock_by_func(app->gui.tee_menu_item, on_tee_toggle, app);
         }
     }
-    write_to_ai_pane(app, "System: ", app->autoreply_enabled ? "Autoreply & Tee ENABLED" : "Autoreply DISABLED", "cmd_tag", "cmd_tag");
+    write_to_ai_pane(app, "System: ", app->sys.autoreply_enabled ? "Autoreply & Tee ENABLED" : "Autoreply DISABLED", "cmd_tag", "cmd_tag");
 }
 
 
 // --- Visual Preferences Callbacks ---
 void on_transparency_changed(GtkRange *range, gpointer data) {
     AppContext *app = (AppContext *)data;
-    app->transparency = gtk_range_get_value(range);
+    app->gui.transparency = gtk_range_get_value(range);
     apply_visual_settings(app);
 }
 
 void on_ai_transparency_changed(GtkRange *range, gpointer data) {
     AppContext *app = (AppContext *)data;
-    app->ai_transparency = gtk_range_get_value(range);
+    app->gui.ai_transparency = gtk_range_get_value(range);
     apply_visual_settings(app);
 }
 
 void on_terminal_font_set(GtkFontButton *btn, gpointer data) {
     AppContext *app = (AppContext *)data;
-    if (app->terminal_font) free(app->terminal_font);
-    app->terminal_font = strdup(gtk_font_chooser_get_font(GTK_FONT_CHOOSER(btn)));
+    if (app->gui.terminal_font) free(app->gui.terminal_font);
+    app->gui.terminal_font = strdup(gtk_font_chooser_get_font(GTK_FONT_CHOOSER(btn)));
     apply_visual_settings(app);
 }
 
 void on_ai_font_set(GtkFontButton *btn, gpointer data) {
     AppContext *app = (AppContext *)data;
-    if (app->ai_font) free(app->ai_font);
-    app->ai_font = strdup(gtk_font_chooser_get_font(GTK_FONT_CHOOSER(btn)));
+    if (app->gui.ai_font) free(app->gui.ai_font);
+    app->gui.ai_font = strdup(gtk_font_chooser_get_font(GTK_FONT_CHOOSER(btn)));
     apply_visual_settings(app);
 }
 
@@ -193,7 +190,7 @@ void on_preferences(GtkWidget *widget, gpointer data) {
     AppContext *app = (AppContext *)data;
 
     GtkWidget *dialog = gtk_dialog_new_with_buttons("Preferences", 
-                                                  GTK_WINDOW(app->window),
+                                                  GTK_WINDOW(app->gui.window),
                                                   GTK_DIALOG_DESTROY_WITH_PARENT,
                                                   "Save", GTK_RESPONSE_ACCEPT,
                                                   "Close", GTK_RESPONSE_CLOSE, 
@@ -215,23 +212,23 @@ void on_preferences(GtkWidget *widget, gpointer data) {
 
     gtk_box_pack_start(GTK_BOX(vbox), gtk_label_new("Terminal Transparency:"), FALSE, FALSE, 0);
     GtkWidget *s1 = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.1, 1.0, 0.05);
-    gtk_range_set_value(GTK_RANGE(s1), app->transparency);
+    gtk_range_set_value(GTK_RANGE(s1), app->gui.transparency);
     gtk_box_pack_start(GTK_BOX(vbox), s1, FALSE, FALSE, 0);
     g_signal_connect(s1, "value-changed", G_CALLBACK(on_transparency_changed), app);
 
     gtk_box_pack_start(GTK_BOX(vbox), gtk_label_new("AI Pane Transparency:"), FALSE, FALSE, 0);
     GtkWidget *s2 = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.1, 1.0, 0.05);
-    gtk_range_set_value(GTK_RANGE(s2), app->ai_transparency);
+    gtk_range_set_value(GTK_RANGE(s2), app->gui.ai_transparency);
     gtk_box_pack_start(GTK_BOX(vbox), s2, FALSE, FALSE, 0);
     g_signal_connect(s2, "value-changed", G_CALLBACK(on_ai_transparency_changed), app);
 
     gtk_box_pack_start(GTK_BOX(vbox), gtk_label_new("Terminal Font:"), FALSE, FALSE, 0);
-    GtkWidget *f1 = gtk_font_button_new_with_font(app->terminal_font);
+    GtkWidget *f1 = gtk_font_button_new_with_font(app->gui.terminal_font);
     gtk_box_pack_start(GTK_BOX(vbox), f1, FALSE, FALSE, 0);
     g_signal_connect(f1, "font-set", G_CALLBACK(on_terminal_font_set), app);
 
     gtk_box_pack_start(GTK_BOX(vbox), gtk_label_new("AI Pane Font:"), FALSE, FALSE, 0);
-    GtkWidget *f2 = gtk_font_button_new_with_font(app->ai_font);
+    GtkWidget *f2 = gtk_font_button_new_with_font(app->gui.ai_font);
     gtk_box_pack_start(GTK_BOX(vbox), f2, FALSE, FALSE, 0);
     g_signal_connect(f2, "font-set", G_CALLBACK(on_ai_font_set), app);
 
@@ -252,7 +249,7 @@ void on_menu_command_clicked(GtkMenuItem *menuitem, gpointer user_data) {
 
     if (data->requires_arg) {
         char *prompt_msg = g_strdup_printf("Provide parameters for: /%s", data->cmd_base);
-        char *arg = prompt_for_argument(GTK_WINDOW(app->window), data->cmd_base, prompt_msg);
+        char *arg = prompt_for_argument(GTK_WINDOW(app->gui.window), data->cmd_base, prompt_msg);
         g_free(prompt_msg);
 
         if (arg) {
@@ -287,43 +284,57 @@ void sync_toggle_ui_elements(AppContext *app) {
     // Sync Autoreply Checkbox
     if (app->ui.toggle_autoreply) {
         g_signal_handlers_block_by_func(app->ui.toggle_autoreply, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
-        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_autoreply), app->autoreply_enabled);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_autoreply), app->sys.autoreply_enabled);
         g_signal_handlers_unblock_by_func(app->ui.toggle_autoreply, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
     }
 
     // Sync Autoexe Checkbox
     if (app->ui.toggle_autoexe) {
         g_signal_handlers_block_by_func(app->ui.toggle_autoexe, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
-        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_autoexe), app->auto_execute_enabled);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_autoexe), app->sys.auto_execute_enabled);
         g_signal_handlers_unblock_by_func(app->ui.toggle_autoexe, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
     }
 
     // Sync Tee Checkbox
     if (app->ui.toggle_tee) {
         g_signal_handlers_block_by_func(app->ui.toggle_tee, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
-        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_tee), app->tee_enabled);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_tee), app->sys.tee_enabled);
         g_signal_handlers_unblock_by_func(app->ui.toggle_tee, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
     }
 
     // Sync Noise Filter Checkbox
     if (app->ui.toggle_noise_filter) {
         g_signal_handlers_block_by_func(app->ui.toggle_noise_filter, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
-        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_noise_filter), app->noise_filter_enabled);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_noise_filter), app->sys.noise_filter_enabled);
         g_signal_handlers_unblock_by_func(app->ui.toggle_noise_filter, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
     }
 
     // Sync Smart Cache Checkbox
     if (app->ui.toggle_smart_cache) {
         g_signal_handlers_block_by_func(app->ui.toggle_smart_cache, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
-        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_smart_cache), app->smart_cache_enabled);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_smart_cache), app->sys.smart_cache_enabled);
         g_signal_handlers_unblock_by_func(app->ui.toggle_smart_cache, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
     }
 
     // Sync ratelimit Checkbox
     if (app->ui.toggle_ratelimit) {
         g_signal_handlers_block_by_func(app->ui.toggle_ratelimit, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
-        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_ratelimit), app->ratelimit_enabled);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_ratelimit), app->sys.ratelimit_enabled);
         g_signal_handlers_unblock_by_func(app->ui.toggle_ratelimit, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+    }
+
+    // Sync debug Checkbox
+    if (app->ui.toggle_debug) {
+        g_signal_handlers_block_by_func(app->ui.toggle_debug, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_debug), app->sys.debug_mode);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_debug, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+    }
+
+    // Sync XML Payload Tagging Checkbox
+    if (app->ui.toggle_xml_payload_tagging) {
+        g_signal_handlers_block_by_func(app->ui.toggle_xml_payload_tagging, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_xml_payload_tagging), app->xml.tagging_enabled);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_xml_payload_tagging, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
     }
 
     // Sync session_write_global Checkbox
@@ -405,32 +416,42 @@ GtkWidget* create_menu_bar(AppContext *app) {
 
     // --- Toggles Submenu Population via setup_menu_toggle() ---
     item = gtk_check_menu_item_new_with_label("Toggle Real-Time Prompt Analysis");
-    setup_menu_toggle(item, app, TOGGLE_AUTOREPLY, app->autoreply_enabled);
+    setup_menu_toggle(item, app, TOGGLE_AUTOREPLY, app->sys.autoreply_enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 
     item = gtk_check_menu_item_new_with_label("Toggle AI Payload Auto-Execution");
-    setup_menu_toggle(item, app, TOGGLE_AUTOEXE, app->auto_execute_enabled);
+    setup_menu_toggle(item, app, TOGGLE_AUTOEXE, app->sys.auto_execute_enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 
     item = gtk_check_menu_item_new_with_label("Toggle Immediate Terminal Capturing (Tee)");
-    setup_menu_toggle(item, app, TOGGLE_TEE, app->tee_enabled);
+    setup_menu_toggle(item, app, TOGGLE_TEE, app->sys.tee_enabled);
+    gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
+    gtk_widget_show(item);
+
+    item = gtk_check_menu_item_new_with_label("Toggle Debug mode");
+    setup_menu_toggle(item, app, TOGGLE_DEBUG, app->sys.debug_mode);
+    gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
+    gtk_widget_show(item);
+
+    item = gtk_check_menu_item_new_with_label("Toggle XML Payload Tagging");
+    setup_menu_toggle(item, app, TOGGLE_XML, app->xml.tagging_enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 
     item = gtk_check_menu_item_new_with_label("Toggle Mitigation Noise Filters");
-    setup_menu_toggle(item, app, TOGGLE_NOISE_FILTER, app->noise_filter_enabled);
+    setup_menu_toggle(item, app, TOGGLE_NOISE_FILTER, app->sys.noise_filter_enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 
     item = gtk_check_menu_item_new_with_label("Toggle Semantic Local Caching");
-    setup_menu_toggle(item, app, TOGGLE_SMART_CACHE, app->smart_cache_enabled);
+    setup_menu_toggle(item, app, TOGGLE_SMART_CACHE, app->sys.smart_cache_enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 
     item = gtk_check_menu_item_new_with_label("Toggle Active Rate Limiting Protection");
-    setup_menu_toggle(item, app, TOGGLE_RATELIMIT, app->ratelimit_enabled);
+    setup_menu_toggle(item, app, TOGGLE_RATELIMIT, app->sys.ratelimit_enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 

@@ -6,13 +6,16 @@
 // May 2026
 
 #include <stdlib.h>
+#include <glib.h>
 #include <string.h>
 #include <strings.h>
 #include <ctype.h>
+#include <time.h>
 #include <json-c/json.h>
 #include <vte/vte.h>
 #include <mariadb/mysql.h>
-
+#include <gtk/gtk.h>
+#include <pthread.h>
 #include "utils.h"
 #include "gui.h"
 #include "openai.h"
@@ -25,25 +28,99 @@
 
 void initialize_booleans(AppContext *app) {
     // 1. Set initial variables to their needed defaults
-    app->db_initialized = FALSE;
-    app->autoreply_enabled = FALSE;
-    app->tee_enabled = FALSE;
-    app->auto_execute_enabled = FALSE;
-    app->debug_mode = FALSE;
-    app->is_processing = FALSE;
-    app->ratelimit_enabled = FALSE;
-    app->mysql_busy = FALSE;
-    app->ai_busy = FALSE;
-    app->smart_cache_enabled = FALSE;
+    app->sys.db_initialized = FALSE;
+    app->sys.autoreply_enabled = FALSE;
+    app->sys.tee_enabled = FALSE;
+    app->sys.auto_execute_enabled = FALSE;
+    app->sys.debug_mode = FALSE;
+    app->sys.debug_mode_override = FALSE;
+    app->sys.is_processing = FALSE;
+    app->sys.ratelimit_enabled = FALSE;
+    app->sys.mysql_busy = FALSE;
+    app->sys.ai_busy = FALSE;
+    app->sys.smart_cache_enabled = FALSE;
 
     // NON-Boolean initializer
-    app->sequence_id = 0; // NEW: Start counter at zero
+    app->database.sequence_id = 0;
     app->limiter.requests_per_minute=20;
 
-    app->session.cfg_loaded_write_to_global=FALSE;
-    app->session.cfg_loaded_read_from_global=FALSE;
+    app->session.cfg_loaded_write_to_global = FALSE;
+    app->session.cfg_loaded_read_from_global = FALSE;
+
+    app->xml.tagging_enabled = FALSE;
 }
 
+// Added 0.9.5-beta
+// For wrapping payload in XML tags that AI will understand
+char* xml_wrap(AppContext *app, const char *input) {
+    if (!input) return NULL;
+    if (!app->xml.tagging_enabled) return g_strdup(input);
+    if (!app->xml.type) return g_strdup(input);
+
+    GString *xml_buffer = g_string_new(NULL);
+    time_t now = time(NULL);
+    char time_str[20];
+    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&now));
+    switch(app->xml.type) {
+        case TAG_NONE:
+            // xml buffer was already initialized so we're just going to append input to it
+            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is none, not wrapping\n");
+            g_string_append(xml_buffer, input);
+            break;
+        case TAG_HISTORY:
+            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is history, wrapping with <context>\n");
+            // Being a history payload we don't want to send the current timestamp
+            g_string_append(xml_buffer, "<context");
+            if (app->session.session_uuid) {
+                g_string_append_printf(xml_buffer, " session=\"%s\"", app->session.session_uuid);
+            }
+            g_string_append_printf(xml_buffer, ">%s</context>\n", input);
+            break;
+        case TAG_MEMORY:
+            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is memory, wrapping with <memory>\n");
+            // Here this would be user data loaded from database,
+            //if the timestamp from the database is available we'll use it
+            g_string_printf(xml_buffer, "<memory");
+            if (app->xml.database_timestamp) {
+                g_string_append_printf(xml_buffer, " timestamp=\"%s\"", app->xml.database_timestamp);
+            }
+            if (app->session.session_uuid) {
+                g_string_append_printf(xml_buffer, " session=\"%s\"", app->session.session_uuid);
+            }
+            g_string_append_printf(xml_buffer, ">%s</memory>\n", input);
+            break;
+        case TAG_LOG_DUMP: // Was ** TAG_TEE: **
+            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is log_dump, wrapping with <log_dump>\n");
+            // Tee is live data payload, we will timestamp it
+	    // A Wise AI assistant suggested log_dump as the tag instead of Tee
+            g_string_printf(xml_buffer, "<log_dump timestamp=\"%s\"", time_str);
+            if (app->session.session_uuid) {
+                g_string_append_printf(xml_buffer, " session=\"%s\"", app->session.session_uuid);
+            }
+            g_string_append_printf(xml_buffer, ">%s</log_dump>\n", input);
+            break;
+        case TAG_SYSTEM:
+            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is system, wrapping with <system>\n");
+            // System is live data payload, we will timestamp it
+            g_string_printf(xml_buffer, "<system timestamp=\"%s\"", time_str);
+            if (app->session.session_uuid) {
+                g_string_append_printf(xml_buffer, " session=\"%s\"", app->session.session_uuid);
+            }
+            g_string_append_printf(xml_buffer, ">%s</system>\n", input);
+            break;
+        case TAG_STATUS:
+            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is status, wrapping with <status>\n");
+            // System is live data payload, we will timestamp it
+            g_string_printf(xml_buffer, "<status timestamp=\"%s\"", time_str);
+            if (app->session.session_uuid) {
+                g_string_append_printf(xml_buffer, " session=\"%s\"", app->session.session_uuid);
+            }
+            g_string_append_printf(xml_buffer, ">%s</status>\n", input);
+            break;
+    }
+    // Return the string and destroy the container, keeping the data alive
+    return g_string_free(xml_buffer, FALSE);
+}
 
 static void provider_replace_string(char **field, const char *value) {
     if (*field) free(*field);
@@ -67,12 +144,12 @@ void init_provider_config(AppContext *app) {
     if (!app) return;
 
     ProviderConfig *provider = &app->provider_config;
-    const char *name = app->provider ? app->provider : "openai";
-    const char *model = app->model ? app->model : NULL;
+    const char *name = app->provider_config.provider ? app->provider_config.provider : "openai";
+    const char *model = app->aiterm_runtime.model ? app->aiterm_runtime.model : NULL;
 
     free_provider_config(provider);
     provider_replace_string(&provider->name, name);
-    provider_replace_string(&provider->api_key, app->api_key);
+    provider_replace_string(&provider->api_key, app->security.api_key);
 
     if (strcasecmp(name, "gemini") == 0) {
         provider->kind = PROVIDER_KIND_GEMINI_GENERATE;
@@ -132,11 +209,11 @@ void* init_db_thread_worker(void *data) {
     } else {
         DEBUG_PRINT("[DEBUG]: Database offline. History will not be saved.\n");
     }
-    pthread_mutex_lock(&app->db_init_mutex);
+    pthread_mutex_lock(&app->access.db_init_mutex);
     DEBUG_PRINT("[DEBUG]: INIT_DB_THREAD_WORKER: Locked DB init Mutex\n");
-    app->db_initialized = TRUE;
-    pthread_cond_signal(&app->db_init_cond); // Wake up waiting threads
-    pthread_mutex_unlock(&app->db_init_mutex);
+    app->sys.db_initialized = TRUE;
+    pthread_cond_signal(&app->access.db_init_cond); // Wake up waiting threads
+    pthread_mutex_unlock(&app->access.db_init_mutex);
     DEBUG_PRINT("[DEBUG]: INIT_DB_THREAD_WORKER: Unlocked DB init Mutex\n");
     // CRITICAL: Clean up thread-specific MySQL memory
     mysql_thread_end();
@@ -162,15 +239,15 @@ void display_all_history(AppContext *app) {
     GString *history_output = g_string_new("");
     MYSQL_RES *res = NULL;
     // If this fails, it safely jumps to cleanup where mysql_thread_end() handles it
-    if (!global_app->global_db_conn) {
+    if (!global_app->database.global_db_conn) {
         cmd_reset_db_connect(app, NULL);
         goto cleanup;
     }
 
     // LOCK: Ensure only one thread uses the database pipe at a time
-    pthread_mutex_lock(&global_app->db_mutex);
+    pthread_mutex_lock(&global_app->access.db_mutex);
     DEBUG_PRINT("[DEBUG]: DISPLAY_ALL_HISTORY: Locked DB Mutex\n");
-    if (!app->global_db_conn) {
+    if (!app->database.global_db_conn) {
         write_to_ai_pane(app, "System: ", "Database connection is not active.", "cmd_tag", "cmd_tag");
         goto cleanup;
     }
@@ -182,12 +259,12 @@ void display_all_history(AppContext *app) {
         uuid_filter);
 
 
-    if (mysql_query(app->global_db_conn, query)) {
+    if (mysql_query(app->database.global_db_conn, query)) {
         write_to_ai_pane(app, "System: ", "Error fetching history from database.", "cmd_tag", "cmd_tag");
         goto cleanup;
     }
     DEBUG_PRINT("[DEBUG]: DISPLAY_ALL_HISTORY: Query %s\n", query);
-    res = mysql_store_result(app->global_db_conn);
+    res = mysql_store_result(app->database.global_db_conn);
     if (!res) goto cleanup;
 
     // Use a GString to build the history output
@@ -216,7 +293,7 @@ void display_all_history(AppContext *app) {
         res = NULL;
     }
 
-    pthread_mutex_unlock(&global_app->db_mutex);
+    pthread_mutex_unlock(&global_app->access.db_mutex);
     DEBUG_PRINT("[DEBUG]: DISPLAY_ALL_HISTORY: Unlocked DB Mutex\n");
     mysql_thread_end();
     return;
@@ -231,7 +308,7 @@ void* db_worker_thread(void *arg) {
     if (!data) { DEBUG_PRINT("[DEBUG]: [WORKER] Received NULL data pointer!\n"); return NULL; }
     extern AppContext *global_app;
 
-    if (!global_app->global_db_conn) goto cleanup;
+    if (!global_app->database.global_db_conn) goto cleanup;
 
     // ROUTING LOGIC: Respect the write_to_global flag
     const char *target_uuid = global_app->session.write_to_global
@@ -239,15 +316,15 @@ void* db_worker_thread(void *arg) {
                               : global_app->session.session_uuid;
 
     // LOCK: Ensure only one thread uses the database pipe at a time
-    pthread_mutex_lock(&global_app->db_mutex);
+    pthread_mutex_lock(&global_app->access.db_mutex);
     DEBUG_PRINT("[DEBUG]: [WORKER] Locked DB Mutex\n");
     DEBUG_PRINT("[DEBUG]: [WORKER] Starting job for seq %d, is_tee=%d\n", data->sequence_id, data->is_tee);
     if (data->is_tee) {
         char *esc_out = malloc(strlen(data->terminal_output) * 2 + 1);
         char *esc_ai = malloc(strlen(data->ai_analysis) * 2 + 1);
 
-        mysql_real_escape_string(global_app->global_db_conn, esc_out, data->terminal_output, strlen(data->terminal_output));
-        mysql_real_escape_string(global_app->global_db_conn, esc_ai, data->ai_analysis, strlen(data->ai_analysis));
+        mysql_real_escape_string(global_app->database.global_db_conn, esc_out, data->terminal_output, strlen(data->terminal_output));
+        mysql_real_escape_string(global_app->database.global_db_conn, esc_ai, data->ai_analysis, strlen(data->ai_analysis));
 
         size_t query_len = strlen(esc_out) + strlen(esc_ai) + strlen(data->session_uuid) + 1024;
         char *query = malloc(query_len);
@@ -256,15 +333,15 @@ void* db_worker_thread(void *arg) {
                      "INSERT INTO aiterm_history (role, content, is_tee, session_uuid, sequence_id) VALUES "
                      "('terminal', '%s', 1, '%s', %d), ('assistant', '%s', 1, '%s', %d)",
                      esc_out, target_uuid, data->sequence_id, esc_ai, data->session_uuid, data->sequence_id);
-            mysql_query(global_app->global_db_conn, query);
+            mysql_query(global_app->database.global_db_conn, query);
             free(query);
         }
         free(esc_out); free(esc_ai);
     } else {
         char *esc_user = malloc(strlen(data->user_text) * 2 + 1);
         char *esc_ai = malloc(strlen(data->ai_text) * 2 + 1);
-        mysql_real_escape_string(global_app->global_db_conn, esc_user, data->user_text, strlen(data->user_text));
-        mysql_real_escape_string(global_app->global_db_conn, esc_ai, data->ai_text, strlen(data->ai_text));
+        mysql_real_escape_string(global_app->database.global_db_conn, esc_user, data->user_text, strlen(data->user_text));
+        mysql_real_escape_string(global_app->database.global_db_conn, esc_ai, data->ai_text, strlen(data->ai_text));
 
         size_t query_len = strlen(esc_user) + strlen(esc_ai) + strlen(data->session_uuid) + 512;
         char *query = malloc(query_len);
@@ -273,13 +350,13 @@ void* db_worker_thread(void *arg) {
                      "INSERT INTO aiterm_history (role, content, is_tee, session_uuid, sequence_id) " // ADD sequence_id
                      "VALUES ('user', '%s', 0, '%s', %d), ('assistant', '%s', 0, '%s', %d)",         // ADD %d twice
                      esc_user, target_uuid, data->sequence_id, esc_ai, data->session_uuid, data->sequence_id);
-            mysql_query(global_app->global_db_conn, query);
+            mysql_query(global_app->database.global_db_conn, query);
             free(query);
         }
         free(esc_user); free(esc_ai);
     }
     // UNLOCK: Let the next thread in
-    pthread_mutex_unlock(&global_app->db_mutex);
+    pthread_mutex_unlock(&global_app->access.db_mutex);
     DEBUG_PRINT("[DEBUG]: [WORKER] Unlocked DB Mutex]n\n");
     cleanup:
     if (data->terminal_output) free(data->terminal_output);
@@ -314,43 +391,43 @@ char* build_delta_sync_query(AppContext *app) {
 // Modified 0.7.4-delta to handle global mysql connection
 int init_remote_db(AppContext *app) {
     // 1. Initialize the GLOBAL handle
-    app->global_db_conn = mysql_init(NULL);
-    if (app->global_db_conn == NULL) return 0;
+    app->database.global_db_conn = mysql_init(NULL);
+    if (app->database.global_db_conn == NULL) return 0;
 
     // === NEW: Set a 3-second connection timeout ===
     unsigned int timeout = 3; // 3 seconds
-    mysql_options(app->global_db_conn, MYSQL_OPT_CONNECT_TIMEOUT, (const char *)&timeout);
+    mysql_options(app->database.global_db_conn, MYSQL_OPT_CONNECT_TIMEOUT, (const char *)&timeout);
 
     my_bool reconnect = 1;
-    mysql_options(app->global_db_conn, MYSQL_OPT_RECONNECT, &reconnect);
+    mysql_options(app->database.global_db_conn, MYSQL_OPT_RECONNECT, &reconnect);
 
     // NEW: Set read/write timeouts for queries so they don't hang forever
-    // mysql_options(app->global_db_conn, MYSQL_OPT_READ_TIMEOUT, (const char *)&timeout);
-    // mysql_options(app->global_db_conn, MYSQL_OPT_WRITE_TIMEOUT, (const char *)&timeout);
+    // mysql_options(app->database.global_db_conn, MYSQL_OPT_READ_TIMEOUT, (const char *)&timeout);
+    // mysql_options(app->database.global_db_conn, MYSQL_OPT_WRITE_TIMEOUT, (const char *)&timeout);
 
-    DEBUG_PRINT("[DEBUG]: [DB] Connecting to %s (timeout: %us)...\n", app->db_host, timeout);
+    DEBUG_PRINT("[DEBUG]: [DB] Connecting to %s (timeout: %us)...\n", app->database.db_host, timeout);
     // 2. Connect to the server (No DB selected yet)
-    if (mysql_real_connect(app->global_db_conn, app->db_host, app->db_user, app->db_pass, NULL, 0, NULL, 0) == NULL) {
-        DEBUG_PRINT("[DEBUG]: DB Connection Error: %s\n", mysql_error(app->global_db_conn));
-        mysql_close(app->global_db_conn);
-        app->global_db_conn = NULL;
+    if (mysql_real_connect(app->database.global_db_conn, app->database.db_host, app->database.db_user, app->database.db_pass, NULL, 0, NULL, 0) == NULL) {
+        DEBUG_PRINT("[DEBUG]: DB Connection Error: %s\n", mysql_error(app->database.global_db_conn));
+        mysql_close(app->database.global_db_conn);
+        app->database.global_db_conn = NULL;
         return 0;
     }
     DEBUG_PRINT("[DEBUG]: [DB] Successfully connected to database host.\n");
 
     // 3. Create and Select Database
     char db_query[256];
-    snprintf(db_query, sizeof(db_query), "CREATE DATABASE IF NOT EXISTS %s", app->db_name);
+    snprintf(db_query, sizeof(db_query), "CREATE DATABASE IF NOT EXISTS %s", app->database.db_name);
 
     DEBUG_PRINT("[DEBUG]: [DB] Executing: %s\n", db_query);
-    mysql_query(app->global_db_conn, db_query);
+    mysql_query(app->database.global_db_conn, db_query);
 
-    DEBUG_PRINT("[DEBUG]: [DB] Selecting database: %s\n", app->db_name);
-    mysql_select_db(app->global_db_conn, app->db_name);
+    DEBUG_PRINT("[DEBUG]: [DB] Selecting database: %s\n", app->database.db_name);
+    mysql_select_db(app->database.global_db_conn, app->database.db_name);
 
     // 4. Create History Table
     DEBUG_PRINT("[DEBUG]: [DB] Executing: CREATE TABLE IF NOT EXISTS aiterm_history\n");
-    mysql_query(app->global_db_conn, "CREATE TABLE IF NOT EXISTS aiterm_history (id INT AUTO_INCREMENT PRIMARY KEY)");
+    mysql_query(app->database.global_db_conn, "CREATE TABLE IF NOT EXISTS aiterm_history (id INT AUTO_INCREMENT PRIMARY KEY)");
 
     // 5. Run Migrations
     const char* migrations[] = {
@@ -364,7 +441,7 @@ int init_remote_db(AppContext *app) {
 
     for (int i = 0; i < sizeof(migrations)/sizeof(char*); i++) {
         DEBUG_PRINT("[DEBUG]: [DB] Running migration query [%d]: %s\n", i, migrations[i]);
-        mysql_query(app->global_db_conn, migrations[i]);
+        mysql_query(app->database.global_db_conn, migrations[i]);
     }
 
     // 6. Setup Triggers Table
@@ -375,7 +452,7 @@ int init_remote_db(AppContext *app) {
         "hit_count INT DEFAULT 1, "
         "last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON DUPLICATE KEY UPDATE last_used=CURRENT_TIMESTAMP)";
     DEBUG_PRINT("[DEBUG]: [DB] Executing: CREATE TABLE IF NOT EXISTS relevance_triggers\n");
-    mysql_query(app->global_db_conn, trigger_table_query);
+    mysql_query(app->database.global_db_conn, trigger_table_query);
 
     const char *command_policy_table =
 	"CREATE TABLE IF NOT EXISTS command_policies ("
@@ -385,7 +462,7 @@ int init_remote_db(AppContext *app) {
 	"updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON DUPLICATE KEY UPDATE updated_at=CURRENT_TIMESTAMP"
 	")";
     DEBUG_PRINT("[DEBUG]: [DB] Executing: CREATE TABLE IF NOT EXISTS command_policies\n");
-    mysql_query(app->global_db_conn, command_policy_table);
+    mysql_query(app->database.global_db_conn, command_policy_table);
 
 
     DEBUG_PRINT("[DEBUG]: [DB] init_remote_db sequence fully complete!\n");
@@ -394,31 +471,31 @@ int init_remote_db(AppContext *app) {
 
 // 0.7.4-delta modified to use global mysql connection
 void extract_and_save_keywords(AppContext *app, const char *text) {
-    if (!text || !app || !app->global_db_conn) return;
+    if (!text || !app || !app->database.global_db_conn) return;
 
     mysql_thread_init();
     char *buf = strdup(text);
     char *token = strtok(buf, " ,.!?;:()[]\"");
 
-    pthread_mutex_lock(&app->db_mutex);
+    pthread_mutex_lock(&app->access.db_mutex);
 
     while (token != NULL) {
         if (strlen(token) > 3 && (isupper(token[0]) || strpbrk(token, "0123456789-"))) {
             char query[1024];
             char esc_token[256];
-            mysql_real_escape_string(app->global_db_conn, esc_token, token, strlen(token));
+            mysql_real_escape_string(app->database.global_db_conn, esc_token, token, strlen(token));
 
 		            snprintf(query, sizeof(query),
                      "INSERT INTO relevance_triggers (keyword, hit_count) "
                      "VALUES ('%s', 1) "
                      "ON DUPLICATE KEY UPDATE hit_count = hit_count + 1, last_used = CURRENT_TIMESTAMP", 
                      esc_token);
-            mysql_query(app->global_db_conn, query);
+            mysql_query(app->database.global_db_conn, query);
         }
         token = strtok(NULL, " ,.!?;:()[]\"");
     }
 
-    pthread_mutex_unlock(&app->db_mutex);
+    pthread_mutex_unlock(&app->access.db_mutex);
     free(buf);
     mysql_thread_end();
 }
@@ -427,22 +504,22 @@ void extract_and_save_keywords(AppContext *app, const char *text) {
 // Updated load_history_to_gemini
 // 0.7.4-delta modified to use global mysql connection
 void load_history_to_gemini(AppContext *app, struct json_object *contents_array, const char *current_prompt) {
-    if (!app->global_db_conn) return;
+    if (!app->database.global_db_conn) return;
     int count=0;
     mysql_thread_init();
-    pthread_mutex_lock(&app->db_mutex);
+    pthread_mutex_lock(&app->access.db_mutex);
     DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_GEMINI: Locked DB Mutex\n");
     char *uuid_filter = get_uuid_filter(global_app);
+
+
     const char *query = g_strdup_printf(
-        "SELECT role, content FROM ("
-        "  SELECT role, content, created_at FROM aiterm_history "
-        "  WHERE session_uuid %s AND is_tee = 0 AND sequence_id > %d"
-        "  ORDER BY sequence_id DESC LIMIT 100"
-        ") AS sub ORDER BY created_at ASC", uuid_filter, app->session.last_sent_db_id);
+        "  SELECT role, content FROM aiterm_history "
+        "  WHERE session_uuid %s"
+        "  ORDER BY created_at DESC LIMIT 100", uuid_filter);
 
     DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_GEMINI: Query %s\n", query);
-    if (mysql_query(app->global_db_conn, query) == 0) {
-        MYSQL_RES *res = mysql_store_result(app->global_db_conn);
+    if (mysql_query(app->database.global_db_conn, query) == 0) {
+        MYSQL_RES *res = mysql_store_result(app->database.global_db_conn);
         MYSQL_ROW row;
         while ((row = mysql_fetch_row(res))) {
             count++;
@@ -452,11 +529,23 @@ void load_history_to_gemini(AppContext *app, struct json_object *contents_array,
 
             const char* role = strcmp(row[0], "assistant") == 0 ? "model" : "user";
 
+            // Apply noise filter to the data being loaded from the database
+            char *data = noise_filter_apply(app, row[1]);
+
 	    // WRAPPING LOGIC:
             // Wrap the database row content in the <history> tag
-            char *wrapped_content = g_strdup_printf(
-		"<history session_uuid=\"%s\">\n%s\n</history>",
-		app->session.session_uuid, row[1]);
+            if        (strcmp(role, "model") == 0) {
+               app->xml.type = TAG_HISTORY;
+            } else if (strcmp(role, "user") == 0) {
+               app->xml.type = TAG_MEMORY;
+            } else {
+               app->xml.type = TAG_LOG_DUMP;
+            }
+            // Added 0.9.5-beta
+            char *wrapped_content = g_strdup(xml_wrap(app, data));
+
+            // Old tag code
+            //g_strdup_printf("<history session_uuid=\"%s\">\n%s\n</history>",app->session.session_uuid, data);
 
             json_object_object_add(part, "text", json_object_new_string(wrapped_content));
             json_object_array_add(parts_array, part);
@@ -468,7 +557,7 @@ void load_history_to_gemini(AppContext *app, struct json_object *contents_array,
         mysql_free_result(res);
     }
     DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_GEMINI: Sent %d rows to AI\n", count);
-    pthread_mutex_unlock(&app->db_mutex);
+    pthread_mutex_unlock(&app->access.db_mutex);
     DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_GEMINI: Unlocked DB Mutex\n");
     mysql_thread_end();
 }
@@ -609,15 +698,15 @@ void save_to_history(const char *user_text, const char *ai_text) {
     extract_and_save_keywords(global_app, cleaned_ai_text); // Use cleaned text for keywords too
 }
 
-void save_tee_to_history(const char *terminal_output, const char *ai_analysis) {
+void save_tee_to_history(const char *terminal_text, const char *ai_analysis) {
     extern AppContext *global_app;
 
-    if (!terminal_output || !ai_analysis || !global_app->session.session_uuid) {
+    if (!terminal_text || !ai_analysis || !global_app->session.session_uuid) {
        DEBUG_PRINT("[DEBUG]: [TEE_SAVE] WARNING: Invalid inputs detected. Aborting.\n");
        return;
     }
 
-    if (ignore_tee_line(global_app, terminal_output)) return;
+    char *terminal_output = noise_filter_apply(global_app, terminal_text);
 
     mysql_thread_init();
     // Apply strip_blank_lines to clean the text before saving
@@ -635,8 +724,8 @@ void save_tee_to_history(const char *terminal_output, const char *ai_analysis) {
     data->terminal_output = cleaned_terminal_output; // Assign the cleaned text
     data->ai_analysis = cleaned_ai_analysis;         // Assign the cleaned text
     data->session_uuid = strdup(global_app->session.session_uuid);
-    data->sequence_id = global_app->sequence_id;
-    global_app->sequence_id++;
+    data->sequence_id = global_app->database.sequence_id;
+    global_app->database.sequence_id++;
     data->is_tee = 1;
     data->user_text = NULL;
     data->ai_text = NULL;
@@ -661,12 +750,12 @@ void save_tee_to_history(const char *terminal_output, const char *ai_analysis) {
 // updated 0.7.4-delta to use global mysql connection
 void load_history_to_api(struct json_object *messages_array) {
     extern AppContext *global_app;
-    if (!global_app || !global_app->global_db_conn) return;
+    if (!global_app || !global_app->database.global_db_conn) return;
 
     mysql_thread_init();
-    pthread_mutex_lock(&global_app->db_mutex);
+    pthread_mutex_lock(&global_app->access.db_mutex);
 
-    DEBUG_PRINT("[DEBUG] LOAD_HISTORY_TO_GEMINI: Locked DB Mutex\n");
+    DEBUG_PRINT("[DEBUG] LOAD_HISTORY_TO_API: Locked DB Mutex\n");
     char *uuid_filter = get_uuid_filter(global_app);
     const char *query = g_strdup_printf(
         "SELECT role, content FROM ("
@@ -675,10 +764,10 @@ void load_history_to_api(struct json_object *messages_array) {
         "  ORDER BY sequence_id DESC LIMIT 100"
         ") AS sub ORDER BY created_at ASC", uuid_filter, global_app->session.last_sent_db_id);
 
-    DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_GEMINI: Query %s\n", query);
+    DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_API: Query %s\n", query);
 
-    if (mysql_query(global_app->global_db_conn, query) == 0) {
-        MYSQL_RES *res = mysql_store_result(global_app->global_db_conn);
+    if (mysql_query(global_app->database.global_db_conn, query) == 0) {
+        MYSQL_RES *res = mysql_store_result(global_app->database.global_db_conn);
         MYSQL_ROW row;
 
         while ((row = mysql_fetch_row(res))) {
@@ -690,7 +779,8 @@ void load_history_to_api(struct json_object *messages_array) {
         mysql_free_result(res);
     }
 
-    pthread_mutex_unlock(&global_app->db_mutex);
+    pthread_mutex_unlock(&global_app->access.db_mutex);
+    DEBUG_PRINT("[DEBUG] LOAD_HISTORY_TO_API: Unlocked DB Mutex\n");
     mysql_thread_end();
 }
 
@@ -747,14 +837,15 @@ char* extract_ai_command(const char *text) {
 }
 
 // brief Removes blank lines (empty or containing only whitespace) from a string.
-char* strip_blank_lines(const char *input_string) {
-    if (!input_string) {
+char* strip_blank_lines(const char *input_text) {
+    if (!input_text) {
         return NULL;
     }
-    if (input_string[0] == '\0') {
+    if (input_text[0] == '\0') {
         return g_strdup("");
     }
-    DEBUG_PRINT("[DEBUG]: [STRIP] Input length: %zu\n", strlen(input_string));
+    long in_len = strlen(input_text);
+    char *input_string = g_strdup(noise_filter_apply(global_app, input_text));
     int trimmed_count=0;
     GString *output_buffer = g_string_new("");
     char **lines = g_strsplit(input_string, "\n", -1);
@@ -774,6 +865,14 @@ char* strip_blank_lines(const char *input_string) {
     if (output_buffer->len > 0 && output_buffer->str[output_buffer->len - 1] == '\n') {
         g_string_set_size(output_buffer, output_buffer->len - 1);
     }
-    DEBUG_PRINT("[DEBUG]: Stripped %d blank lines\n", trimmed_count);
+    DEBUG_PRINT("[DEBUG]: [Blank Lines] Input length: %ld bytes, Output length: %ld bytes. Stripped %d blank lines\n",
+          in_len, output_buffer->len, trimmed_count);
     return g_string_free(output_buffer, FALSE);
 }
+
+void print_version() {
+    printf("aiterm version %-16s\n", AITERM_VERSION);
+    printf("Build ID: %s\n", AITERM_BUILDID);
+    printf("Build Time: %s\n", AITERM_BUILD_TIME);
+}
+

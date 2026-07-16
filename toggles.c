@@ -52,6 +52,9 @@ gboolean toggle_function(AppContext *app, ToggleType toggle_type, GtkCheckMenuIt
         case TOGGLE_AUTOEXE:
             snprintf(command_buffer, sizeof(command_buffer), "autoexe %s", state_str);
             break;
+        case TOGGLE_DEBUG:
+            snprintf(command_buffer, sizeof(command_buffer), "debug %s", state_str);
+            break;
         case TOGGLE_NOISE_FILTER:
             snprintf(command_buffer, sizeof(command_buffer), "noise filter %s", state_str);
             break;
@@ -69,6 +72,9 @@ gboolean toggle_function(AppContext *app, ToggleType toggle_type, GtkCheckMenuIt
             break;
         case TOGGLE_TEE:
             snprintf(command_buffer, sizeof(command_buffer), "tee %s", state_str);
+            break;
+        case TOGGLE_XML:
+            snprintf(command_buffer, sizeof(command_buffer), "xml tagging %s", state_str);
             break;
         default:
             g_warning("toggle_function: Unknown toggle type %d", toggle_type);

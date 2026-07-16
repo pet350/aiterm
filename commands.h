@@ -27,7 +27,10 @@ gboolean ui_display_list(gpointer data);
 gboolean ui_display_show(gpointer data);
 gboolean execute_command(AppContext *app, const char *input);
 
+void parse_command_line_options(AppContext *app, int argc, char *argv[]);
 void display_dynamic_help(AppContext *app);
+void cmd_show_command_line_help_wrapper(AppContext *app, const char *args);
+void cmd_invalidate_cache(AppContext *app, const char *args);
 
 // Handle Wrapper Prototypes
 void handle_help_wrapper(AppContext *app, const char *args);
@@ -69,15 +72,24 @@ void cmd_policy_manager_wrapper(AppContext *app, const char *args);
 void cmd_noise_add(AppContext *app, const char *args);
 void cmd_noise_list(AppContext *app, const char *args);
 void cmd_noise_delete(AppContext *app, const char *args);
+void cmd_noisefilter_reload_wrapper(AppContext *app, const char *args);
+
+// close different manager windows
+void cmd_close_policy_manager_wrapper(AppContext *app, const char *args);
+void cmd_close_history_manager_wrapper(AppContext *app, const char *args);
+void cmd_close_session_manager_wrapper(AppContext *app, const char *args);
+void cmd_close_noise_manager_wrapper(AppContext *app, const char *args);
 
 // ============== Toggle ON / OFF Function Prototypes
 void cmd_toggle_auto_all(AppContext *app, const char *args);
 void cmd_toggle_tee(AppContext *app, const char *args);
 void cmd_toggle_autoexe(AppContext *app, const char *args);
 void cmd_toggle_autoreply(AppContext *app, const char *args);
+void cmd_toggle_debug(AppContext *app, const char *args);
 void cmd_toggle_noise_filter(AppContext *app, const char *args);
 void cmd_toggle_smart_cache(AppContext *app, const char *args);
 void cmd_toggle_ratelimit(AppContext *app, const char *args);
+void cmd_toggle_xml_tagging(AppContext *app, const char *args);
 
 #endif
 

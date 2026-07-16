@@ -28,5 +28,6 @@ void on_delete_selected_clicked(GtkWidget *button, gpointer user_data);
 void on_clear_all_clicked(GtkWidget *button, gpointer user_data);
 void on_dialog_destroy(GtkWidget *widget, gpointer user_data);
 void open_history_manager_window(AppContext *app);
+void close_history_manager(AppContext *app);
 
 #endif // HISTORY_MANAGER_GUI_H

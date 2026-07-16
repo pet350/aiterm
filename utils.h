@@ -25,9 +25,15 @@ char* extract_ai_text(const char *json);
 extern AppContext *global_app;
 extern int debug_mode;
 extern int tee_enabled;
+extern const char* AITERM_VERSION;
+extern const char* AITERM_BUILDID;
+extern const char* AITERM_BUILD_TIME;
+extern const char* CONFIG_FILE;
+
+
 
 #define DEBUG_PRINT(fmt, ...) \
-    do { if (global_app->debug_mode) fprintf(stderr, fmt, ##__VA_ARGS__); } while (0)
+    do { if (global_app->sys.debug_mode) fprintf(stderr, fmt, ##__VA_ARGS__); } while (0)
 
 typedef struct {
     char *user_text;
@@ -70,29 +76,32 @@ extern int history_count;
 extern const char* AITERM_VERSION;
 extern const char* AITERM_BUILDID;
 extern const char* CONFIG_FILE;
+
 size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp);
+int init_remote_db(AppContext *app);
 
 char* get_uuid_filter(AppContext *app);
 char* build_delta_sync_query(AppContext *app);
-void init_provider_config(AppContext *app);
-void free_provider_config(ProviderConfig *provider);
 char* extract_ai_text(const char *json);
 char* strip_ansi(const char *input); // Helpful for goal #2
 char* read_file_to_string(const char *path);
 char* extract_cmd_name(const char *input);
 char* extract_ai_command(const char *text);
-char* strip_blank_lines(const char *input_string);
+char* strip_blank_lines(const char *input_text);
+char* xml_wrap(AppContext *app, const char *input);
 
-int init_remote_db(AppContext *app); // Add this line
-
-void initialize_booleans(AppContext *app);
 void* init_db_thread_worker(void *data);
-void append_to_view(GtkWidget *view, const char *prefix, const char *text);
 void* db_worker_thread(void *arg);
+
+void print_version();
+void init_provider_config(AppContext *app);
+void free_provider_config(ProviderConfig *provider);
+void initialize_booleans(AppContext *app);
+void append_to_view(GtkWidget *view, const char *prefix, const char *text);
 void load_history_to_gemini(AppContext *app, struct json_object *contents_array, const char *current_prompt);
 void load_history_to_api(struct json_object *messages_array);
 void save_to_history(const char *user_text, const char *ai_text);
-void save_tee_to_history(const char *terminal_output, const char *ai_analysis);
+void save_tee_to_history(const char *terminal_text, const char *ai_analysis);
 void display_all_history(AppContext *app);
 void tee_handle_output(AppContext *app, const char *text) ;
 void tee_flush_timed(AppContext *app);
@@ -101,7 +110,6 @@ void feed_terminal_header(VteTerminal *terminal, const char *msg);
 gboolean is_ai_command(const char *text);
 
 #endif
-
 
 // End of utils.h
 

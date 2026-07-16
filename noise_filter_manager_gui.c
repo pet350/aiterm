@@ -22,23 +22,23 @@ void refresh_noise_list(NoiseFilterDialog *dlg) {
     if (!dlg || !dlg->app) return;
     gtk_list_store_clear(dlg->list_store);
 
-    pthread_mutex_lock(&dlg->app->db_mutex);
-    if (!dlg->app->global_db_conn) {
-        pthread_mutex_unlock(&dlg->app->db_mutex);
+    pthread_mutex_lock(&dlg->app->access.db_mutex);
+    if (!dlg->app->database.global_db_conn) {
+        pthread_mutex_unlock(&dlg->app->access.db_mutex);
         g_printerr("[ERROR]: Noise Filter Manager: Database connection not active.\n");
         return;
     }
 
     const char *query = "SELECT id, pattern, uuid FROM noise_filters ORDER BY id ASC";
-    if (mysql_query(dlg->app->global_db_conn, query) != 0) {
-        g_printerr("[ERROR]: MySQL Noise Filter query failed: %s\n", mysql_error(dlg->app->global_db_conn));
-        pthread_mutex_unlock(&dlg->app->db_mutex);
+    if (mysql_query(dlg->app->database.global_db_conn, query) != 0) {
+        g_printerr("[ERROR]: MySQL Noise Filter query failed: %s\n", mysql_error(dlg->app->database.global_db_conn));
+        pthread_mutex_unlock(&dlg->app->access.db_mutex);
         return;
     }
 
-    MYSQL_RES *result = mysql_store_result(dlg->app->global_db_conn);
+    MYSQL_RES *result = mysql_store_result(dlg->app->database.global_db_conn);
     if (!result) {
-        pthread_mutex_unlock(&dlg->app->db_mutex);
+        pthread_mutex_unlock(&dlg->app->access.db_mutex);
         return;
     }
 
@@ -57,7 +57,7 @@ void refresh_noise_list(NoiseFilterDialog *dlg) {
                            -1);
     }
     mysql_free_result(result);
-    pthread_mutex_unlock(&dlg->app->db_mutex);
+    pthread_mutex_unlock(&dlg->app->access.db_mutex);
 }
 
 void on_add_pattern_clicked(GtkWidget *button, gpointer user_data) {
@@ -65,20 +65,20 @@ void on_add_pattern_clicked(GtkWidget *button, gpointer user_data) {
     const char *pattern = gtk_entry_get_text(GTK_ENTRY(dlg->entry_pattern));
     if (!pattern || strlen(pattern) == 0) return;
 
-    pthread_mutex_lock(&dlg->app->db_mutex);
-    if (dlg->app->global_db_conn) {
+    pthread_mutex_lock(&dlg->app->access.db_mutex);
+    if (dlg->app->database.global_db_conn) {
         unsigned long len = strlen(pattern);
         char *escaped = g_malloc(len * 2 + 1);
-        mysql_real_escape_string(dlg->app->global_db_conn, escaped, pattern, len);
+        mysql_real_escape_string(dlg->app->database.global_db_conn, escaped, pattern, len);
 
         char *query = g_strdup_printf("INSERT INTO noise_filters (pattern, uuid) VALUES ('%s', UUID())", escaped);
-        if (mysql_query(dlg->app->global_db_conn, query) != 0) {
-            g_printerr("[ERROR]: Failed to insert noise filter: %s\n", mysql_error(dlg->app->global_db_conn));
+        if (mysql_query(dlg->app->database.global_db_conn, query) != 0) {
+            g_printerr("[ERROR]: Failed to insert noise filter: %s\n", mysql_error(dlg->app->database.global_db_conn));
         }
         g_free(query);
         g_free(escaped);
     }
-    pthread_mutex_unlock(&dlg->app->db_mutex);
+    pthread_mutex_unlock(&dlg->app->access.db_mutex);
 
     gtk_entry_set_text(GTK_ENTRY(dlg->entry_pattern), "");
     refresh_noise_list(dlg);
@@ -94,15 +94,15 @@ void on_delete_noise_clicked(GtkWidget *button, gpointer user_data) {
         int id;
         gtk_tree_model_get(model, &iter, COL_NOISE_ID, &id, -1);
 
-        pthread_mutex_lock(&dlg->app->db_mutex);
-        if (dlg->app->global_db_conn) {
+        pthread_mutex_lock(&dlg->app->access.db_mutex);
+        if (dlg->app->database.global_db_conn) {
             char *query = g_strdup_printf("DELETE FROM noise_filters WHERE id = %d", id);
-            if (mysql_query(dlg->app->global_db_conn, query) != 0) {
-                g_printerr("[ERROR]: Failed to delete noise filter: %s\n", mysql_error(dlg->app->global_db_conn));
+            if (mysql_query(dlg->app->database.global_db_conn, query) != 0) {
+                g_printerr("[ERROR]: Failed to delete noise filter: %s\n", mysql_error(dlg->app->database.global_db_conn));
             }
             g_free(query);
         }
-        pthread_mutex_unlock(&dlg->app->db_mutex);
+        pthread_mutex_unlock(&dlg->app->access.db_mutex);
 
         refresh_noise_list(dlg);
     }
@@ -111,7 +111,23 @@ void on_delete_noise_clicked(GtkWidget *button, gpointer user_data) {
 void on_dialog_noise_filter_Manager_destroy(GtkWidget *widget, gpointer user_data) {
     NoiseFilterDialog *dlg = (NoiseFilterDialog *)user_data;
     g_free(dlg);
+    global_app->manager.noise = NULL;
 }
+
+
+void close_noise_manager(AppContext *app) {
+    if (app->manager.noise != NULL) {
+        // Destroying the window will trigger the "destroy" signal, 
+        // which runs your existing on_dialog_noise_manager_gui_destroy
+        gtk_widget_destroy(app->manager.noise);
+        app->manager.noise = NULL;
+        write_to_ai_pane(app, "System", "Closed noise Manager Window.", "ai_tag", "cmd_tag");
+    } else {
+        write_to_ai_pane(app, "System", "noise Manager is not open.", "ai_tag", "cmd_tag");
+    }
+}
+
+
 
 void open_noise_filter_manager_window(AppContext *app) {
     NoiseFilterDialog *dlg = g_new0(NoiseFilterDialog, 1);
@@ -119,6 +135,7 @@ void open_noise_filter_manager_window(AppContext *app) {
 
     // FIX: Instantiate as a native Top-Level Window for flawless KDE taskbar tracking
     dlg->dialog = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    app->manager.noise = dlg->dialog;
     gtk_window_set_title(GTK_WINDOW(dlg->dialog), "Noise Filter Manager");
     gtk_window_set_default_size(GTK_WINDOW(dlg->dialog), 600, 400);
 

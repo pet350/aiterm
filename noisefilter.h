@@ -13,9 +13,16 @@
 #include <json-c/json.h>
 #include "gui.h"
 
+char* noise_filter_apply(AppContext *app, const char *raw_input);
+char* strip_ansi_sequences(const char *src);
+
+void noise_filter_load_from_db(AppContext *app);
+void remove_substring(char *str, const char *sub, gboolean dash);
 void noise_filter_list(AppContext *app);
 void noise_filter_add(AppContext *app, const char *filter_data);
+
+
 gboolean ignore_tee_line(AppContext *app, const char *line);
-void refresh_pattern_cache(AppContext *app);
+
 
 #endif

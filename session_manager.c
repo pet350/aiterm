@@ -39,23 +39,23 @@ void write_to_ai_pane_wrapper(AppContext *app, char *data) {
 
 void session_init(AppContext *app) {
     // 1. Setup Mutex and Condition Variable for DB sync
-    pthread_mutex_init(&app->db_init_mutex, NULL);
-    pthread_cond_init(&app->db_init_cond, NULL);
-    app->db_initialized = FALSE;
+    pthread_mutex_init(&app->access.db_init_mutex, NULL);
+    pthread_cond_init(&app->access.db_init_cond, NULL);
+    app->sys.db_initialized = FALSE;
 
     DEBUG_PRINT("[DEBUG]: SESSION_INIT: Waiting for DB_INIT Mutex to be unlocked.\n");
 
     // 2. Wait for the DB initialization thread to signal completion
-    pthread_mutex_lock(&app->db_init_mutex);
-    while (!app->db_initialized) {
-        pthread_cond_wait(&app->db_init_cond, &app->db_init_mutex);
+    pthread_mutex_lock(&app->access.db_init_mutex);
+    while (!app->sys.db_initialized) {
+        pthread_cond_wait(&app->access.db_init_cond, &app->access.db_init_mutex);
     }
-    pthread_mutex_unlock(&app->db_init_mutex);
+    pthread_mutex_unlock(&app->access.db_init_mutex);
 
     DEBUG_PRINT("[DEBUG]: SESSION_INIT: DB_INIT is complete, proceeding to lock Mutex for SESSION_INIT.\n");
 
     // 3. Initialize Session Mutex
-    pthread_mutex_init(&app->session_mutex, NULL);
+    pthread_mutex_init(&app->access.session_mutex, NULL);
 
     // 4. Set Initial Defaults
     app->session.history_cache = g_string_new("");
@@ -75,13 +75,13 @@ void session_init(AppContext *app) {
     }
 
     // 5. Query for Default Session
-    pthread_mutex_lock(&app->session_mutex);
+    pthread_mutex_lock(&app->access.session_mutex);
     MYSQL_RES *res = NULL;
 
     DEBUG_PRINT("[DEBUG]: SESSION_INIT: DB is ready. Querying is_default...\n");
     // Note: Ensure global_db_conn is initialized by the time we get here
-    if (mysql_query(app->global_db_conn, "SELECT uuid FROM sessions WHERE is_default = 1 LIMIT 1") == 0) {
-        res = mysql_store_result(app->global_db_conn);
+    if (mysql_query(app->database.global_db_conn, "SELECT uuid FROM sessions WHERE is_default = 1 LIMIT 1") == 0) {
+        res = mysql_store_result(app->database.global_db_conn);
         if (res) {
             MYSQL_ROW row = mysql_fetch_row(res);
             if (row) {
@@ -102,7 +102,7 @@ void session_init(AppContext *app) {
         DEBUG_PRINT("[DEBUG]: [SESSION]: Initialized NEW session: %s\n", app->session.session_uuid);
     }
 
-    pthread_mutex_unlock(&app->session_mutex);
+    pthread_mutex_unlock(&app->access.session_mutex);
     DEBUG_PRINT("[DEBUG]: SESSION_INIT: Unblocked SESSION Mutex\n");
 }
 
@@ -160,7 +160,7 @@ gpointer session_db_worker(gpointer data) {
     uuid_generate_random(new_uuid);
     uuid_unparse_lower(new_uuid, new_uuid_str);
 
-    pthread_mutex_lock(&app->db_mutex);
+    pthread_mutex_lock(&app->access.db_mutex);
     DEBUG_PRINT("[DEBUG]: SESSION_DB_WORKER: Locked DB mutex\n");
 
     switch (std->type) {
@@ -193,11 +193,11 @@ gpointer session_db_worker(gpointer data) {
             char *del_hist = g_strdup_printf("DELETE FROM aiterm_history WHERE session_uuid = '%s';", std->arg);
             DEBUG_PRINT("[DEBUG]: SESSION_DB_WORKER: Executing query: %s\n", del_hist);
 
-            if (mysql_query(app->global_db_conn, del_hist) == 0) {
-                my_ulonglong affected = mysql_affected_rows(app->global_db_conn);
+            if (mysql_query(app->database.global_db_conn, del_hist) == 0) {
+                my_ulonglong affected = mysql_affected_rows(app->database.global_db_conn);
                 DEBUG_PRINT("[DEBUG]: SESSION_DB_WORKER: Deleted %llu rows from history.\n", affected);
             } else {
-                DEBUG_PRINT("[ERROR]: SESSION_DB_WORKER: History delete failed: %s\n", mysql_error(app->global_db_conn));
+                DEBUG_PRINT("[ERROR]: SESSION_DB_WORKER: History delete failed: %s\n", mysql_error(app->database.global_db_conn));
             }
             g_free(del_hist);
             query = g_strdup_printf("DELETE FROM sessions WHERE uuid = '%s';", std->arg);
@@ -205,7 +205,7 @@ gpointer session_db_worker(gpointer data) {
         }
         case CMD_SESSION_DESCRIPTION: {
             if (std->arg) {
-                mysql_real_escape_string(app->global_db_conn, escaped_desc, std->arg, strlen(std->arg));
+                mysql_real_escape_string(app->database.global_db_conn, escaped_desc, std->arg, strlen(std->arg));
                 query = g_strdup_printf("UPDATE sessions SET description = '%s' WHERE uuid = '%s';",
                                         escaped_desc, app->session.session_uuid);
                 DEBUG_PRINT("[DEBUG]: SESSION_DB_WORKER: Updating description for %s to '%s'\n",
@@ -221,7 +221,7 @@ gpointer session_db_worker(gpointer data) {
         case CMD_SESSION_DEFAULT: {
             if (std->arg) {
                 // 1. Unset all defaults
-                mysql_query(app->global_db_conn, "UPDATE sessions SET is_default = 0");
+                mysql_query(app->database.global_db_conn, "UPDATE sessions SET is_default = 0");
                 // 2. Set the requested UUID as default
                 query = g_strdup_printf("UPDATE sessions SET is_default = 1 WHERE uuid = '%s'", std->arg);
                 DEBUG_PRINT("[DEBUG]: [SESSION]: Setting default session to %s\n", std->arg);
@@ -231,11 +231,11 @@ gpointer session_db_worker(gpointer data) {
     }
     if (query) {
         DEBUG_PRINT("[DEBUG]: SESSION_DB_WORKER: Case query %s\n", query);
-        if (mysql_query(app->global_db_conn, query) == 0) {
+        if (mysql_query(app->database.global_db_conn, query) == 0) {
             DEBUG_PRINT("[DEBUG]: SESSION_DB_WORKER: Successful execution of mysql query!\n");
 
             if (std->type == CMD_SESSION_LIST) {
-                MYSQL_RES *res = mysql_store_result(app->global_db_conn);
+                MYSQL_RES *res = mysql_store_result(app->database.global_db_conn);
                 if (res) {
                     SessionListResult *list_res = g_malloc0(sizeof(SessionListResult));
                     MYSQL_ROW row;
@@ -249,12 +249,12 @@ gpointer session_db_worker(gpointer data) {
                     mysql_free_result(res);
                 }
             } else if (std->type == CMD_SESSION_NEW) {
-                pthread_mutex_lock(&app->session_mutex);
+                pthread_mutex_lock(&app->access.session_mutex);
                 if (app->session.session_uuid) {
                     g_free(app->session.session_uuid);
                 }
                 app->session.session_uuid = g_strdup(new_uuid_str);
-                pthread_mutex_unlock(&app->session_mutex);
+                pthread_mutex_unlock(&app->access.session_mutex);
                 write_to_ai_pane_wrapper(app, " Session loaded successfully.");
 
                 SessionShowResult *show_res = g_malloc0(sizeof(SessionShowResult));
@@ -265,7 +265,7 @@ gpointer session_db_worker(gpointer data) {
             } else if (std->type == CMD_SESSION_DELETE ) {
                 g_idle_add((GSourceFunc)refresh_list_callback, app);
             } else if (std->type == CMD_SESSION_SHOW) {
-                MYSQL_RES *res = mysql_store_result(app->global_db_conn);
+                MYSQL_RES *res = mysql_store_result(app->database.global_db_conn);
                 if (res) {
                     MYSQL_ROW row = mysql_fetch_row(res);
                     SessionShowResult *show_res = g_malloc0(sizeof(SessionShowResult));
@@ -284,13 +284,13 @@ gpointer session_db_worker(gpointer data) {
                 write_to_ai_pane_wrapper(app, msg);
                 g_free(msg);
             } else if (std->type == CMD_SESSION_LOAD) {
-                MYSQL_RES *res = mysql_store_result(app->global_db_conn);
+                MYSQL_RES *res = mysql_store_result(app->database.global_db_conn);
                 if (res) {
                     if (mysql_num_rows(res) > 0) {
-                        pthread_mutex_lock(&app->session_mutex);
+                        pthread_mutex_lock(&app->access.session_mutex);
                         g_free(app->session.session_uuid);
                         app->session.session_uuid = g_strdup(std->arg);
-                        pthread_mutex_unlock(&app->session_mutex);
+                        pthread_mutex_unlock(&app->access.session_mutex);
                         write_to_ai_pane_wrapper(app, "Session loaded successfully.");
                     } else {
                         write_to_ai_pane_wrapper(app, "Error: Session UUID not found.");
@@ -304,16 +304,16 @@ gpointer session_db_worker(gpointer data) {
             } else if (std->type == CMD_SESSION_NO_DEFAULT) {
                    write_to_ai_pane_wrapper(app, "System: Default session cleared. Reverting to random sessions.");
             } else {
-                my_ulonglong affected = mysql_affected_rows(app->global_db_conn);
+                my_ulonglong affected = mysql_affected_rows(app->database.global_db_conn);
                 DEBUG_PRINT("[DEBUG]: SESSION_DB_WORKER: %llu row(s) affected.\n", affected);
             }
         } else {
-            DEBUG_PRINT("[DEBUG]: [ERROR] DB Query failed: %s\n", mysql_error(app->global_db_conn));
+            DEBUG_PRINT("[DEBUG]: [ERROR] DB Query failed: %s\n", mysql_error(app->database.global_db_conn));
         }
         g_free(query);
     }
 
-    pthread_mutex_unlock(&app->db_mutex);
+    pthread_mutex_unlock(&app->access.db_mutex);
     if (std->arg) g_free(std->arg);
     if (std) g_free(std);
 

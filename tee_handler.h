@@ -14,7 +14,7 @@
 void tee_handler_init(AppContext *app);
 char* tee_extract_for_ai(AppContext *app);
 void tee_handle_input(AppContext *app, const char *text);
-void tee_handle_output(AppContext *app, const char *text);
+void tee_handle_output(AppContext *app, const char *text_in);
 void tee_flush_timed(AppContext *app);
 
 #endif

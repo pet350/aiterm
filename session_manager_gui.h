@@ -27,5 +27,9 @@ void on_load_clicked(GtkButton *btn, gpointer user_data);
 void on_default_clicked(GtkButton *btn, gpointer user_data);
 void on_delete_clicked(GtkButton *btn, gpointer user_data);
 void open_session_manager_window(AppContext *app);
+void on_dialog_session_manager_gui_destroy(AppContext *app);
+void close_session_manager(AppContext *app);
+void on_rename_clicked(GtkButton *btn, gpointer user_data);
+void on_refresh_clicked(GtkButton *btn, gpointer user_data);
 
 #endif

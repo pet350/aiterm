@@ -26,24 +26,24 @@ void clear_terminal_ghosts(VteTerminal *terminal) {
 
 void apply_terminal_transparency(AppContext *app) {
     // Guard against uninitialized active terminal view
-    if (!app->terminal_view || !GTK_IS_WIDGET(app->terminal_view)) return;
+    if (!app->gui.terminal_view || !GTK_IS_WIDGET(app->gui.terminal_view)) return;
 
     GdkRGBA bg_color;
     gdk_rgba_parse(&bg_color, "#000000");
-    bg_color.alpha = app->transparency;
-    vte_terminal_set_color_background(VTE_TERMINAL(app->terminal_view), &bg_color);
+    bg_color.alpha = app->gui.transparency;
+    vte_terminal_set_color_background(VTE_TERMINAL(app->gui.terminal_view), &bg_color);
 }
 
 void apply_ai_transparency(AppContext *app) {
-    if (!app->gemini_view || !GTK_IS_WIDGET(app->gemini_view) || !app->ai_css_provider) return;
+    if (!app->gui.gemini_view || !GTK_IS_WIDGET(app->gui.gemini_view) || !app->gui.ai_css_provider) return;
 
     char *css = g_strdup_printf(
         "textview { font-family: '%s'; font-size: 10pt; }\n"
         "textview text { background-color: rgba(0, 0, 0, %f); color: #dcdcdc; }",
-        app->ai_font ? app->ai_font : "Monospace",
-        app->ai_transparency
+        app->gui.ai_font ? app->gui.ai_font : "Monospace",
+        app->gui.ai_transparency
     );
-    gtk_css_provider_load_from_data(app->ai_css_provider, css, -1, NULL);
+    gtk_css_provider_load_from_data(app->gui.ai_css_provider, css, -1, NULL);
     g_free(css);
 }
 
@@ -54,9 +54,9 @@ void apply_visual_settings(AppContext *app) {
     apply_terminal_transparency(app);
 
     // 2. Apply Terminal Font
-    if (app->terminal_font && app->terminal_view && GTK_IS_WIDGET(app->terminal_view)) {
-        PangoFontDescription *desc = pango_font_description_from_string(app->terminal_font);
-        vte_terminal_set_font(VTE_TERMINAL(app->terminal_view), desc);
+    if (app->gui.terminal_font && app->gui.terminal_view && GTK_IS_WIDGET(app->gui.terminal_view)) {
+        PangoFontDescription *desc = pango_font_description_from_string(app->gui.terminal_font);
+        vte_terminal_set_font(VTE_TERMINAL(app->gui.terminal_view), desc);
         pango_font_description_free(desc);
     }
 
@@ -64,9 +64,9 @@ void apply_visual_settings(AppContext *app) {
     apply_ai_transparency(app);
 
     // 4. Update AI Pane (GtkTextView) - Only run if the layout widget is fully instantiated
-    if (app->ai_font && app->gemini_view && GTK_IS_WIDGET(app->gemini_view)) {
-        PangoFontDescription *desc = pango_font_description_from_string(app->ai_font);
-        gtk_widget_override_font(app->gemini_view, desc);
+    if (app->gui.ai_font && app->gui.gemini_view && GTK_IS_WIDGET(app->gui.gemini_view)) {
+        PangoFontDescription *desc = pango_font_description_from_string(app->gui.ai_font);
+        gtk_widget_override_font(app->gui.gemini_view, desc);
         pango_font_description_free(desc);
     }
 }
@@ -87,32 +87,32 @@ static gboolean on_key_press(GtkWidget *terminal, GdkEventKey *event, gpointer u
 
 static gboolean throttled_delta_check(gpointer user_data) {
     AppContext *app = (AppContext *)user_data;
-    if (!app->terminal_view || !GTK_IS_WIDGET(app->terminal_view)) return TRUE;
+    if (!app->gui.terminal_view || !GTK_IS_WIDGET(app->gui.terminal_view)) return TRUE;
 
     long cur_row, cur_col;
-    vte_terminal_get_cursor_position(VTE_TERMINAL(app->terminal_view), &cur_col, &cur_row);
+    vte_terminal_get_cursor_position(VTE_TERMINAL(app->gui.terminal_view), &cur_col, &cur_row);
 
-    if (cur_row != app->last_row || cur_col != app->last_col) {
-        app->last_row = cur_row;
-        app->last_col = cur_col;
-        app->silence_ticks = 0;
+    if (cur_row != app->database.last_row || cur_col != app->database.last_col) {
+        app->database.last_row = cur_row;
+        app->database.last_col = cur_col;
+        app->database.silence_ticks = 0;
     } else {
-        app->silence_ticks++;
+        app->database.silence_ticks++;
 
         // Trigger after ~2 seconds of silence
-        if (app->silence_ticks == 8) {
+        if (app->database.silence_ticks == 8) {
             // ONLY get the text from where we last finished up to the current row
-	    g_mutex_lock(&app->buffer_mutex);
+	    g_mutex_lock(&app->access.buffer_mutex);
             // Define the range of new text
             char *new_text = vte_terminal_get_text_range(
-                VTE_TERMINAL(app->terminal_view),
-                app->last_processed_row, 0,  // Start from last row
+                VTE_TERMINAL(app->gui.terminal_view),
+                app->database.last_processed_row, 0,  // Start from last row
                 cur_row, cur_col,       // End at current cursor
                 NULL, NULL, NULL
             );
 
             if (new_text && strlen(new_text) > 1) {
-                app->last_processed_row = cur_row; // Move the pointer forward
+                app->database.last_processed_row = cur_row; // Move the pointer forward
 		char *cleaned_text = strip_blank_lines(new_text);
 		free(new_text);
 		new_text=g_strdup(cleaned_text); // yet another attempt at silencing the blanks
@@ -122,14 +122,14 @@ static gboolean throttled_delta_check(gpointer user_data) {
 //		        "<tee session_uuid=\"%s\" timestamp=\"%ld\">\n%s\n</tee>\n",
 //		        app->session.session_uuid, time(NULL), new_text);
 
-                if (app->tee_enabled || app->autoreply_enabled) {
+                if (app->sys.tee_enabled || app->sys.autoreply_enabled) {
                     // APPEND the new text, don't assign/overwrite!
-                    g_string_append(app->tee_accumulator, new_text);
+                    g_string_append(app->aiterm_runtime.tee_accumulator, new_text);
                 }
             }
-            g_mutex_unlock(&app->buffer_mutex);
+            g_mutex_unlock(&app->access.buffer_mutex);
             if (new_text) {
-                if (app->autoreply_enabled && strlen(new_text) > 1) {
+                if (app->sys.autoreply_enabled && strlen(new_text) > 1) {
                     tee_flush_timed(app);
                 }
                 g_free(new_text);
@@ -188,10 +188,10 @@ gboolean on_terminal_button_press(GtkWidget *terminal, GdkEventButton *event, gp
 }
 
 GtkWidget* setup_terminal(AppContext *app) {
-    app->last_row = 0;
-    app->last_col = 0;
-    app->silence_ticks = 0;
-    app->last_processed_row = 0;
+    app->database.last_row = 0;
+    app->database.last_col = 0;
+    app->database.silence_ticks = 0;
+    app->database.last_processed_row = 0;
 
     GtkWidget *new_term = vte_terminal_new();
 

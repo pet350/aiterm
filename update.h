@@ -29,6 +29,7 @@ const char* risk_int_to_str(int risk);
 
 gboolean update_gui_with_response(gpointer data);
 gboolean request_human_approval(AppContext *app, const char *input_text);
+gboolean refresh_token_display(gpointer data);
 
 #endif
 

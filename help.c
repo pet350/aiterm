@@ -17,17 +17,19 @@
 extern const char* AITERM_VERSION;
 extern const char* AITERM_BUILD_TIME;
 
-const char* FEATURES =
-    "Features:\n"
+const char* HIGHLIGHT_STRING =
+    "Application Highlights:\n"
     "  - Atomic 'Snapshot & Clear' Capture Pipeline (Race-Condition Proof)\n"
     "  - Dynamic SQL Allocation Engine (Supports unlimited terminal dumps)\n"
     "  - Deep Context 'Smart History' (100-message lookback via MariaDB)\n"
     "  - Multi-Tab VTE Architecture with isolated pointer synchronization\n"
-    "  - AI Integration (OpenAI/Gemini) with persistent analysis logging\n";
+    "  - AI Integration (OpenAI/Gemini) with persistent analysis logging\n"
+    "  - Contact: Peter Talbott\t\t\tpet.350.pt@gmail.com\n";
+
 
 const char* get_version_info() {
-    static char v_buf[512];
-    snprintf(v_buf, sizeof(v_buf), "AI-Term GTK Version: %-16s\nBuild ID: %s\nBuild Time: %s\nLocation: Weston, WV\n%s", AITERM_VERSION, AITERM_BUILDID, AITERM_BUILD_TIME, FEATURES);
+    static char v_buf[768];
+    snprintf(v_buf, sizeof(v_buf), "AI-Term GTK Version: %-16s\nBuild ID: %s\nBuild Time: %s\nLocation: Weston, WV\n%s", AITERM_VERSION, AITERM_BUILDID, AITERM_BUILD_TIME, HIGHLIGHT_STRING);
     return(v_buf);
 }
 

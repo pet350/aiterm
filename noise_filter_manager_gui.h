@@ -32,5 +32,6 @@ void on_add_pattern_clicked(GtkWidget *button, gpointer user_data);
 void on_delete_noise_clicked(GtkWidget *button, gpointer user_data);
 void on_dialog_noise_filter_Manager_destroy(GtkWidget *widget, gpointer user_data);
 void open_noise_filter_manager_window(AppContext *app);
+void close_noise_manager(AppContext *app);
 
 #endif // NOISE_FILTER_MANAGER_GUI_H

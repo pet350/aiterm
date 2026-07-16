@@ -44,26 +44,26 @@ void refresh_history_list(HistoryManagerDialog *dlg) {
         query = g_strdup("SELECT id, role, content, session_uuid FROM aiterm_history ORDER BY id DESC LIMIT 500");
     }
 
-    pthread_mutex_lock(&dlg->app->db_mutex);
-    if (!dlg->app->global_db_conn) {
-        pthread_mutex_unlock(&dlg->app->db_mutex);
+    pthread_mutex_lock(&dlg->app->access.db_mutex);
+    if (!dlg->app->database.global_db_conn) {
+        pthread_mutex_unlock(&dlg->app->access.db_mutex);
         g_free(query);
         g_printerr("[ERROR]: History Manager: Database connection not active.\n");
         return;
     }
 
-    if (mysql_query(dlg->app->global_db_conn, query) != 0) {
-        g_printerr("[ERROR]: MySQL History query failed: %s\n", mysql_error(dlg->app->global_db_conn));
-        pthread_mutex_unlock(&dlg->app->db_mutex);
+    if (mysql_query(dlg->app->database.global_db_conn, query) != 0) {
+        g_printerr("[ERROR]: MySQL History query failed: %s\n", mysql_error(dlg->app->database.global_db_conn));
+        pthread_mutex_unlock(&dlg->app->access.db_mutex);
         g_free(query);
         return;
     }
 
     g_free(query);
 
-    MYSQL_RES *result = mysql_store_result(dlg->app->global_db_conn);
+    MYSQL_RES *result = mysql_store_result(dlg->app->database.global_db_conn);
     if (!result) {
-        pthread_mutex_unlock(&dlg->app->db_mutex);
+        pthread_mutex_unlock(&dlg->app->access.db_mutex);
         return;
     }
 
@@ -86,7 +86,7 @@ void refresh_history_list(HistoryManagerDialog *dlg) {
     }
 
     mysql_free_result(result);
-    pthread_mutex_unlock(&dlg->app->db_mutex);
+    pthread_mutex_unlock(&dlg->app->access.db_mutex);
 }
 
 void on_delete_selected_clicked(GtkWidget *button, gpointer user_data) {
@@ -99,15 +99,15 @@ void on_delete_selected_clicked(GtkWidget *button, gpointer user_data) {
         int id;
         gtk_tree_model_get(model, &iter, COL_ID, &id, -1);
 
-        pthread_mutex_lock(&dlg->app->db_mutex);
-        if (dlg->app->global_db_conn) {
+        pthread_mutex_lock(&dlg->app->access.db_mutex);
+        if (dlg->app->database.global_db_conn) {
             char *query = g_strdup_printf("DELETE FROM aiterm_history WHERE id = %d", id);
-            if (mysql_query(dlg->app->global_db_conn, query) != 0) {
-                g_printerr("[ERROR]: Failed to delete history item: %s\n", mysql_error(dlg->app->global_db_conn));
+            if (mysql_query(dlg->app->database.global_db_conn, query) != 0) {
+                g_printerr("[ERROR]: Failed to delete history item: %s\n", mysql_error(dlg->app->database.global_db_conn));
             }
             g_free(query);
         }
-        pthread_mutex_unlock(&dlg->app->db_mutex);
+        pthread_mutex_unlock(&dlg->app->access.db_mutex);
 
         refresh_history_list(dlg);
     }
@@ -153,18 +153,18 @@ void on_clear_all_clicked(GtkWidget *button, gpointer user_data) {
         query = g_strdup("TRUNCATE TABLE aiterm_history");
     }
 
-    pthread_mutex_lock(&dlg->app->db_mutex);
-    if (dlg->app->global_db_conn) {
-        if (mysql_query(dlg->app->global_db_conn, query) != 0) {
+    pthread_mutex_lock(&dlg->app->access.db_mutex);
+    if (dlg->app->database.global_db_conn) {
+        if (mysql_query(dlg->app->database.global_db_conn, query) != 0) {
             // Safe fallback condition for TRUNCATE failure cases
             if (!filter_current) {
-                mysql_query(dlg->app->global_db_conn, "DELETE FROM aiterm_history");
+                mysql_query(dlg->app->database.global_db_conn, "DELETE FROM aiterm_history");
             } else {
-                g_printerr("[ERROR]: Failed to clear target data criteria: %s\n", mysql_error(dlg->app->global_db_conn));
+                g_printerr("[ERROR]: Failed to clear target data criteria: %s\n", mysql_error(dlg->app->database.global_db_conn));
             }
         }
     }
-    pthread_mutex_unlock(&dlg->app->db_mutex);
+    pthread_mutex_unlock(&dlg->app->access.db_mutex);
     g_free(query);
 
     refresh_history_list(dlg);
@@ -173,17 +173,33 @@ void on_clear_all_clicked(GtkWidget *button, gpointer user_data) {
 void on_dialog_destroy(GtkWidget *widget, gpointer user_data) {
     HistoryManagerDialog *dlg = (HistoryManagerDialog *)user_data;
     g_free(dlg);
+    global_app->manager.history = NULL;
 }
+
+
+void close_history_manager(AppContext *app) {
+    if (app->manager.history != NULL) {
+        // Destroying the window will trigger the "destroy" signal, 
+        // which runs your existing on_dialog_history_manager_gui_destroy
+        gtk_widget_destroy(app->manager.history);
+        app->manager.history = NULL;
+        write_to_ai_pane(app, "System", "Closed history Manager Window.", "ai_tag", "cmd_tag");
+    } else {
+        write_to_ai_pane(app, "System", "history Manager is not open.", "ai_tag", "cmd_tag");
+    }
+}
+
 
 void open_history_manager_window(AppContext *app) {
     HistoryManagerDialog *dlg = g_new0(HistoryManagerDialog, 1);
     dlg->app = app;
 
     dlg->dialog = gtk_dialog_new();
+    app->manager.history = dlg->dialog;
     gtk_window_set_title(GTK_WINDOW(dlg->dialog), "History Manager");
 
-    //if (app->window) {
-    //    gtk_window_set_transient_for(GTK_WINDOW(dlg->dialog), GTK_WINDOW(app->window));
+    //if (app->gui.window) {
+    //    gtk_window_set_transient_for(GTK_WINDOW(dlg->dialog), GTK_WINDOW(app->gui.window));
     //    gtk_window_set_destroy_with_parent(GTK_WINDOW(dlg->dialog), TRUE);
     // }
 

@@ -3,18 +3,89 @@
 // By: Peter Talbott
 // With assistance from Gemini and OpenAI
 // May 2026
-
+#include <stdio.h>
+#include <stdlib.h>
 #include <ctype.h>
 #include <json-c/json.h>
+#include <gdk/gdkkeysyms.h>
+#include <mariadb/mysql.h>
+
 #include "utils.h"
 #include "gui.h"
 #include "openai.h"
-#include <mariadb/mysql.h>
 #include "crypto.h"
 #include "update.h"
 #include "terminal.h"
 #include "menu.h"
 #include "gemini.h"
+
+// Initialize local command cache
+void init_local_cmd_history(AppContext *app) {
+    DEBUG_PRINT("[DEBUG]: [Local Command Cache] Initializing\n");
+    app->local.cmd_history = g_ptr_array_new_with_free_func(g_free);
+    app->local.history_index = 0;
+    app->local.history_temp_entry = NULL;
+}
+
+// Initialize token metric tracker variables
+void init_token_tracker(AppContext *app) {
+    DEBUG_PRINT("[DEBUG]: [Token Tracker] Initializing baseline metrics\n");
+    app->tokens.bar = NULL;     // Safe pointer tracking before widget creation
+    app->tokens.current = 0;    // Start session at 0 tokens
+    app->tokens.max = 1000000;   // Default 1M token budget (e.g., Gemini 1.5 Pro)
+    app->tokens.last = 0;       // No transactions processed yet
+}
+
+gboolean on_entry_key_press(GtkWidget *widget, GdkEventKey *event, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+
+    // Safety fallback initialization check
+    if (!app->local.cmd_history) {
+        app->local.cmd_history = g_ptr_array_new_with_free_func(g_free);
+        app->local.history_index = 0;
+    }
+
+    int history_len = app->local.cmd_history->len;
+
+    // --- UP ARROW pressed ---
+    if (event->keyval == GDK_KEY_Up) {
+        if (app->local.history_index > 0) {
+            // Save the uncommitted text if we are leaving the bottom line
+            if (app->local.history_index == history_len) {
+                g_free(app->local.history_temp_entry);
+                app->local.history_temp_entry = g_strdup(gtk_entry_get_text(GTK_ENTRY(app->gui.entry)));
+            }
+
+            app->local.history_index--;
+            const char *past_cmd = g_ptr_array_index(app->local.cmd_history, app->local.history_index);
+
+            gtk_entry_set_text(GTK_ENTRY(app->gui.entry), past_cmd);
+            gtk_editable_set_position(GTK_EDITABLE(app->gui.entry), -1); // Move cursor to end
+        }
+        return TRUE; // Suppress default GTK event routing
+    }
+
+    // --- DOWN ARROW pressed ---
+    if (event->keyval == GDK_KEY_Down) {
+        if (app->local.history_index < history_len) {
+            app->local.history_index++;
+
+            if (app->local.history_index == history_len) {
+                // Restore what the user was typing originally
+                gtk_entry_set_text(GTK_ENTRY(app->gui.entry), app->local.history_temp_entry ? app->local.history_temp_entry : "");
+                g_free(app->local.history_temp_entry);
+                app->local.history_temp_entry = NULL;
+            } else {
+                const char *past_cmd = g_ptr_array_index(app->local.cmd_history, app->local.history_index);
+                gtk_entry_set_text(GTK_ENTRY(app->gui.entry), past_cmd);
+            }
+            gtk_editable_set_position(GTK_EDITABLE(app->gui.entry), -1); // Move cursor to end
+        }
+        return TRUE; // Suppress default GTK event routing
+    }
+
+    return FALSE; // Let letters, backspaces, and shortcuts through safely
+}
 
 void setup_tags(GtkTextBuffer *buffer) {
     GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buffer);
@@ -146,14 +217,14 @@ static gboolean on_window_key_press(GtkWidget *widget, GdkEventKey *event, gpoin
     AppContext *app = (AppContext *)data;
 
     if ((event->state & GDK_CONTROL_MASK) && event->keyval == GDK_KEY_Tab) {
-        if (gtk_widget_has_focus(app->entry)) {
-            if (app->terminal_view) gtk_widget_grab_focus(app->terminal_view);
+        if (gtk_widget_has_focus(app->gui.entry)) {
+            if (app->gui.terminal_view) gtk_widget_grab_focus(app->gui.terminal_view);
             DEBUG_PRINT("[DEBUG]: Focus: Active Terminal Tab\n");
-        } else if (app->terminal_view && gtk_widget_has_focus(app->terminal_view)) {
-            gtk_widget_grab_focus(app->gemini_view);
+        } else if (app->gui.terminal_view && gtk_widget_has_focus(app->gui.terminal_view)) {
+            gtk_widget_grab_focus(app->gui.gemini_view);
             DEBUG_PRINT("[DEBUG]: Focus: AI View\n");
         } else {
-            gtk_widget_grab_focus(app->entry);
+            gtk_widget_grab_focus(app->gui.entry);
             DEBUG_PRINT("[DEBUG]: Focus: Input\n");
         }
         return TRUE;
@@ -161,7 +232,7 @@ static gboolean on_window_key_press(GtkWidget *widget, GdkEventKey *event, gpoin
     return FALSE;
 }
 
-// NEW: Lifecycle tracking handler syncing app->terminal_view during tab adjustments
+// NEW: Lifecycle tracking handler syncing app->gui.terminal_view during tab adjustments
 // Updated 0.9.4
 static void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_num, gpointer data) {
     AppContext *app = (AppContext *)data;
@@ -172,7 +243,7 @@ static void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_nu
     GtkWidget *terminal = gtk_bin_get_child(GTK_BIN(scrolled_win));
 
     if (VTE_IS_TERMINAL(terminal)) {
-        app->terminal_view = terminal;
+        app->gui.terminal_view = terminal;
         app->ui.vterm = terminal; // 0.9.4 addition
         DEBUG_PRINT("[DEBUG]: TAB_CHANGED: Focused tab shifted to Page #%d (Widget: %p)\n", page_num, (void*)terminal);
 
@@ -197,21 +268,21 @@ void add_terminal_tab(AppContext *app) {
     GtkWidget *tab_label = gtk_label_new(tab_label_text);
 
     // 3. Inject page structure into the notebook layout
-    gint index = gtk_notebook_append_page(GTK_NOTEBOOK(app->notebook), term_scroll, tab_label);
+    gint index = gtk_notebook_append_page(GTK_NOTEBOOK(app->gui.notebook), term_scroll, tab_label);
     gtk_widget_show_all(term_scroll);
 
     // 4. Ensure window interceptor handles input routing on the new console layer
     g_signal_connect(new_terminal, "key-press-event", G_CALLBACK(on_window_key_press), app);
 
     // 5. Jump focus directly to our newly allocated workspace
-    gtk_notebook_set_current_page(GTK_NOTEBOOK(app->notebook), index);
+    gtk_notebook_set_current_page(GTK_NOTEBOOK(app->gui.notebook), index);
     gtk_widget_grab_focus(new_terminal);
 }
 
 void on_upload_clicked(GtkButton *button, gpointer data) {
     AppContext *app = (AppContext *)data;
     GtkWidget *dialog = gtk_file_chooser_dialog_new("Analyze File",
-                                                    GTK_WINDOW(app->window),
+                                                    GTK_WINDOW(app->gui.window),
                                                     GTK_FILE_CHOOSER_ACTION_OPEN,
                                                     "_Cancel", GTK_RESPONSE_CANCEL,
                                                     "_Open", GTK_RESPONSE_ACCEPT,
@@ -241,7 +312,7 @@ void on_upload_clicked(GtkButton *button, gpointer data) {
 
 void on_copy_clicked(GtkButton *button, gpointer data) {
     AppContext *app = (AppContext *)data;
-    GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gemini_view));
+    GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gui.gemini_view));
 
     GtkTextIter start, end;
     gtk_text_buffer_get_bounds(buffer, &start, &end);
@@ -260,7 +331,7 @@ void set_icon(AppContext *app) {
     GdkPixbuf *icon = gdk_pixbuf_new_from_resource("/com/aiterm/app/aiterm-icon.png", &icon_error);
 
     if (icon) {
-        gtk_window_set_icon(GTK_WINDOW(app->window), icon);
+        gtk_window_set_icon(GTK_WINDOW(app->gui.window), icon);
         g_object_unref(icon);
         DEBUG_PRINT("[DEBUG]: Embedded icon loaded from GResource successfully.\n");
     } else {
@@ -271,7 +342,7 @@ void set_icon(AppContext *app) {
 
 gboolean scroll_to_bottom_idle(gpointer data) {
     AppContext *app = (AppContext *)data;
-    GtkWidget *parent = gtk_widget_get_parent(app->gemini_view);
+    GtkWidget *parent = gtk_widget_get_parent(app->gui.gemini_view);
 
     if (GTK_IS_SCROLLED_WINDOW(parent)) {
         GtkAdjustment *adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(parent));
@@ -286,29 +357,30 @@ void on_buffer_changed_scroll(GtkTextBuffer *buffer, gpointer data) {
     g_idle_add(scroll_to_bottom_idle, data);
 }
 
+// Self explainatory!! Totally Revised 0.9.4
 void setup_gui(AppContext *app) {
     apply_custom_theme();
 
     // 1. Create Window Base Framework
-    app->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    app->ui.window = app->window;
-    g_signal_connect_after(app->window, "key-press-event", G_CALLBACK(on_window_key_press), app);
+    app->gui.window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    app->ui.window = app->gui.window;
+    g_signal_connect_after(app->gui.window, "key-press-event", G_CALLBACK(on_window_key_press), app);
     set_icon(app);
 
-    GdkScreen *screen = gtk_window_get_screen(GTK_WINDOW(app->window));
+    GdkScreen *screen = gtk_window_get_screen(GTK_WINDOW(app->gui.window));
     GdkVisual *visual = gdk_screen_get_rgba_visual(screen);
     if (visual) {
-        gtk_widget_set_visual(app->window, visual);
+        gtk_widget_set_visual(app->gui.window, visual);
     }
-    gtk_widget_set_app_paintable(app->window, TRUE);
+    gtk_widget_set_app_paintable(app->gui.window, TRUE);
 
-    gtk_window_set_title(GTK_WINDOW(app->window), "AI-Term C/GTK Edition");
-    gtk_window_set_default_size(GTK_WINDOW(app->window), 1000, 600);
-    g_signal_connect(app->window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+    gtk_window_set_title(GTK_WINDOW(app->gui.window), "AI-Term C/GTK Edition");
+    gtk_window_set_default_size(GTK_WINDOW(app->gui.window), 1000, 600);
+    g_signal_connect(app->gui.window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
     // 2. Primary Structural Box Alignment
     GtkWidget *main_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
-    gtk_container_add(GTK_CONTAINER(app->window), main_vbox);
+    gtk_container_add(GTK_CONTAINER(app->gui.window), main_vbox);
 
     GtkWidget *menubar = create_menu_bar(app);
     gtk_box_pack_start(GTK_BOX(main_vbox), menubar, FALSE, FALSE, 0);
@@ -317,34 +389,55 @@ void setup_gui(AppContext *app) {
     gtk_box_pack_start(GTK_BOX(main_vbox), paned, TRUE, TRUE, 0);
 
     // --- LEFT PANE UPGRADE: Dynamic GtkNotebook Container Setup ---
-    app->notebook = gtk_notebook_new();
-    gtk_notebook_set_tab_pos(GTK_NOTEBOOK(app->notebook), GTK_POS_TOP);
-    gtk_notebook_set_scrollable(GTK_NOTEBOOK(app->notebook), TRUE);
+    app->gui.notebook = gtk_notebook_new();
+    gtk_notebook_set_tab_pos(GTK_NOTEBOOK(app->gui.notebook), GTK_POS_TOP);
+    gtk_notebook_set_scrollable(GTK_NOTEBOOK(app->gui.notebook), TRUE);
 
-    // Connect tracker handler ensuring app->terminal_view shifts variables on page selection flips
-    g_signal_connect(app->notebook, "switch-page", G_CALLBACK(on_tab_changed), app);
-    gtk_paned_pack1(GTK_PANED(paned), app->notebook, TRUE, FALSE);
+    // Connect tracker handler ensuring app->gui.terminal_view shifts variables on page selection flips
+    g_signal_connect(app->gui.notebook, "switch-page", G_CALLBACK(on_tab_changed), app);
+    gtk_paned_pack1(GTK_PANED(paned), app->gui.notebook, TRUE, FALSE);
 
     // Allocate our initial bootup console instance inside the array matrix
     add_terminal_tab(app);
 
-    // --- RIGHT PANE (AI History Console View) ---
+    // --- RIGHT PANE (AI History Console View with Token Tracker Bar) ---
+    GtkWidget *right_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+
+    // Instantiate and pack the token bar at the top of the right pane layout
+    app->tokens.bar = gtk_progress_bar_new();
+    gtk_progress_bar_set_show_text(GTK_PROGRESS_BAR(app->tokens.bar), TRUE);
+
+    char initial_text[128];
+    snprintf(initial_text, sizeof(initial_text),
+             "Current Tokens: %ld \t Last AI Process Used: %ld Tokens",
+             app->tokens.current, app->tokens.last);
+    gtk_progress_bar_set_text(GTK_PROGRESS_BAR(app->tokens.bar), initial_text);
+
+    gtk_box_pack_start(GTK_BOX(right_vbox), app->tokens.bar, FALSE, FALSE, 2);
+
+    // Existing AI text area setup
     GtkWidget *gem_scroll = gtk_scrolled_window_new(NULL, NULL);
-    app->gemini_view = gtk_text_view_new();
-    GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gemini_view));
+    app->gui.gemini_view = gtk_text_view_new();
+    GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gui.gemini_view));
     setup_tags(buffer);
 
     g_signal_connect(buffer, "changed", G_CALLBACK(on_buffer_changed_scroll), app);
 
-    gtk_text_view_set_editable(GTK_TEXT_VIEW(app->gemini_view), FALSE);
-    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(app->gemini_view), GTK_WRAP_WORD);
-    gtk_container_add(GTK_CONTAINER(gem_scroll), app->gemini_view);
-    gtk_paned_pack2(GTK_PANED(paned), gem_scroll, TRUE, FALSE);
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(app->gui.gemini_view), FALSE);
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(app->gui.gemini_view), GTK_WRAP_WORD);
+    gtk_container_add(GTK_CONTAINER(gem_scroll), app->gui.gemini_view);
 
-    app->ai_css_provider = gtk_css_provider_new();
+    // Pack the text scrolling area underneath the token bar
+    gtk_box_pack_start(GTK_BOX(right_vbox), gem_scroll, TRUE, TRUE, 0);
+
+    // Pack the complete right vertical stack into the right side of the split pane
+    gtk_paned_pack2(GTK_PANED(paned), right_vbox, TRUE, FALSE);
+    gtk_paned_set_position(GTK_PANED(paned), 550);
+
+    app->gui.ai_css_provider = gtk_css_provider_new();
     gtk_style_context_add_provider(
-        gtk_widget_get_style_context(app->gemini_view),
-        GTK_STYLE_PROVIDER(app->ai_css_provider),
+        gtk_widget_get_style_context(app->gui.gemini_view),
+        GTK_STYLE_PROVIDER(app->gui.ai_css_provider),
         GTK_STYLE_PROVIDER_PRIORITY_APPLICATION
     );
 
@@ -352,10 +445,10 @@ void setup_gui(AppContext *app) {
     GtkWidget *bottom_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
     gtk_box_pack_start(GTK_BOX(main_vbox), bottom_hbox, FALSE, FALSE, 5);
 
-    app->entry = gtk_entry_new();
-    apply_block_cursor_to_input(app->entry);
-    gtk_entry_set_placeholder_text(GTK_ENTRY(app->entry), "Ask AI...");
-    gtk_box_pack_start(GTK_BOX(bottom_hbox), app->entry, TRUE, TRUE, 5);
+    app->gui.entry = gtk_entry_new();
+    apply_block_cursor_to_input(app->gui.entry);
+    gtk_entry_set_placeholder_text(GTK_ENTRY(app->gui.entry), "Ask AI...");
+    gtk_box_pack_start(GTK_BOX(bottom_hbox), app->gui.entry, TRUE, TRUE, 5);
 
     GtkWidget *copy_btn = gtk_button_new_from_icon_name("edit-copy", GTK_ICON_SIZE_BUTTON);
     gtk_widget_set_tooltip_text(copy_btn, "Copy AI History");
@@ -363,31 +456,31 @@ void setup_gui(AppContext *app) {
     gtk_box_pack_start(GTK_BOX(bottom_hbox), copy_btn, FALSE, FALSE, 5);
 
     extern void on_input_activate(GtkEntry *entry, gpointer data);
-    g_signal_connect(app->entry, "activate", G_CALLBACK(on_input_activate), app);
+    g_signal_connect(app->gui.entry, "activate", G_CALLBACK(on_input_activate), app);
+    g_signal_connect(G_OBJECT(app->gui.entry), "key-press-event", G_CALLBACK(on_entry_key_press), app);
 
     GtkWidget *upload_btn = gtk_button_new_from_icon_name("mail-attachment", GTK_ICON_SIZE_BUTTON);
     gtk_widget_set_tooltip_text(upload_btn, "Upload file for AI analysis");
     g_signal_connect(upload_btn, "clicked", G_CALLBACK(on_upload_clicked), app);
     gtk_box_pack_start(GTK_BOX(bottom_hbox), upload_btn, FALSE, FALSE, 5);
 
-    app->status_label = gtk_label_new("Ready");
-    gtk_box_pack_start(GTK_BOX(bottom_hbox), app->status_label, FALSE, FALSE, 5);
+    app->gui.status_label = gtk_label_new("Ready");
+    gtk_box_pack_start(GTK_BOX(bottom_hbox), app->gui.status_label, FALSE, FALSE, 5);
 
     // 4. Force state engine visual refresh adjustments
     apply_visual_settings(app);
 
     // Ensure keyboard focus hooks run accurately across active boundaries
-    g_signal_connect(app->entry, "key-press-event", G_CALLBACK(on_window_key_press), app);
-    g_signal_connect(app->gemini_view, "key-press-event", G_CALLBACK(on_window_key_press), app);
+    g_signal_connect(app->gui.entry, "key-press-event", G_CALLBACK(on_window_key_press), app);
+    g_signal_connect(app->gui.gemini_view, "key-press-event", G_CALLBACK(on_window_key_press), app);
 
-    gtk_widget_show_all(app->window);
+    gtk_widget_show_all(app->gui.window);
 }
 
-
 gboolean scroll_ai_pane_to_bottom(AppContext *app) {
-    if (!app || !app->gemini_view) return FALSE;
+    if (!app || !app->gui.gemini_view) return FALSE;
 
-    GtkWidget *parent = gtk_widget_get_parent(app->gemini_view);
+    GtkWidget *parent = gtk_widget_get_parent(app->gui.gemini_view);
     if (GTK_IS_SCROLLED_WINDOW(parent)) {
         GtkAdjustment *adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(parent));
         gdouble upper = gtk_adjustment_get_upper(adj);
@@ -400,7 +493,7 @@ gboolean scroll_ai_pane_to_bottom(AppContext *app) {
 }
 
 void append_ai_text(AppContext *app, const char *text, const char *tag_name) {
-    GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gemini_view));
+    GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gui.gemini_view));
     GtkTextIter end;
     gtk_text_buffer_get_end_iter(buffer, &end);
 

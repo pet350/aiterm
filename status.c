@@ -28,46 +28,56 @@ void display_status(AppContext *app) {
     // Lock the database mutex to ensure thread-safety during the status check
     mysql_thread_init();
 
-    pthread_mutex_lock(&app->db_mutex);
+    pthread_mutex_lock(&app->access.db_mutex);
     DEBUG_PRINT("[DEBUG]: [STATUS] Locked DB Mutex.\n");
 
     gboolean is_connected = FALSE;
     int ping_res = -1;
 
     DEBUG_PRINT("[DEBUG]: [STATUS] Checking database connection status...\n");
-    DEBUG_PRINT("[DEBUG]: [STATUS] app->global_db_conn pointer value: %p\n", (void*)app->global_db_conn);
+    DEBUG_PRINT("[DEBUG]: [STATUS] app->database.global_db_conn pointer value: %p\n", (void*)app->database.global_db_conn);
 
-    if (app->global_db_conn != NULL) {
+    if (app->database.global_db_conn != NULL) {
         // mysql_ping returns 0 if the connection is alive
-        ping_res = mysql_ping(app->global_db_conn);
+        ping_res = mysql_ping(app->database.global_db_conn);
         DEBUG_PRINT("[DEBUG]: [STATUS] mysql_ping returned: %d\n", ping_res);
         if (ping_res == 0) {
             is_connected = TRUE;
         } else {
-            DEBUG_PRINT("[DEBUG]: [STATUS] mysql_ping failed error: %s\n", mysql_error(app->global_db_conn));
+            DEBUG_PRINT("[DEBUG]: [STATUS] mysql_ping failed error: %s\n", mysql_error(app->database.global_db_conn));
         }
     }
 
     // 1. Build a single raw string containing the whole status report for the AI
     GString *status_report = g_string_new("--- SYSTEM STATUS ---\n");
 
-    const char *tee_val = app->tee_enabled ? "ON" : "OFF";
+    const char *tee_val = app->sys.tee_enabled ? "ON" : "OFF";
     g_string_append_printf(status_report, "Tee Logging:\t%s\n", tee_val);
 
-    const char *auto_val = app->autoreply_enabled ? "ON" : "OFF";
+    const char *auto_val = app->sys.autoreply_enabled ? "ON" : "OFF";
     g_string_append_printf(status_report, "Autoreply:\t%s\n", auto_val);
 
-    const char *auto_exec_val = app->auto_execute_enabled ? "ON" : "OFF";
+    const char *auto_exec_val = app->sys.auto_execute_enabled ? "ON" : "OFF";
     g_string_append_printf(status_report, "Auto Execute:\t%s\n", auto_exec_val);
 
-    const char *ratelimit_val = app->ratelimit_enabled ? "ON" : "OFF";
+    const char *ratelimit_val = app->sys.ratelimit_enabled ? "ON" : "OFF";
     g_string_append_printf(status_report, "Rate Limit Enabled:\t%s\n", ratelimit_val);
 
-    const char *smart_cache_val = app->smart_cache_enabled ? "ON" : "OFF";
+    const char *smart_cache_val = app->sys.smart_cache_enabled ? "ON" : "OFF";
     g_string_append_printf(status_report, "Smart Cache Enabled:\t%s\n", smart_cache_val);
 
-    const char *noise_filter_val = app->noise_filter_enabled ? "ON" : "OFF";
+    const char *noise_filter_val = app->sys.noise_filter_enabled ? "ON" : "OFF";
     g_string_append_printf(status_report, "Noise Filter Enabled:\t%s\n", noise_filter_val);
+
+    const char *debug_mode_val = app->sys.debug_mode ? "ON" : "OFF";
+    g_string_append_printf(status_report, "Debug Mode Enabled:\t%s\n", debug_mode_val);
+
+    const char *xml_tagging_val = app->xml.tagging_enabled ? "ON" : "OFF";
+    g_string_append_printf(status_report, "XML Payload Tagging Enabled:\t%s\n", xml_tagging_val);
+
+    char *rpm_val = g_malloc(8);
+    snprintf(rpm_val, 8, "%d", app->limiter.requests_per_minute);
+    g_string_append_printf(status_report, "Requests Per Minute:\t%s\n", rpm_val);
 
     const char *write_to_global_val = app->session.write_to_global ? "GLOBAL session" : "STRICT session";
     g_string_append_printf(status_report, "Writting to database:\t%s\n", write_to_global_val);
@@ -75,19 +85,19 @@ void display_status(AppContext *app) {
     const char *read_from_global_val = app->session.read_from_global ? "GLOBAL session" : "STRICT session";
     g_string_append_printf(status_report, "Reading from database:\t%s\n", read_from_global_val);
 
-    int db_ok = (app->global_db_conn && mysql_ping(app->global_db_conn) == 0);
+    int db_ok = (app->database.global_db_conn && mysql_ping(app->database.global_db_conn) == 0);
     g_string_append_printf(status_report, "Database:\t%s\n", db_ok ? "CONNECTED" : "DISCONNECTED");
 
     const char *mysql_ping_val = is_connected ? "ON" : "OFF";
     g_string_append_printf(status_report, "MariaDB Ping Results:\t%s\n", mysql_ping_val);
 
-    int ai_ok = (app->api_key && strlen(app->api_key) > 0);
+    int ai_ok = (app->security.api_key && strlen(app->security.api_key) > 0);
     g_string_append_printf(status_report, "AI Status:\t%s\n", ai_ok ? "READY" : "MISSING CONFIG");
 
     g_string_append_printf(status_report, "Session UUID:\t%s\n", app->session.session_uuid ? app->session.session_uuid : "N/A");
     g_string_append(status_report, "---------------------");
 
-    pthread_mutex_unlock(&app->db_mutex);
+    pthread_mutex_unlock(&app->access.db_mutex);
     DEBUG_PRINT("[DEBUG]: [STATUS] Unlocked DB Mutex.\n");
 
     // 2. Display to the User in the AI Pane with granular coloring
@@ -96,32 +106,47 @@ void display_status(AppContext *app) {
 
     // Tee Logging Row
     append_ai_text(app, "Tee Logging:\t\t", "body_tag");
-    append_ai_text(app, tee_val, app->tee_enabled ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, tee_val, app->sys.tee_enabled ? "ai_tag" : "cmd_tag");
     append_ai_text(app, "\n", "body_tag");
 
     // Autoreply Row
     append_ai_text(app, "Autoreply:\t\t", "body_tag");
-    append_ai_text(app, auto_val, app->autoreply_enabled ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, auto_val, app->sys.autoreply_enabled ? "ai_tag" : "cmd_tag");
     append_ai_text(app, "\n", "body_tag");
 
     // Auto Execute Row
     append_ai_text(app, "Auto Execute:\t\t", "body_tag");
-    append_ai_text(app, auto_exec_val, app->auto_execute_enabled ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, auto_exec_val, app->sys.auto_execute_enabled ? "ai_tag" : "cmd_tag");
     append_ai_text(app, "\n", "body_tag");
 
     // Ratelimit Row
     append_ai_text(app, "Ratelimit:\t\t", "body_tag");
-    append_ai_text(app, ratelimit_val, app->ratelimit_enabled ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, ratelimit_val, app->sys.ratelimit_enabled ? "ai_tag" : "cmd_tag");
     append_ai_text(app, "\n", "body_tag");
 
     // Smart Cache Row
     append_ai_text(app, "Smart Cache:\t\t", "body_tag");
-    append_ai_text(app, smart_cache_val, app->smart_cache_enabled ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, smart_cache_val, app->sys.smart_cache_enabled ? "ai_tag" : "cmd_tag");
     append_ai_text(app, "\n", "body_tag");
 
     // Noise Filter Row
     append_ai_text(app, "Noise Filter:\t\t", "body_tag");
-    append_ai_text(app, noise_filter_val, app->noise_filter_enabled ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, noise_filter_val, app->sys.noise_filter_enabled ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+
+    // Requests Per Minute
+    append_ai_text(app, "Requests Per Minute:\t", "body_tag");
+    append_ai_text(app, rpm_val, "ai_tag");
+    append_ai_text(app, "\n", "body_tag");
+
+    // Noise Filter Row
+    append_ai_text(app, "Debug Mode:\t\t", "body_tag");
+    append_ai_text(app, debug_mode_val, app->sys.debug_mode ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+
+    // Noise Filter Row
+    append_ai_text(app, "XML Payload Tagging:\t", "body_tag");
+    append_ai_text(app, xml_tagging_val, app->xml.tagging_enabled ? "ai_tag" : "cmd_tag");
     append_ai_text(app, "\n", "body_tag");
 
     // Database Writting
@@ -155,7 +180,7 @@ void display_status(AppContext *app) {
     append_ai_text(app, "\n---------------------\n\n", "body_tag");
 
     // 3. Send the raw un-tagged plain text block to the AI history
-    if (app->tee_enabled) {
+    if (app->sys.tee_enabled) {
         tee_handle_output(app, status_report->str);
         tee_handle_output(app, "\n");
         tee_flush_timed(app);

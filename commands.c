@@ -19,6 +19,7 @@
 #include "update.h"
 #include "help.h"
 #include "gemini.h"
+#include "gemini_cache.h"
 #include "session_manager.h"
 #include "session_manager_gui.h"
 #include "history_manager_gui.h"
@@ -30,38 +31,116 @@
 #include "config.h"
 #include "menu.h"
 
+extern const char* HIGHLIGHT_STRING;
+
+// Parse command line options and handle early-exit CLI queries
+void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
+    char *env_key = getenv("AITERM_MASTER_KEY");
+
+    if (env_key) {
+        app->security.master_key = strdup(env_key);
+    }
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--debug") == 0) {
+            app->sys.debug_mode = TRUE;
+            app->sys.debug_mode_override = TRUE;
+        } else if (strcmp(argv[i], "--version") == 0) {
+            print_version();
+            exit(0);
+        } else if (strcmp(argv[i], "--list-models") == 0) {
+            load_config(app);
+            if (!app->security.master_key) {
+                printf("Error: no master key found!\n");
+                exit(1);
+            }
+            char *models = gemini_list_models(app);
+            printf("Gemini Model List:\n%s\n", models);
+            if (app->security.master_key) {
+                // Overwrite memory with zeros before freeing
+                size_t len = strlen(app->security.master_key);
+                memset(app->security.master_key, 0, len);
+                free(app->security.master_key);
+            }
+            free_provider_config(&app->provider_config);
+            g_free(app);
+            exit(0);
+        } else if (strcmp(argv[i], "--provider") == 0) {
+            load_config(app);
+            char info[512];
+            snprintf(info, sizeof(info), "Provider: %s\nModel: %s", app->provider_config.provider, app->aiterm_runtime.model);
+            printf("%s\n", info);
+            exit(0);
+        } else if (strcmp(argv[i], "--features") == 0) {
+            printf("%s\n", get_features_text());
+            exit(0);
+        } else if (strcmp(argv[i], "--help") == 0) {
+            printf("%s\n%s\n", get_cmd_help(), HIGHLIGHT_STRING);
+            exit(0);
+        } else if (strncmp(argv[i], "--master=", 9) == 0) {
+            app->security.master_key = strdup(argv[i] + 9);
+        } else if (strncmp(argv[i], "--crypt-pw=", 11) == 0) {
+            if (!app->security.master_key) {
+                fprintf(stderr, "Error: You must provide a master key (via --master or AITERM_MASTER_KEY) before encrypting.\n");
+        	exit(1);
+    	    }
+            char *plaintext = argv[i] + 11;
+            char *encrypted = crypt_to_hex(plaintext, app->security.master_key);
+            if (encrypted) {
+        	printf("Encrypted string: %s\n", encrypted);
+        	free(encrypted);
+            } else {
+        	fprintf(stderr, "Error: Encryption failed.\n");
+            }
+            exit(0);
+       }
+    }
+    if (!app->security.master_key) {
+	char *pwd = getpass("Enter Master Encryption Key: ");
+	if (pwd) app->security.master_key = strdup(pwd);
+    }
+}
+
 static CommandRegistry registry[] = {
     {"auto all", "Toggle (on/off): Tee, AutoReply, & AutoExecute", cmd_toggle_auto_all},
     {"autoreply", "Toggle real-time prompt analysis (on/off)", cmd_toggle_autoreply},
     {"autoexe", "Toggle execution of AI payloads (on/off)", cmd_toggle_autoexe},
     {"clear", "Clear the contents of the AI pane", handle_clear_wrapper},
+    {"close history manager", "Closes the history manager window", cmd_close_history_manager_wrapper},
+    {"close noise manager", "Closes the noise filter manager window", cmd_close_noise_manager_wrapper},
+    {"close policy manager", "Closes the policy manager window", cmd_close_policy_manager_wrapper},
+    {"close session manager", "Closes the session manager window", cmd_close_session_manager_wrapper},
+    {"command line help", "display all command line options", cmd_show_command_line_help_wrapper},
+    {"debug", "Toggle debug mode out stderr (on/off)", cmd_toggle_debug},
     {"extended help", "Display extended help message", handle_extended_help},
     {"features", "Display new aiterm features", handle_features_wrapper},
     {"help", "Display this dynamic help menu", handle_help_wrapper},
-    {"history manager", "Open History Manager window", cmd_history_manager_wrapper},
     {"history", "Display mysql history", handle_history_wrapper},
     {"hw", "Display various hardware info", handle_hw_wrapper},
+    {"invalidate cache", "Force a reload of smart cache", cmd_invalidate_cache},
     {"list models", "Display all models from current provider", handle_list_models_wrapper},
     {"load config", "Loads configurations from aiterm.conf", handle_load_config_wrapper},
     {"noise filter", "Toggle noise filter (on/off)", cmd_toggle_noise_filter},
     {"noise add", "Add a pattern to the noise filter list", cmd_noise_add},
     {"noise delete", "Remove a pattern from the noise filter (TBA)", cmd_noise_delete},
     {"noise list", "List all active noise filter patterns (TBA)", cmd_noise_list},
-    {"noise manager", "Opens Noise Filter Manager window", cmd_noisefilter_manager_wrapper},
+    {"noise reload", "Reload noise filters from database", cmd_noisefilter_reload_wrapper},
+    {"open history manager", "Open History Manager window", cmd_history_manager_wrapper},
+    {"open noise manager", "Opens Noise Filter Manager window", cmd_noisefilter_manager_wrapper},
+    {"open policy manager", "Open Policy Manager window", cmd_policy_manager_wrapper},
+    {"open session manager", "Opens the session manager window", cmd_session_manager_wrapper},
     {"save config", "Saves configuration to aiterm.conf", handle_save_config_wrapper},
     {"session default", "Sets current or specified UUID as default", cmd_session_default},
     {"session delete", "Deletes a session from the database", cmd_session_delete},
     {"session description", "Sets a desctiption to current session",  cmd_session_description},
     {"session list", "Lists sessions stored in database", cmd_session_list},
     {"session load", "Loads a previous session from database", cmd_session_load},
-    {"session manager", "Opens the session manager window", cmd_session_manager_wrapper},
     {"session new", "Starts a new AI session", cmd_session_new},
     {"session no default", "Sets no session tto default", cmd_session_no_default},
     {"session read from global", "Toggle reading from global (on/off)", cmd_session_read_from_gloal_toggle},
     {"session show", "shows the current session uuid and description", cmd_session_show},
     {"session write to global", "Toggle writing to global (on/off)", cmd_session_write_to_global_toggle},
     {"smart cache", "Smart Cache Toggle (on/off)", cmd_toggle_smart_cache},
-    {"policy manager", "Open Policy Manager window", cmd_policy_manager_wrapper},
     {"provider", "Display AI provider [OpenAI/Gemini]", handle_provider_wrapper},
     {"ratelimit", "Toggle Raate Limiting (on/off)", cmd_toggle_ratelimit},
     {"reset db", "Reset database connection", cmd_reset_db_connect},
@@ -70,6 +149,7 @@ static CommandRegistry registry[] = {
     {"status", "Display operational metrics", handle_status_wrapper},
     {"tee", "Toggle immediate terminal capturing (on/off)", cmd_toggle_tee},
     {"version", "Display running aiterm version, build ID, and build time", handle_version_wrapper},
+    {"xml tagging", "Toggle XML Tagging of AI payloads (on/off)", cmd_toggle_xml_tagging},
     {NULL, NULL, NULL} // Sentinel
 };
 
@@ -158,14 +238,32 @@ gboolean ui_display_show(gpointer data) {
     return FALSE; // Remove idle source
 }
 
+void cmd_invalidate_cache(AppContext *app, const char *args) {
+    if (!app->sys.smart_cache_enabled) {
+        write_to_ai_pane(app, "System: ", "Smart cache not enabled", "ai_tag", "cmd_tag");
+        return;
+    }
+
+    // Force smartcace to be reloaded
+    gemini_cache_invalidate(app);
+    if (!app->gemini_cache.id) {
+        write_to_ai_pane(app, "System: ", "Forced cache reload", "ai_tag", "cmd_tag");
+    } else {
+        write_to_ai_pane(app, "System: ", "Failed to force cache reload", "ai_tag", "cmd_tag");
+    }
+}
+
+void cmd_show_command_line_help_wrapper(AppContext *app, const char *args) {
+    write_to_ai_pane(app, "AITerm Command Line Help: ", get_cmd_help(), "ai_tag", "cmd_tag");
+}
 
 void cmd_reset_db_connect(AppContext *app, const char *args) {
     write_to_ai_pane_wrapper(app, "Attempting to reset Global Database connection.");
-    if (app->global_db_conn) {
-        mysql_close(app->global_db_conn);
+    if (app->database.global_db_conn) {
+        mysql_close(app->database.global_db_conn);
     }
 
-    pthread_mutex_init(&app->db_mutex, NULL);
+    pthread_mutex_init(&app->access.db_mutex, NULL);
     pthread_t db_init_thread;
     DEBUG_PRINT("[DEBUG]: [MAIN] Spawning asynchronous DB initialization thread...\n");
     if (pthread_create(&db_init_thread, NULL, init_db_thread_worker, app) == 0) {
@@ -174,10 +272,48 @@ void cmd_reset_db_connect(AppContext *app, const char *args) {
         fprintf(stderr, "Error: Failed to spawn database initialization thread.\n");
         return;
     }
-    if (app->global_db_conn) {
+    if (app->database.global_db_conn) {
         write_to_ai_pane_wrapper(app, "Asynchronous DB thread re-established!");
     }
+    gemini_cache_invalidate(app);
 }
+
+void cmd_close_policy_manager_wrapper(AppContext *app, const char *args) {
+    if(app->manager.policy != NULL) {
+        write_to_ai_pane(app, "System: ", "Closing Policy Manager window", "ai_tag", "cmd_tag");
+        close_policy_manager(app);
+    } else {
+        write_to_ai_pane(app, "System: ", "Policy Manager window is not open", "ai_tag", "cmd_tag");
+    }
+}
+
+void cmd_close_history_manager_wrapper(AppContext *app, const char *args) {
+    if(app->manager.history != NULL) {
+        write_to_ai_pane(app, "System: ", "Closing History Manager window", "ai_tag", "cmd_tag");
+        close_history_manager(app);
+    } else {
+        write_to_ai_pane(app, "System: ", "history Manager window is not open", "ai_tag", "cmd_tag");
+    }
+}
+
+void cmd_close_session_manager_wrapper(AppContext *app, const char *args) {
+    if(app->manager.session != NULL) {
+        write_to_ai_pane(app, "System: ", "Closing Session Manager window", "ai_tag", "cmd_tag");
+        close_session_manager(app);
+    } else {
+        write_to_ai_pane(app, "System: ", "Session Manager window is not open", "ai_tag", "cmd_tag");
+    }
+}
+
+void cmd_close_noise_manager_wrapper(AppContext *app, const char *args) {
+    if(app->manager.noise != NULL) {
+        write_to_ai_pane(app, "System: ", "Closing noise Manager window", "ai_tag", "cmd_tag");
+        close_noise_manager(app);
+    } else {
+        write_to_ai_pane(app, "System: ", "noise Manager window is not open", "ai_tag", "cmd_tag");
+    }
+}
+
 
 // command helper wrappers
 void handle_help_wrapper(AppContext *app, const char *args) {
@@ -207,14 +343,14 @@ void handle_features_wrapper(AppContext *app, const char *args) {
 
 void handle_clear_wrapper(AppContext *app, const char *args) {
 
-    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gemini_view));
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gui.gemini_view));
     gtk_text_buffer_set_text(buf, "", -1);
 }
 
 void handle_provider_wrapper(AppContext *app, const char *args) {
     write_to_ai_pane(app, "System: ", "==== System provider ====", "system_tag", "body_tag");
     char info[512];
-    snprintf(info, sizeof(info), "Provider: %s\nModel: %s", app->provider, app->model);
+    snprintf(info, sizeof(info), "Provider: %s\nModel: %s", app->provider_config.provider, app->aiterm_runtime.model);
     write_to_ai_pane(app, "System: ", info, "cmd_tag", "cmd_tag");
 }
 
@@ -225,14 +361,15 @@ void handle_list_models_wrapper(AppContext *app, const char *args) {
 
 void handle_reset_state_wrapper(AppContext *app, const char *args) {
     write_to_ai_pane(app, "AI State:", "Reset processing state", "system_tag", "ai_tag");
-    if (app->is_processing) {
-        app->is_processing = FALSE;
+    if (app->sys.is_processing) {
+        app->sys.is_processing = FALSE;
         DEBUG_PRINT("[DEBUG]: RESET_STATE: cleared is_processing flag\n");
     }
-    if (app->ai_busy) {
-        app->ai_busy = FALSE;
+    if (app->sys.ai_busy) {
+        app->sys.ai_busy = FALSE;
         DEBUG_PRINT("[DEBUG]: RESET_STATE: cleared ai_busy flag\n");
     }
+    gemini_cache_invalidate(app);
 }
 
 void handle_hw_wrapper(AppContext *app, const char *args) {
@@ -251,6 +388,7 @@ void handle_load_config_wrapper(AppContext *app, const char *args) {
     write_to_ai_pane(app, "System: ", "Loaded settings from configuration file", "system_tag", "ai_tag");
     load_config(app);
     init_provider_config(app);
+    gemini_cache_invalidate(app);
 }
 
 void handle_save_config_wrapper(AppContext *app, const char *args) {
@@ -264,6 +402,7 @@ void cmd_session_new(AppContext *app, const char *args) {
     std->type = CMD_SESSION_NEW;
     std->arg = g_strdup(args ? args : "No description"); // Use the user's description
     g_thread_new("session_new_worker", (GThreadFunc)session_db_worker, std);
+    gemini_cache_invalidate(app);
 }
 
 void cmd_session_list(AppContext *app, const char *args) {
@@ -319,6 +458,7 @@ void cmd_session_load(AppContext *app, const char *args) {
     std->type = CMD_SESSION_LOAD;
     std->arg = g_strdup(ptr); // The UUID to load
     g_thread_new("session_load_worker", (GThreadFunc)session_db_worker, std);
+    gemini_cache_invalidate(app);
 }
 
 void cmd_session_delete(AppContext *app, const char *args) {
@@ -383,25 +523,31 @@ void cmd_session_no_default(AppContext *app, const char *args) {
     std->type = CMD_SESSION_NO_DEFAULT;
     // No arg needed
     g_thread_new("session_no_default_worker", (GThreadFunc)session_db_worker, std);
+    write_to_ai_pane(app, "System: ", "No default session set", "ai_tag", "cmd_tag");
 }
 
 void cmd_session_manager_wrapper(AppContext *app, const char *args) {
     DEBUG_PRINT("[DEBUG]: [Commands]: Opening Session Manager Window\n");
+    write_to_ai_pane(app, "System: ", "Opening session manager window", "ai_tag", "cmd_tag");
     open_session_manager_window(app);
 }
 
 void cmd_history_manager_wrapper(AppContext *app, const char *args) {
     DEBUG_PRINT("[DEBUG]: [Commands]: Opening History Manager Window\n");
+    write_to_ai_pane(app, "System: ", "Opening history manager window", "ai_tag", "cmd_tag");
     open_history_manager_window(app);
 }
 
 void cmd_noisefilter_manager_wrapper(AppContext *app, const char *args) {
     DEBUG_PRINT("[DEBUG]: [Commands]: Opening Noise Filter Manager Window\n");
+    noise_filter_load_from_db(app);
+    write_to_ai_pane(app, "System: ", "Opening noise filter manager window", "ai_tag", "cmd_tag");
     open_noise_filter_manager_window(app);
 }
 
 void cmd_policy_manager_wrapper(AppContext *app, const char *args) {
     DEBUG_PRINT("[DEBUG]: [Commands]: Opening Policy Manager Window\n");
+    write_to_ai_pane(app, "System: ", "Opening policy manager window", "ai_tag", "cmd_tag");
     open_policy_manager_window(app);
 }
 
@@ -464,14 +610,44 @@ void cmd_toggle_auto_all(AppContext *app, const char *args) {
         return;
     }
     //gboolean state = (strstr(ptr, "on") != NULL);
-    app->tee_enabled = state;
-    app->autoreply_enabled = state;
-    app->auto_execute_enabled = state;
-    write_to_ai_pane_wrapper(app, app->tee_enabled ?          ": Tee Collection Enabled" : ": Tee Collection Disabled");
-    write_to_ai_pane_wrapper(app, app->autoreply_enabled ?    ": Auto Reply Enabled"     : ": Auto Reply Disabled");
-    write_to_ai_pane_wrapper(app, app->auto_execute_enabled ? ": Auto Execute Enabled"   : ": Auto Execute Disabled");
+    app->sys.tee_enabled = state;
+    app->sys.autoreply_enabled = state;
+    app->sys.auto_execute_enabled = state;
+    write_to_ai_pane_wrapper(app, app->sys.tee_enabled ?          ": Tee Collection Enabled" : ": Tee Collection Disabled");
+    write_to_ai_pane_wrapper(app, app->sys.autoreply_enabled ?    ": Auto Reply Enabled"     : ": Auto Reply Disabled");
+    write_to_ai_pane_wrapper(app, app->sys.auto_execute_enabled ? ": Auto Execute Enabled"   : ": Auto Execute Disabled");
     sync_toggle_ui_elements(app);
 }
+
+void cmd_toggle_debug(AppContext *app, const char *args) {
+    const char *ptr = args;
+    gboolean state;
+
+    if (ptr && *ptr == ' ') {
+        ptr++;
+    }
+
+    if (!ptr || strlen(ptr) == 0) {
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON or OFF");
+        return;
+    }
+
+    if (strcmp(ptr, "on") == 0) {
+        state = TRUE;
+    } else if (strcmp(ptr, "off") == 0) {
+        state = FALSE;
+    } else {
+        GString *msg = g_string_new(": Unknown parameter parsed: ");
+        g_string_append_printf(msg, "%s ", ptr);
+        write_to_ai_pane_wrapper(app, msg->str);
+        return;
+    }
+    //gboolean state = (strstr(ptr, "on") != NULL);
+    app->sys.debug_mode = state;
+    write_to_ai_pane_wrapper(app, app->sys.debug_mode ? ": Debug Mode Enabled" : ": Debug Mode Disabled");
+    sync_toggle_ui_elements(app);
+}
+
 
 void cmd_session_read_from_gloal_toggle(AppContext *app, const char *args) {
     const char *ptr = args;
@@ -555,7 +731,7 @@ void cmd_toggle_tee(AppContext *app, const char *args) {
         return;
     }
 
-    app->tee_enabled = state;
+    app->sys.tee_enabled = state;
     write_to_ai_pane_wrapper(app, state ? ": Tee Collection Enabled" : ": Tee Collection Disabled");
     sync_toggle_ui_elements(app);
 }
@@ -584,7 +760,7 @@ void cmd_toggle_autoreply(AppContext *app, const char *args) {
         return;
     }
 
-    app->autoreply_enabled = state;
+    app->sys.autoreply_enabled = state;
     write_to_ai_pane_wrapper(app, state ? ": Auto Reply Enabled" : ": Auto Reply Disabled");
     sync_toggle_ui_elements(app);
 }
@@ -613,7 +789,7 @@ void cmd_toggle_autoexe(AppContext *app, const char *args) {
         return;
     }
 
-    app->auto_execute_enabled = state;
+    app->sys.auto_execute_enabled = state;
     write_to_ai_pane_wrapper(app, state ? ": Auto Execute Enabled" : ": Auto Execute Disabled");
     sync_toggle_ui_elements(app);
 }
@@ -642,7 +818,7 @@ void cmd_toggle_ratelimit(AppContext *app, const char *args) {
         return;
     }
 
-    app->ratelimit_enabled = state;
+    app->sys.ratelimit_enabled = state;
     write_to_ai_pane_wrapper(app, state ? ": Rate Limiting Enabled." : ": Rate Limiting Disabled.");
     sync_toggle_ui_elements(app);
 }
@@ -671,7 +847,7 @@ void cmd_toggle_smart_cache(AppContext *app, const char *args) {
         return;
     }
 
-    app->smart_cache_enabled = state;
+    app->sys.smart_cache_enabled = state;
     write_to_ai_pane_wrapper(app, state ? ": Smart Cache Enabled." : ": Smart Cache Disabled.");
     sync_toggle_ui_elements(app);
 }
@@ -700,9 +876,40 @@ void cmd_toggle_noise_filter(AppContext *app, const char *args) {
         return;
     }
 
-    app->noise_filter_enabled = state;
+    app->sys.noise_filter_enabled = state;
     write_to_ai_pane_wrapper(app, state ? ": Noise Block Enabled." : ": Noise Block Disabled.");
     sync_toggle_ui_elements(app);
+    noise_filter_load_from_db(app);
+}
+
+void cmd_toggle_xml_tagging(AppContext *app, const char *args) {
+    const char *ptr = args;
+    gboolean state = FALSE;
+
+    if (ptr && *ptr == ' ') {
+        ptr++;
+    }
+
+    if (!ptr || strlen(ptr) == 0) {
+        write_to_ai_pane_wrapper(app,": required parameter missing: ON or OFF");
+        return;
+    }
+
+    if (strcmp(ptr, "on") == 0) {
+        state = TRUE;
+    } else if (strcmp(ptr, "off") == 0) {
+        state = FALSE;
+    } else {
+        GString *msg = g_string_new(": Unknown parameter parsed: ");
+        g_string_append_printf(msg, "%s ", ptr);
+        write_to_ai_pane_wrapper(app, msg->str);
+        return;
+    }
+
+    app->xml.tagging_enabled = state;
+    write_to_ai_pane_wrapper(app, state ? ": XML Payload Tagging Enabled." : ": XML Payload Tagging Disabled.");
+    sync_toggle_ui_elements(app);
+    noise_filter_load_from_db(app);
 }
 
 // ================= End of Toggle ON / OFF functions  ======================
@@ -729,6 +936,7 @@ void cmd_noise_add(AppContext *app, const char *args) {
 
     char *msg = g_strdup_printf(": Success: Pattern '%s' added to noise filters.", ptr);
     write_to_ai_pane_wrapper(app, msg);
+    noise_filter_load_from_db(app);
     g_free(msg);
 }
 
@@ -740,4 +948,10 @@ void cmd_noise_list(AppContext *app, const char *args) {
 void cmd_noise_delete(AppContext *app, const char *args) {
     // Placeholder stub until announced
     write_to_ai_pane_wrapper(app, ": System: 'noise delete' function is to be announced as of yet.");
+    noise_filter_load_from_db(app);
+}
+
+void cmd_noisefilter_reload_wrapper(AppContext *app, const char *args) {
+    noise_filter_load_from_db(app);
+    write_to_ai_pane(app, "System: ", "Reloaded noise filters from database into running cache", "ai_tag", "cmd_tag");
 }

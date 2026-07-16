@@ -37,6 +37,7 @@ void on_save_policy_clicked(GtkWidget *button, gpointer user_data);
 void on_delete_policy_clicked(GtkWidget *button, gpointer user_data);
 void on_dialog_policy_manager_gui_destroy(GtkWidget *widget, gpointer user_data);
 void open_policy_manager_window(AppContext *app);
+void close_policy_manager(AppContext *app);
 
 #endif // POLICY_MANAGER_GUI_H
 
