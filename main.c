@@ -27,7 +27,7 @@
 #include "commands.h"
 
 // Current AITERM version
-const char* AITERM_VERSION	= "0.9.5-omega";
+const char* AITERM_VERSION	= "0.9.6";
 const char* AITERM_BUILDID	= BUILD_ID;
 const char* AITERM_BUILD_TIME	= BUILD_TIME;
 const char* CONFIG_FILE		= "/etc/aiterm.conf";
