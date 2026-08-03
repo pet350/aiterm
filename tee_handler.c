@@ -153,7 +153,9 @@ void tee_handle_input(AppContext *app, const char *text) {
 void tee_handle_output(AppContext *app, const char *text_in) {
     if (!text_in || !app->aiterm_runtime.tee_accumulator) return;
     if (text_in[0] == '\n' && text_in[1] == '\0') return;
-    char *text = noise_filter_apply(app, text_in);
+    char *text = noise_filter_apply(app, strip_blank_lines(text_in));
+
+    DEBUG_PRINT("[DEBUG]: [Tee Handler] %s\n", text);
 
     g_mutex_lock(&app->access.buffer_mutex);
     DEBUG_PRINT("[DEBUG]: TEE_HANDLE_OUTPUT: Locked buffer mutex\n");

@@ -22,7 +22,24 @@
 #include <time.h>
 #include "ratelimit.h"
 
-#define APP_NAME    "aiterm"
+#define APP_NAME	"aiterm"
+#define MAX_TABS	32
+
+typedef struct {
+    struct ifaddrs *ifaddr;
+    struct ifaddrs *ifa;
+} NetworkConfig;
+
+// Structure to govern opening and closing o tabs
+// Added 0.9.6
+typedef struct {
+    GtkWidget *tab_label_box;
+    GtkWidget *label;
+    GtkWidget *close_btn;
+    gboolean is_active;
+    gboolean close_tab_button_enabled;
+    gboolean double_click_new_tab;
+} TabSettings;
 
 // enum of supported AI APIs
 typedef enum {
@@ -136,10 +153,16 @@ typedef struct {
 // Dedicated sub-structure for Smart Cache
 // Added 0.9.5-alpha
 typedef struct {
-    char *id;               // Tracks the active "cachedContents/xxxx" handle
-    time_t created_at;      // Epoch timestamp tracking to handle TTL expiration
-    int turn_count;         // Number of historical db rows safely frozen in this cache instance
-    long min_token_threshold;
+    char *id;                  // Active "cachedContents/xxxx" handle
+    char *name;                // Resource ID (e.g. "cachedContents/1234567890")
+    char *system_instruction;  // System prompt pinned to this cache session
+    time_t created_at;         // Local creation timestamp
+    int ttl_seconds;           // Lifetime duration
+    int cached_token_count;    // Tokens currently stored in cache
+    int turn_count;            // Number of historical db rows frozen in this cache
+    int min_token_floor;       // Threshold required before triggering cache
+    long min_token_threshold;  // Minimum token count boundary
+    gboolean is_valid;         // Active valid cache flag
 } GeminiCacheState;
 
 // Moved all system booleans to it's own structure
@@ -241,6 +264,7 @@ typedef struct {
     SystemBooleans sys;			 // Sub-Structure for all system control booleans
     UIComponents ui;			 // Sub-Structure for GtkWidgets of all UI components
     RateLimiter limiter;                 // Sub-Structure for Rate Limiter variables
+    NetworkConfig net;			 // Sub-Structure for nrtwork configuration
     NoiseFilter noise;	 		 // Sub-Structure for all Noise filter variables
     SessionContext session;		 // Sub-Structure for the current sessions variables
     ProviderConfig provider_config;	 // Sub-Structure for AI Provider config variables
@@ -248,10 +272,10 @@ typedef struct {
     LocalCommand local;	  		 // Sub-Structure for local commands being cached. (up/down arrow call back)
     TokenTracker tokens;		 // Sub-Structure for keeping track of AI Tokens
     GeminiCacheState gemini_cache;	 // Sub-Structure for Smart Cache variables
+    TabSettings tabs[MAX_TABS];		 // Sub-Structure for opening and cloing terminal tabs -- Added 0.9.6
     TagPayload xml;			 // Sub-Structure for handling xml taggs
     SysWidgets gui;			 // Sub-Structure for handling system GUI Widgets
     SecurityConfig security;		 // Sub-Structure for security keys
-
 }  AppContext;
 
 // AIThreadData threaded sending data backbone
@@ -281,11 +305,18 @@ void set_icon(AppContext *app);
 void on_upload_clicked(GtkButton *button, gpointer data);
 void on_copy_clicked(GtkButton *button, gpointer data);
 void on_buffer_changed_scroll(GtkTextBuffer *buffer, gpointer data);
+void on_terminal_child_exited(VteTerminal *terminal, gint status, gpointer user_data);
+void on_tab_close_requested(AppContext *app, GtkWidget *term);
+void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_num, gpointer data);
+void on_notebook_double_click(GtkGestureMultiPress *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data);
+void on_tab_close_clicked(GtkButton *button, gpointer user_data);
+void add_terminal_tab(AppContext *app);
 
 // Boolean function Prototypes
 gboolean scroll_ai_pane_to_bottom(AppContext *app);
 gboolean scroll_to_bottom_idle(gpointer data);
 gboolean on_entry_key_press(GtkWidget *widget, GdkEventKey *event, gpointer user_data);
+gboolean on_notebook_button_press(GtkWidget *widget, GdkEventButton *event, gpointer user_data);
 
 #endif
 

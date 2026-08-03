@@ -11,12 +11,56 @@
 #include <curl/curl.h>
 #include <json-c/json.h>
 
-#include "gemini_cache.h" // Includes gui.h and dependencies indirectly
+#include "gemini_cache.h"
 #include "gui.h"
 #include "gemini.h"
 #include "update.h"
-#include "utils.h"        // Assuming WriteMemoryCallback and DEBUG_PRINT live here
+#include "utils.h"
 
+char *get_cache_dir(void) {
+    const char *user_cache = g_get_user_cache_dir();
+    char *dir = g_build_filename(user_cache, "aiterm", "gemini", NULL);
+    g_mkdir_with_parents(dir, 0700);
+    return dir;
+}
+
+char *gemini_cache_lookup(const char *prompt_hash) {
+    if (!prompt_hash || strlen(prompt_hash) == 0) {
+        return NULL;
+    }
+
+    char *dir = get_cache_dir();
+    char *filename = g_strdup_printf("%s.json", prompt_hash);
+    char *filepath = g_build_filename(dir, filename, NULL);
+    g_free(filename);
+    g_free(dir);
+
+    char *content = NULL;
+    gsize length = 0;
+
+    if (g_file_get_contents(filepath, &content, &length, NULL)) {
+        g_free(filepath);
+        return content;
+    }
+
+    g_free(filepath);
+    return NULL;
+}
+
+void gemini_cache_store(const char *prompt_hash, const char *response_json) {
+    if (!prompt_hash || !response_json || strlen(prompt_hash) == 0) {
+        return;
+    }
+
+    char *dir = get_cache_dir();
+    char *filename = g_strdup_printf("%s.json", prompt_hash);
+    char *filepath = g_build_filename(dir, filename, NULL);
+    g_free(filename);
+    g_free(dir);
+
+    g_file_set_contents(filepath, response_json, -1, NULL);
+    g_free(filepath);
+}
 
 // Safely initialize the caching sub-structure inside AppContext
 void gemini_cache_init(AppContext *app) {
@@ -25,7 +69,7 @@ void gemini_cache_init(AppContext *app) {
     app->gemini_cache.created_at = 0;
     app->gemini_cache.turn_count = 0;
     if (!app->gemini_cache.min_token_threshold) {
-        app->gemini_cache.min_token_threshold = 32768;
+        app->gemini_cache.min_token_threshold = GEMINI_CACHE_MIN_TOKEN_FLOOR;
     }
     DEBUG_PRINT("[DEBUG]: [Smart Cache] initialized. Minimum threshold set to %ld tokens.\n", 
                 app->gemini_cache.min_token_threshold);
@@ -42,7 +86,7 @@ void gemini_cache_clear(AppContext *app) {
     app->gemini_cache.turn_count = 0;
 }
 
-// Validate the active cache lifetime and structural parameters
+// Validate active cache lifetime and history integrity
 gboolean gemini_cache_is_valid(AppContext *app, int current_history_turns) {
     if (!app || app->gemini_cache.id == NULL) {
         return FALSE;
@@ -50,9 +94,9 @@ gboolean gemini_cache_is_valid(AppContext *app, int current_history_turns) {
 
     time_t now = time(NULL);
 
-    // Invalidate if cache age exceeds 50 minutes (3000s) to be safely inside Gemini's 1hr TTL
-    // OR if history is suddenly smaller than what was cached (e.g. session switched or cleared)
-    if ((now - app->gemini_cache.created_at) >= 3000 || current_history_turns < app->gemini_cache.turn_count) {
+    // Invalidate if cache age exceeds 50 minutes (3000s) or history turn count dropped
+    if ((now - app->gemini_cache.created_at) >= (GEMINI_CACHE_DEFAULT_TTL_SEC - GEMINI_CACHE_TTL_MARGIN_SEC) || 
+        current_history_turns < app->gemini_cache.turn_count) {
         DEBUG_PRINT("[DEBUG]: Invalidating old, expired, or mismatched Gemini Context Cache.\n");
         gemini_cache_clear(app);
         return FALSE;
@@ -61,36 +105,33 @@ gboolean gemini_cache_is_valid(AppContext *app, int current_history_turns) {
     return TRUE;
 }
 
-// Generate the physical cache on the Gemini server side
+// Generate physical cache handle on the Gemini server side
 gboolean gemini_cache_create(AppContext *app, struct json_object *contents) {
     if (!app || !contents) {
         return FALSE;
     }
 
-    long pending_cache_tokens = 32768;
-    if(app->tokens.current) {
-        // Read current accumulated tokens in the potential cache payload
+    long pending_cache_tokens = GEMINI_CACHE_MIN_TOKEN_FLOOR;
+    if (app->tokens.current) {
         pending_cache_tokens = app->tokens.current;
         DEBUG_PRINT("[DEBUG] [Cache Create] Pending Cache Tokens %ld\n", pending_cache_tokens);
     } else {
         DEBUG_PRINT("[DEBUG] [Cache Create] Set Default Pending Cache Tokens %ld\n", pending_cache_tokens);
     }
 
-    // Safeguard 1: Don't cache if we haven't reached our local floor
+    // Safeguard 1: Don't cache if below local threshold floor
     if (pending_cache_tokens < app->gemini_cache.min_token_threshold) {
-        DEBUG_PRINT("[DEBUG]: Cache creation bypassed. Current tokens (%ld) below threshold floor (%ld).\n",
+        DEBUG_PRINT("[DEBUG]: Cache creation bypassed. Current tokens (%ld) below floor (%ld).\n",
                     pending_cache_tokens, app->gemini_cache.min_token_threshold);
         return FALSE;
     }
 
-    // Safeguard 2: If we are intentionally running on a Free Tier key, 
-    // we can set the threshold to -1 to completely prevent cache API overhead.
+    // Safeguard 2: Threshold < 0 disables explicit caching overhead entirely
     if (app->gemini_cache.min_token_threshold < 0) {
         DEBUG_PRINT("[DEBUG]: Cache bypassed. Explicit caching disabled via threshold setting.\n");
         return FALSE;
     }
 
-    // Reset current cache ahead of creation sequence
     gemini_cache_clear(app);
 
     int turn_count = json_object_array_length(contents);
@@ -98,14 +139,12 @@ gboolean gemini_cache_create(AppContext *app, struct json_object *contents) {
         return FALSE;
     }
 
-    // Map network parameters safely from the new app->api_config sub-structure
     ProviderConfig *api = &app->provider_config;
     const char *model = (api->model && strlen(api->model) > 0) ? api->model : "gemini-1.5-flash-lite";
     const char *base_url = (api->base_url && strlen(api->base_url) > 0) ? api->base_url : "https://generativelanguage.googleapis.com/v1beta";
     const char *query_key = (api->query_key_name && strlen(api->query_key_name) > 0) ? api->query_key_name : "key";
     const char *api_key = api->api_key;
 
-    // Cleanly normalize model layout
     char model_buf[256];
     if (strncmp(model, "models/", 7) == 0) {
         snprintf(model_buf, sizeof(model_buf), "%s", model);
@@ -113,11 +152,10 @@ gboolean gemini_cache_create(AppContext *app, struct json_object *contents) {
         snprintf(model_buf, sizeof(model_buf), "models/%s", model);
     }
 
-    // Wrap the history sequence inside the cache object
     struct json_object *root = json_object_new_object();
     json_object_object_add(root, "model", json_object_new_string(model_buf));
-    json_object_object_add(root, "contents", json_object_get(contents)); // Bump reference count
-    json_object_object_add(root, "ttl", json_object_new_string("3600s")); // 1 Hour TTL
+    json_object_object_add(root, "contents", json_object_get(contents));
+    json_object_object_add(root, "ttl", json_object_new_string("3600s"));
     json_object_object_add(root, "displayName", json_object_new_string("aiterm_history_cache"));
 
     const char *post_data = json_object_to_json_string(root);
@@ -125,7 +163,6 @@ gboolean gemini_cache_create(AppContext *app, struct json_object *contents) {
     char url[1024];
     snprintf(url, sizeof(url), "%s/cachedContents?%s=%s", base_url, query_key, api_key ? api_key : "");
 
-    // Structure buffer chunk setup for standard response processing
     struct {
         char *memory;
         size_t size;
@@ -142,7 +179,6 @@ gboolean gemini_cache_create(AppContext *app, struct json_object *contents) {
         curl_easy_setopt(curl_handle, CURLOPT_POSTFIELDS, post_data);
         curl_easy_setopt(curl_handle, CURLOPT_HTTPHEADER, headers);
 
-        // Link to global Curl response callback
         extern size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp);
         curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
         curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
@@ -187,15 +223,63 @@ gboolean gemini_cache_create(AppContext *app, struct json_object *contents) {
     return success;
 }
 
+// Build query payload using json-c
+char *gemini_cache_build_query_payload(AppContext *app, const char *new_prompt_text) {
+    if (!app || !new_prompt_text) return NULL;
 
-// Force-invalidate the active cache safely, releasing allocated memory
+    struct json_object *root = json_object_new_object();
+
+    if (app->gemini_cache.id && gemini_cache_is_valid(app, app->gemini_cache.turn_count)) {
+        json_object_object_add(root, "cachedContent", json_object_new_string(app->gemini_cache.id));
+    }
+
+    struct json_object *contents_arr = json_object_new_array();
+    struct json_object *turn_obj = json_object_new_object();
+    json_object_object_add(turn_obj, "role", json_object_new_string("user"));
+
+    struct json_object *parts_arr = json_object_new_array();
+    struct json_object *part_obj = json_object_new_object();
+    json_object_object_add(part_obj, "text", json_object_new_string(new_prompt_text));
+
+    json_object_array_add(parts_arr, part_obj);
+    json_object_object_add(turn_obj, "parts", parts_arr);
+    json_object_array_add(contents_arr, turn_obj);
+
+    json_object_object_add(root, "contents", contents_arr);
+
+    const char *json_str = json_object_to_json_string(root);
+    char *result = json_str ? g_strdup(json_str) : NULL;
+
+    json_object_put(root);
+    return result;
+}
+
+// Invalidate active cache and release allocated handle
 void gemini_cache_invalidate(AppContext *app) {
     if (!app) return;
 
-    DEBUG_PRINT("[DEBUG]: Manual cache invalidation triggered. Clearing active session context cache.\n");
+    DEBUG_PRINT("[DEBUG]: Manual cache invalidation triggered.\n");
 
-    // This safely g_free's the ID and sets it to NULL,
-    // which forces gemini_cache_is_valid() to return FALSE on the next request.
+    if (app->gemini_cache.id && app->provider_config.api_key) {
+        ProviderConfig *api = &app->provider_config;
+        const char *base_url = (api->base_url && strlen(api->base_url) > 0) ? api->base_url : "https://generativelanguage.googleapis.com/v1beta";
+        const char *query_key = (api->query_key_name && strlen(api->query_key_name) > 0) ? api->query_key_name : "key";
+
+        char url[1024];
+        snprintf(url, sizeof(url), "%s/%s?%s=%s", base_url, app->gemini_cache.id, query_key, api->api_key);
+
+        CURL *curl_handle = curl_easy_init();
+        if (curl_handle) {
+            curl_easy_setopt(curl_handle, CURLOPT_URL, url);
+            curl_easy_setopt(curl_handle, CURLOPT_CUSTOMREQUEST, "DELETE");
+            curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 5L);
+            
+            curl_easy_perform(curl_handle);
+            curl_easy_cleanup(curl_handle);
+        }
+    }
+
     gemini_cache_clear(app);
 }
+
 

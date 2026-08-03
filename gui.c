@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <json-c/json.h>
+#include <gtk/gtk.h>
 #include <gdk/gdkkeysyms.h>
 #include <mariadb/mysql.h>
 
@@ -144,7 +145,6 @@ void apply_block_cursor_to_input(GtkWidget *entry) {
     g_object_unref(provider);
 }
 
-
 // 0.8.3 FIX: Enhanced CSS for GtkNotebook (Tab Bar)
 // Targets internal node names (header, stack, tab) to override
 // default white themes when running as root/Adwaita-light.
@@ -198,7 +198,38 @@ void apply_custom_theme() {
         "  border-bottom: 2px solid #00FF00; "
         "}"
 
-        /* 6. Text inputs and global typography fallback */
+        // Aded 0.9.6
+        /* Custom close button styling on GtkNotebook tabs */
+        "#tab-close-btn { "
+        "   padding: 0px 3px; "
+        "   margin: 0px; "
+        "   border: none; "
+        "   background: transparent; "
+        "   color: #aaaaaa; "
+        "   font-weight: bold; "
+        "   font-size: 11pt; "
+        "}"
+        "#tab-close-btn:hover { "
+        "   color: #ff3b30; "
+        "   background-color: rgba(255, 59, 48, 0.2); "
+        "   border-radius: 3px; "
+        "}"
+
+        /* 6. Token Tracker Bar Customization */
+        "#token-bar text { "
+        "   color: #00FF00; "
+        "   font-weight: bold; "
+        "   font-size: 9pt; "
+        "}"
+        "#token-bar trough { "
+        "   background-color: #121212; "
+        "   border: 1px solid #333333; "
+        "}"
+        "#token-bar progress { "
+        "   background-color: #0f380f; "
+        "}"
+
+        /* 7. Text inputs and global typography fallback */
         "textview { background-color: transparent; color: #dcdcdc; font-family: monospace; font-size: 10pt; }"
         "entry { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333333; }"
         "label { color: #aaaaaa; }";
@@ -234,7 +265,7 @@ static gboolean on_window_key_press(GtkWidget *widget, GdkEventKey *event, gpoin
 
 // NEW: Lifecycle tracking handler syncing app->gui.terminal_view during tab adjustments
 // Updated 0.9.4
-static void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_num, gpointer data) {
+void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_num, gpointer data) {
     AppContext *app = (AppContext *)data;
 
     // The page added inside our scroll windows is the scrolled window container.
@@ -252,31 +283,107 @@ static void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_nu
     }
 }
 
+// Total rework on 0.9.6
 // NEW: Modular spawner adding fully functional isolated terminals into the notebook array
 void add_terminal_tab(AppContext *app) {
     static int tab_counter = 0;
-    tab_counter++;
 
-    // 1. Build infrastructure elements
+    // Safety check against exceeding MAX_TABS threshold
+    gint current_count = gtk_notebook_get_n_pages(GTK_NOTEBOOK(app->gui.notebook));
+    if (current_count >= MAX_TABS) {
+        g_warning("Maximum tab threshold (%d) reached.", MAX_TABS);
+        return;
+    }
+
+    tab_counter++;
+    DEBUG_PRINT("[DEBUG]: [Tabs] Opening new tab instance #%d\n", tab_counter);
+
+    // 1. Build infrastructure terminal elements
     GtkWidget *term_scroll = gtk_scrolled_window_new(NULL, NULL);
     GtkWidget *new_terminal = setup_terminal(app); // Spawns VTE + execs shell hook
     gtk_container_add(GTK_CONTAINER(term_scroll), new_terminal);
 
-    // 2. Build label string
+    // 2. Build composite Tab Header Box (Label + Close Button)
+    GtkWidget *tab_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+
     char tab_label_text[32];
     snprintf(tab_label_text, sizeof(tab_label_text), "pts/%d", tab_counter);
     GtkWidget *tab_label = gtk_label_new(tab_label_text);
 
-    // 3. Inject page structure into the notebook layout
-    gint index = gtk_notebook_append_page(GTK_NOTEBOOK(app->gui.notebook), term_scroll, tab_label);
+    // Create custom close 'X' button
+    GtkWidget *close_btn = gtk_button_new_with_label("×");
+    gtk_widget_set_name(close_btn, "tab-close-btn"); // CSS targeting handle
+    gtk_button_set_relief(GTK_BUTTON(close_btn), GTK_RELIEF_NONE);
+    gtk_widget_set_focus_on_click(close_btn, FALSE);
+
+    // Pack label and button into header box
+    gtk_box_pack_start(GTK_BOX(tab_box), tab_label, TRUE, TRUE, 0);
+    gtk_box_pack_end(GTK_BOX(tab_box), close_btn, FALSE, FALSE, 0);
+    gtk_widget_show_all(tab_box);
+
+    // Attach child container reference to the close button for instant lookup
+    g_object_set_data(G_OBJECT(close_btn), "tab-page-child", term_scroll);
+
+    // Connect close button click event
+    g_signal_connect(close_btn, "clicked", G_CALLBACK(on_tab_close_clicked), app);
+
+    // 3. Inject composite header page into the notebook layout
+    gint index = gtk_notebook_append_page(GTK_NOTEBOOK(app->gui.notebook), term_scroll, tab_box);
     gtk_widget_show_all(term_scroll);
 
-    // 4. Ensure window interceptor handles input routing on the new console layer
+    // 4. Update internal TabSettings array state in AppContext
+    if (index >= 0 && index < MAX_TABS) {
+        app->tabs[index].tab_label_box = tab_box;
+        app->tabs[index].label = tab_label;
+        app->tabs[index].close_btn = close_btn;
+        app->tabs[index].is_active = TRUE;
+        app->tabs[index].close_tab_button_enabled = TRUE;
+        app->tabs[index].double_click_new_tab = TRUE;
+    }
+
+    // 5. Ensure window interceptor handles input routing on the new console layer
     g_signal_connect(new_terminal, "key-press-event", G_CALLBACK(on_window_key_press), app);
 
-    // 5. Jump focus directly to our newly allocated workspace
+    // 6. Jump focus directly to our newly allocated workspace
     gtk_notebook_set_current_page(GTK_NOTEBOOK(app->gui.notebook), index);
     gtk_widget_grab_focus(new_terminal);
+}
+
+// Added 0.9.6
+// Callback triggered when the 'X' button on a tab header is clicked
+void on_tab_close_clicked(GtkButton *button, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    if (!app || !app->gui.notebook) return;
+
+    // Retrieve the associated terminal container widget attached to this close button
+    GtkWidget *term_scroll = GTK_WIDGET(g_object_get_data(G_OBJECT(button), "tab-page-child"));
+    if (!term_scroll) return;
+
+    // Dynamically resolve the live page index in the notebook (0-based)
+    gint page_num = gtk_notebook_page_num(GTK_NOTEBOOK(app->gui.notebook), term_scroll);
+    if (page_num != -1) {
+        gint total_pages = gtk_notebook_get_n_pages(GTK_NOTEBOOK(app->gui.notebook));
+
+        DEBUG_PRINT("[DEBUG]: [Tabs] Closing GTK page index #%d (Total open: %d)\n", page_num, total_pages);
+
+        // 1. Remove the page from the GTK Notebook container
+        gtk_notebook_remove_page(GTK_NOTEBOOK(app->gui.notebook), page_num);
+
+        // 2. Shift app->tabs array elements left to keep tracking in sync with GTK indices
+        for (int i = page_num; i < total_pages - 1 && i < MAX_TABS - 1; i++) {
+            app->tabs[i] = app->tabs[i + 1];
+        }
+
+        // Clear the newly vacated last slot
+        if (total_pages - 1 < MAX_TABS) {
+            memset(&app->tabs[total_pages - 1], 0, sizeof(TabSettings));
+        }
+
+        // 3. Safety net: If all tabs are closed, spawn a fresh default terminal tab
+        if (gtk_notebook_get_n_pages(GTK_NOTEBOOK(app->gui.notebook)) == 0) {
+            add_terminal_tab(app);
+        }
+    }
 }
 
 void on_upload_clicked(GtkButton *button, gpointer data) {
@@ -308,6 +415,27 @@ void on_upload_clicked(GtkButton *button, gpointer data) {
         g_free(filename);
     }
     gtk_widget_destroy(dialog);
+}
+
+gboolean on_notebook_button_press(GtkWidget *widget, GdkEventButton *event, gpointer user_data) {
+    AppContext *app_ctx = (AppContext *)user_data;
+
+    if (!app_ctx) {
+        return FALSE;
+    }
+
+    // Check for a left double-click (GDK_2BUTTON_PRESS + Button 1)
+    if (event->type == GDK_2BUTTON_PRESS && event->button == GDK_BUTTON_PRIMARY) {
+        
+        // Call your existing helper function to allocate and attach a new tab
+        add_terminal_tab(app_ctx);
+
+        // Return TRUE to stop further event propagation
+        return TRUE;
+    }
+
+    // Return FALSE to allow standard tab switching/dragging behavior on single clicks
+    return FALSE;
 }
 
 void on_copy_clicked(GtkButton *button, gpointer data) {
@@ -393,18 +521,25 @@ void setup_gui(AppContext *app) {
     gtk_notebook_set_tab_pos(GTK_NOTEBOOK(app->gui.notebook), GTK_POS_TOP);
     gtk_notebook_set_scrollable(GTK_NOTEBOOK(app->gui.notebook), TRUE);
 
+    // Ensure the notebook widget receives button press events
+    gtk_widget_add_events(app->gui.notebook, GDK_BUTTON_PRESS_MASK);
+
+    // Connect the button-press-event to the notebook for double-click tab creation
+    g_signal_connect(app->gui.notebook, "button-press-event", G_CALLBACK(on_notebook_button_press), app);
+
     // Connect tracker handler ensuring app->gui.terminal_view shifts variables on page selection flips
     g_signal_connect(app->gui.notebook, "switch-page", G_CALLBACK(on_tab_changed), app);
     gtk_paned_pack1(GTK_PANED(paned), app->gui.notebook, TRUE, FALSE);
 
     // Allocate our initial bootup console instance inside the array matrix
     add_terminal_tab(app);
-
+    
     // --- RIGHT PANE (AI History Console View with Token Tracker Bar) ---
     GtkWidget *right_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
 
     // Instantiate and pack the token bar at the top of the right pane layout
     app->tokens.bar = gtk_progress_bar_new();
+    gtk_widget_set_name(app->tokens.bar, "token-bar");
     gtk_progress_bar_set_show_text(GTK_PROGRESS_BAR(app->tokens.bar), TRUE);
 
     char initial_text[128];

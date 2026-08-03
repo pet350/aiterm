@@ -23,6 +23,7 @@
 #include "tee_handler.h"
 #include "policy_dao.h"
 #include "commands.h"
+#include "autoexec.h"
 
 // Rate Limiting
 static time_t last_request_time = 0;
@@ -117,6 +118,7 @@ void process_for_ai(AppContext *app, const char *text, gboolean is_input) {
 }
 
 // GUI update callback for AI responses
+// Total rework 0.9.6-gamma
 gboolean update_gui_with_response(gpointer data) {
     AIResponseData *rd = (AIResponseData *)data;
     if (!rd) return FALSE;
@@ -127,11 +129,14 @@ gboolean update_gui_with_response(gpointer data) {
             append_ai_text(rd->app, "System: ", "system_tag");
             append_ai_text(rd->app, rd->response_text, "body_tag");
             scroll_ai_pane_to_bottom(global_app);
-        }  else if (rd->app->sys.auto_execute_enabled && is_ai_command(rd->response_text)) {
-            execute_ai_command(rd->app, rd->response_text);
         } else {
-            // AI Response: Header in Green, Content in Yellow
+            // 1. ALWAYS render the AI response text to the side pane first
             write_to_ai_pane(rd->app, "AI: ", rd->response_text, "ai_tag", "body_tag");
+
+            // 2. Evaluate and execute code blocks if auto-execute toggle is enabled
+            if (rd->app->sys.auto_execute_enabled) {
+                process_auto_execution(rd->app, rd->response_text);
+            }
         }
     } else {
         write_to_ai_pane(rd->app, "System: ", "No response from provider.", "cmd_tag", "cmd_tag");
