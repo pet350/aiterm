@@ -25,7 +25,10 @@
 #include "ratelimit.h"
 #include "commands.h"
 #include "noisefilter.h"
+#include "gemini.h"
 
+// Kept the functions "legacy name"
+// for the most part it all booleans initialized here 
 void initialize_booleans(AppContext *app) {
     // 1. Set initial variables to their needed defaults
     app->sys.db_initialized = FALSE;
@@ -39,15 +42,27 @@ void initialize_booleans(AppContext *app) {
     app->sys.mysql_busy = FALSE;
     app->sys.ai_busy = FALSE;
     app->sys.smart_cache_enabled = FALSE;
+    app->session.cfg_loaded_write_to_global = FALSE;
+    app->session.cfg_loaded_read_from_global = FALSE;
+    app->xml.tagging_enabled = FALSE;
 
     // NON-Boolean initializer
+    // [ I know the function's name is 
+    //   initialize_booleans and these 
+    //   are not boolean, but it is the 
+    //   perfect place to initialize. lol ]
+    for (int i = 0; i < MAX_TABS; i++) {
+        memset(&app->tabs[i], 0, sizeof(TabSettings));
+        app->tabs[i].tab_label_box = NULL;
+        app->tabs[i].label = NULL;
+        app->tabs[i].close_btn = NULL;
+        app->tabs[i].is_active = FALSE;
+        app->tabs[i].close_tab_button_enabled = TRUE; 
+        // ... etc
+    }
     app->database.sequence_id = 0;
     app->limiter.requests_per_minute=20;
 
-    app->session.cfg_loaded_write_to_global = FALSE;
-    app->session.cfg_loaded_read_from_global = FALSE;
-
-    app->xml.tagging_enabled = FALSE;
 }
 
 // Added 0.9.5-beta
@@ -824,8 +839,8 @@ gboolean is_ai_command(const char *text) {
 }
 
 char* extract_ai_command(const char *text) {
-    char *start = strstr(text, "<cmd>");
-    char *end = strstr(text, "</cmd>");
+    char *start = (char *)strstr(text, "<cmd>");
+    char *end = (char *)strstr(text, "</cmd>");
     if (!start || !end || end < start) return NULL;
 
     start += 5; // Skip "<cmd>"
@@ -874,5 +889,19 @@ void print_version() {
     printf("aiterm version %-16s\n", AITERM_VERSION);
     printf("Build ID: %s\n", AITERM_BUILDID);
     printf("Build Time: %s\n", AITERM_BUILD_TIME);
+}
+
+gboolean on_app_startup_prime(gpointer user_data) {
+        AppContext *app = (AppContext *)user_data;
+    if (!app) return G_SOURCE_REMOVE;
+
+    // Send initialization prompt once GTK event loop is live
+    GString *init_prompt = g_string_new("System Initialized. Acknowledge readiness in 1 sentence.");
+    g_string_append_printf(init_prompt, "%s\n", GENERAL_DIRECTIVES);
+
+    DEBUG_PRINT("[DEBUG]: [INIT]: Priming Gemini session after GTK loop start...");
+    send_to_gemini(app, (char*)init_prompt);
+
+    return G_SOURCE_REMOVE; // Run once and remove source
 }
 

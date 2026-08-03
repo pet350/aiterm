@@ -29,7 +29,7 @@ extern const char* AITERM_VERSION;
 extern const char* AITERM_BUILDID;
 extern const char* AITERM_BUILD_TIME;
 extern const char* CONFIG_FILE;
-
+extern const char* GENERAL_DIRECTIVES;
 
 
 #define DEBUG_PRINT(fmt, ...) \
@@ -108,6 +108,7 @@ void tee_flush_timed(AppContext *app);
 void feed_terminal_header(VteTerminal *terminal, const char *msg);
 
 gboolean is_ai_command(const char *text);
+gboolean on_app_startup_prime(gpointer user_data);
 
 #endif
 

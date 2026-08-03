@@ -53,21 +53,23 @@ char* perform_gemini_request(AppContext *app, const char *prompt) {
     // 1. Inject baseline history from MariaDB into the contents array first
     load_history_to_gemini(app, contents, prompt);
 
-    // 2. Now we can safely capture the turn count baseline
-    int total_history_turns = json_object_array_length(contents);
+    // Compute prompt hash for cache lookup/storage
+    char *prompt_hash = g_compute_checksum_for_string(G_CHECKSUM_SHA256, prompt, -1);
 
-    // 3. Check if we already have a valid cache matching the current history depth
-    gboolean use_cache = gemini_cache_is_valid(app, total_history_turns);
-
-    // 4. If no valid cache exists, request a new cache using the unified AppContext helper
-    if (!use_cache && total_history_turns > 0) {
-        if (gemini_cache_create(app, contents)) {
-            use_cache = TRUE;
-        }
+    // Check local cache first
+    char *cached_res = gemini_cache_lookup(prompt_hash);
+    if (cached_res != NULL) {
+        g_free(prompt_hash);
+        g_free(tee_chunk);
+        if (screen_text) g_free(screen_text);
+        json_object_put(root);
+        return cached_res; 
     }
 
+    int total_history_turns = json_object_array_length(contents);
+
     // 5. If using a valid cache, slice the history array to only transmit the delta
-    if (use_cache && app->gemini_cache.id != NULL) {
+    if (app->sys.smart_cache_enabled && app->gemini_cache.id != NULL) {
         struct json_object *trimmed_contents = json_object_new_array();
         for (int i = app->gemini_cache.turn_count; i < total_history_turns; i++) {
             struct json_object *turn = json_object_array_get_idx(contents, i);
@@ -136,6 +138,9 @@ char* perform_gemini_request(AppContext *app, const char *prompt) {
         } else {
             DEBUG_PRINT("[DEBUG]: \n--- RAW GEMINI RESPONSE ---\n%s\n--------------------------\n", chunk.memory);
             
+            // Store response into local cache upon success
+            gemini_cache_store(prompt_hash, chunk.memory);
+
             struct json_object *root_obj = json_tokener_parse(chunk.memory);
             if (root_obj) {
                 struct json_object *usage_meta;
@@ -160,6 +165,7 @@ char* perform_gemini_request(AppContext *app, const char *prompt) {
         curl_easy_cleanup(curl_handle);
     }
 
+    g_free(prompt_hash);
     g_free(full_prompt);
     g_free(tee_chunk);
     if (screen_text) g_free(screen_text);
