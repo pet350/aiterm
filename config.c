@@ -77,6 +77,9 @@ void save_config(AppContext *app) {
     fprintf(fp, "noise_filter_enabled=%d\n", app->sys.noise_filter_enabled);
     fprintf(fp, "debug_mode=%d\n", app->sys.debug_mode);
     fprintf(fp, "xml_tagging=%d\n", app->xml.tagging_enabled);
+    fprintf(fp, "ai_retry_enabled=%d\n", app->retry_config.is_enabled);
+    fprintf(fp, "ai_retry_max_retries=%d\n", app->retry_config.max_retries);
+    fprintf(fp, "ai_retry_delay_sec=%d\n", app->retry_config.delay_sec);
     fprintf(fp, "# End of Config file.\n\n");
 
     fclose(fp);
@@ -206,6 +209,18 @@ void load_config(AppContext *app) {
                 app->xml.tagging_enabled = atoi(strchr(line, '=') + 1);
                 const char *xml_tagging_enabled_val = app->xml.tagging_enabled ? "ON" : "OFF";
                 DEBUG_PRINT("[DEBUG]: [LOADED] XML Payload Tagging Enabled [%s]\n", xml_tagging_enabled_val);
+        } else if (strstr(line, "ai_retry_enabled=")) {
+                app->retry_config.is_enabled = atoi(strchr(line, '=') + 1);
+                app->retry_state.config.is_enabled = app->retry_config.is_enabled;
+                DEBUG_PRINT("[DEBUG]: [LOADED] AI Retry Enabled [%s]\n", app->retry_config.is_enabled ? "ON" : "OFF");
+        } else if (strstr(line, "ai_retry_max_retries=")) {
+                app->retry_config.max_retries = atoi(strchr(line, '=') + 1);
+                app->retry_state.config.max_retries = app->retry_config.max_retries;
+                DEBUG_PRINT("[DEBUG]: [LOADED] AI Retry Max Attempts [%d]\n", app->retry_config.max_retries);
+        } else if (strstr(line, "ai_retry_delay_sec=")) {
+                app->retry_config.delay_sec = atoi(strchr(line, '=') + 1);
+                app->retry_state.config.delay_sec = app->retry_config.delay_sec;
+                DEBUG_PRINT("[DEBUG]: [LOADED] AI Retry Delay [%d sec]\n", app->retry_config.delay_sec);
         }
     }
     fclose(fp);

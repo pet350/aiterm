@@ -57,6 +57,9 @@ void display_status(AppContext *app) {
     const char *auto_val = app->sys.autoreply_enabled ? "ON" : "OFF";
     g_string_append_printf(status_report, "Autoreply:\t%s\n", auto_val);
 
+    const char *autoretry_val = app->retry_config.is_enabled ? "ON" : "OFF";
+    g_string_append_printf(status_report, "Autoretry:\t%s\n", autoretry_val);
+
     const char *auto_exec_val = app->sys.auto_execute_enabled ? "ON" : "OFF";
     g_string_append_printf(status_report, "Auto Execute:\t%s\n", auto_exec_val);
 
@@ -78,6 +81,14 @@ void display_status(AppContext *app) {
     char *rpm_val = g_malloc(8);
     snprintf(rpm_val, 8, "%d", app->limiter.requests_per_minute);
     g_string_append_printf(status_report, "Requests Per Minute:\t%s\n", rpm_val);
+
+    char *max_retries_val = g_malloc(8);
+    snprintf(max_retries_val, 8, "%d", app->retry_config.max_retries);
+    g_string_append_printf(status_report, "AutoRetry Times:\t%s\n", max_retries_val);
+
+    char *delay_sec_val = g_malloc(8);
+    snprintf(delay_sec_val, 8, "%d", app->retry_config.delay_sec);
+    g_string_append_printf(status_report, "AutoRetry Delay:\t%s\n", delay_sec_val);
 
     const char *write_to_global_val = app->session.write_to_global ? "GLOBAL session" : "STRICT session";
     g_string_append_printf(status_report, "Writting to database:\t%s\n", write_to_global_val);
@@ -114,6 +125,11 @@ void display_status(AppContext *app) {
     append_ai_text(app, auto_val, app->sys.autoreply_enabled ? "ai_tag" : "cmd_tag");
     append_ai_text(app, "\n", "body_tag");
 
+    // Autoretry Row
+    append_ai_text(app, "Autoretry:\t\t", "body_tag");
+    append_ai_text(app, autoretry_val, app->retry_config.is_enabled ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+
     // Auto Execute Row
     append_ai_text(app, "Auto Execute:\t\t", "body_tag");
     append_ai_text(app, auto_exec_val, app->sys.auto_execute_enabled ? "ai_tag" : "cmd_tag");
@@ -137,6 +153,16 @@ void display_status(AppContext *app) {
     // Requests Per Minute
     append_ai_text(app, "Requests Per Minute:\t", "body_tag");
     append_ai_text(app, rpm_val, "ai_tag");
+    append_ai_text(app, "\n", "body_tag");
+
+    // Auto retry times
+    append_ai_text(app, "AutoRetry Times:\t", "body_tag");
+    append_ai_text(app, max_retries_val, "ai_tag");
+    append_ai_text(app, "\n", "body_tag");
+
+    // Auto retry delay
+    append_ai_text(app, "AutoRetry Delay:\t", "body_tag");
+    append_ai_text(app, delay_sec_val, "ai_tag");
     append_ai_text(app, "\n", "body_tag");
 
     // Noise Filter Row

@@ -104,6 +104,7 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
 static CommandRegistry registry[] = {
     {"auto all", "Toggle (on/off): Tee, AutoReply, & AutoExecute", cmd_toggle_auto_all},
     {"autoreply", "Toggle real-time prompt analysis (on/off)", cmd_toggle_autoreply},
+    {"autoretry", "Toggles auto AI retry (on/off)", cmd_toggle_autoretry},
     {"autoexe", "Toggle execution of AI payloads (on/off)", cmd_toggle_autoexe},
     {"clear", "Clear the contents of the AI pane", handle_clear_wrapper},
     {"close history manager", "Closes the history manager window", cmd_close_history_manager_wrapper},
@@ -145,6 +146,8 @@ static CommandRegistry registry[] = {
     {"ratelimit", "Toggle Raate Limiting (on/off)", cmd_toggle_ratelimit},
     {"reset db", "Reset database connection", cmd_reset_db_connect},
     {"reset state", "Reeset current AI state back to ready", handle_reset_state_wrapper},
+    {"retry times", "Set the number of time to Autorety", cmd_set_retry_times}, 
+    {"retry delay", "Set the delay between retries", cmd_set_retry_delay},
     {"rpm", "Set ratelimit Requests Per Minute", cmd_set_rpm},
     {"status", "Display operational metrics", handle_status_wrapper},
     {"tee", "Toggle immediate terminal capturing (on/off)", cmd_toggle_tee},
@@ -551,6 +554,9 @@ void cmd_policy_manager_wrapper(AppContext *app, const char *args) {
     open_policy_manager_window(app);
 }
 
+// -------------------------------
+// Commands setting integer values
+// -------------------------------
 void cmd_set_rpm(AppContext *app, const char *args) {
     const char *ptr = args;
 
@@ -582,7 +588,95 @@ void cmd_set_rpm(AppContext *app, const char *args) {
 
     // Re-initialize the rate limiter state with the newly validated RPM
     ratelimit_init(&app->limiter, app->limiter.requests_per_minute);
+
+    GString *status_report = g_string_new(": Requests per minute is set to");
+    char *rpm_val = g_malloc(8);
+    snprintf(rpm_val, 8, "%d", app->limiter.requests_per_minute);
+    g_string_append_printf(status_report, ":\t%s\n", rpm_val);
+
+    write_to_ai_pane_wrapper(app, status_report->str);
+    g_string_free(status_report, TRUE);
 }
+
+void cmd_set_retry_times(AppContext *app, const char *args) {
+    const char *ptr = args;
+
+    // 1. Skip any initial spaces after the command name (e.g., "/rpm 6" or "/rpm =6")
+    while (ptr && *ptr == ' ') {
+        ptr++;
+    }
+
+    // 2. If an equals sign is present, skip past it (e.g., "/rpm=6" or "/rpm =6")
+    if (ptr && *ptr == '=') {
+        ptr++;
+    }
+
+    // 3. Skip any spaces after the equals sign just in case (e.g., "/rpm = 6")
+    while (ptr && *ptr == ' ') {
+        ptr++;
+    }
+
+    // 4. Validation guard: Ensure we actually have characters left to parse
+    if (!ptr || strlen(ptr) == 0 || !isdigit((unsigned char)*ptr)) {
+        write_to_ai_pane_wrapper(app, ": Error: Required parameter missing or invalid. Provide a numeric RPM value.");
+        return;
+    }
+
+    // 5. Safely convert the sanitized string to an integer
+    app->retry_config.max_retries = atoi(ptr);
+    DEBUG_PRINT("[DEBUG]: [AutoRetry] Maximum retries set to %d (Parsed from raw input)\n", 
+                app->retry_config.max_retries);
+
+    GString *status_report = g_string_new(": Maximum retries is set to");
+    char *max_retries_val = g_malloc(8);
+    snprintf(max_retries_val, 8, "%d", app->retry_config.max_retries);
+    g_string_append_printf(status_report, ":\t%s\n", max_retries_val);
+
+    write_to_ai_pane_wrapper(app, status_report->str);
+    g_string_free(status_report, TRUE);
+
+}
+
+void cmd_set_retry_delay(AppContext *app, const char *args) {
+    const char *ptr = args;
+
+    // 1. Skip any initial spaces after the command name (e.g., "/rpm 6" or "/rpm =6")
+    while (ptr && *ptr == ' ') {
+        ptr++;
+    }
+
+    // 2. If an equals sign is present, skip past it (e.g., "/rpm=6" or "/rpm =6")
+    if (ptr && *ptr == '=') {
+        ptr++;
+    }
+
+    // 3. Skip any spaces after the equals sign just in case (e.g., "/rpm = 6")
+    while (ptr && *ptr == ' ') {
+        ptr++;
+    }
+
+    // 4. Validation guard: Ensure we actually have characters left to parse
+    if (!ptr || strlen(ptr) == 0 || !isdigit((unsigned char)*ptr)) {
+        write_to_ai_pane_wrapper(app, ": Error: Required parameter missing or invalid. Provide a numeric value.");
+
+        return;
+    }
+
+    // 5. Safely convert the sanitized string to an integer
+    app->retry_config.delay_sec = atoi(ptr);
+    DEBUG_PRINT("[DEBUG]: [AutoRetry] Delay set to %d seconds (Parsed from raw input)\n",
+                app->retry_config.delay_sec);
+
+    GString *status_report = g_string_new(": AutoReply delay is set to");
+    char *delay_sec_val = g_malloc(8);
+    snprintf(delay_sec_val, 8, "%d", app->retry_config.delay_sec);
+    g_string_append_printf(status_report, ":\t%s seconds\n", delay_sec_val);
+
+    write_to_ai_pane_wrapper(app, status_report->str);
+    g_string_free(status_report, TRUE);
+
+}
+
 
 // ================= Start of Toggle ON / OFF functions  ======================
 
@@ -762,6 +856,35 @@ void cmd_toggle_autoreply(AppContext *app, const char *args) {
 
     app->sys.autoreply_enabled = state;
     write_to_ai_pane_wrapper(app, state ? ": Auto Reply Enabled" : ": Auto Reply Disabled");
+    sync_toggle_ui_elements(app);
+}
+
+void cmd_toggle_autoretry(AppContext *app, const char *args) {
+    const char *ptr = args;
+    gboolean state = FALSE;
+
+    if (ptr && *ptr == ' ') {
+        ptr++;
+    }
+
+    if (!ptr || strlen(ptr) == 0) {
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON or OFF");
+        return;
+    }
+
+    if (strcmp(ptr, "on") == 0) {
+        state = TRUE;
+    } else if (strcmp(ptr, "off") == 0) {
+        state = FALSE;
+    } else {
+        GString *msg = g_string_new(": Unknown parameter parsed: ");
+        g_string_append_printf(msg, "%s ", ptr);
+        write_to_ai_pane_wrapper(app, msg->str);
+        return;
+    }
+
+    app->retry_config.is_enabled = state;
+    write_to_ai_pane_wrapper(app, state ? ": Auto Retry Enabled" : ": Auto Retry Disabled");
     sync_toggle_ui_elements(app);
 }
 

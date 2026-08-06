@@ -30,6 +30,21 @@ typedef struct {
     struct ifaddrs *ifa;
 } NetworkConfig;
 
+//Added 0.9.6-omega
+/* Sub-structure dedicated to AI Retry configuration */
+typedef struct {
+    gboolean is_enabled;
+    int max_retries;
+    int delay_sec;
+} AIRetryConfig;
+
+// Added 0.9.6-omega
+/* Sub-structure dedicated to AI Retry runtime state & metrics */
+typedef struct {
+    AIRetryConfig config;
+    guint64 total_retries_executed;
+} AIRetryState;
+
 // Structure to govern opening and closing o tabs
 // Added 0.9.6
 typedef struct {
@@ -180,6 +195,7 @@ typedef struct {
     gboolean ai_busy;
     gboolean is_processing;
     gboolean db_initialized;
+    gboolean is_initializing;
 } SystemBooleans;
 
 // All main GUI related variable structure
@@ -276,6 +292,8 @@ typedef struct {
     TagPayload xml;			 // Sub-Structure for handling xml taggs
     SysWidgets gui;			 // Sub-Structure for handling system GUI Widgets
     SecurityConfig security;		 // Sub-Structure for security keys
+    AIRetryConfig retry_config;		 // Sub-Structure for configuration of AI retry
+    AIRetryState retry_state;		 // Sub-structure for the current state of AI retry 
 }  AppContext;
 
 // AIThreadData threaded sending data backbone

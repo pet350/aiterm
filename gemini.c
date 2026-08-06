@@ -3,7 +3,7 @@
 // functions for sending/recieving data to and from Gemini
 // By: Peter Talbott
 // Assisted by: Gemini
-// July 2026
+// July 2026, August 2026
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,18 +21,65 @@
 #include "openai.h"
 #include "session_manager.h"
 #include "noisefilter.h"
+#include "ai_retry.h"
 
-// --- 1. The Core API Logic ---
-// This function returns the RAW JSON string from Gemini.
-// It is "UI Neutral" so it can run safely in a background thread.
-char* perform_gemini_request(AppContext *app, const char *prompt) {
+typedef struct {
+    AppContext *app;
+    const char *url;
+} GeminiHttpData;
+
+
+extern const char *GENERAL_DIRECTIVES;
+
+// Single-attempt HTTP dispatch function compatible with ai_retry_execute_with_retry
+static char *gemini_http_single_attempt(const char *payload, long *out_http_code, void *user_data) {
+    GeminiHttpData *data = (GeminiHttpData *)user_data;
+    if (!data || !data->app || !data->url) return NULL;
+
     CURL *curl_handle;
     CURLcode res;
-    char url[1024];
     struct MemoryStruct chunk;
-
     chunk.memory = malloc(1);
     chunk.size = 0;
+    long http_code = 0;
+
+    curl_handle = curl_easy_init();
+    if (curl_handle) {
+        struct curl_slist *headers = curl_slist_append(NULL, "Content-Type: application/json");
+        curl_easy_setopt(curl_handle, CURLOPT_URL, data->url);
+        curl_easy_setopt(curl_handle, CURLOPT_POSTFIELDS, payload);
+        curl_easy_setopt(curl_handle, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+        curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
+
+        // Fail-safe boundaries
+        curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10L);  
+        curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 30L);         
+        curl_easy_setopt(curl_handle, CURLOPT_TCP_KEEPALIVE, 1L);    
+
+        res = curl_easy_perform(curl_handle);
+        if (res == CURLE_OK) {
+            curl_easy_getinfo(curl_handle, CURLINFO_RESPONSE_CODE, &http_code);
+        } else {
+            DEBUG_PRINT("[DEBUG]: CURL Error: %s\n", curl_easy_strerror(res));
+            http_code = 0;
+        }
+
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl_handle);
+    }
+
+    if (out_http_code) {
+        *out_http_code = http_code;
+    }
+
+    return chunk.memory;
+}
+
+// --- 1. The Core API Logic ---
+// UI-neutral execution wrapped with AI Retry handler
+char* perform_gemini_request(AppContext *app, const char *prompt) {
+    char url[1024];
 
     char *screen_text = NULL;
     if (VTE_IS_TERMINAL(app->gui.terminal_view)) {
@@ -50,8 +97,27 @@ char* perform_gemini_request(AppContext *app, const char *prompt) {
     struct json_object *root = json_object_new_object();
     struct json_object *contents = json_object_new_array();
 
-    // 1. Inject baseline history from MariaDB into the contents array first
-    load_history_to_gemini(app, contents, prompt);
+    // 1. System Instruction Injection (Root Level)
+    if (GENERAL_DIRECTIVES && GENERAL_DIRECTIVES[0] != '\0') {
+        struct json_object *sys_instruction = json_object_new_object();
+        struct json_object *sys_parts = json_object_new_array();
+        struct json_object *sys_part = json_object_new_object();
+
+        json_object_object_add(sys_part, "text", json_object_new_string(GENERAL_DIRECTIVES));
+        json_object_array_add(sys_parts, sys_part);
+        json_object_object_add(sys_instruction, "parts", sys_parts);
+        json_object_object_add(root, "system_instruction", sys_instruction);
+    } else {
+        DEBUG_PRINT("[DEBUG]: [Send to Gemini] GENERAL_DIRECTIVES is NULL or empty.\n");
+    }
+
+    // 2. Load History from Database (Only when not initializing)
+    if (!app->sys.is_initializing) {
+        DEBUG_PRINT("[DEBUG]: [Perform Gemini Request] Not Initializing, Loading History\n");
+        load_history_to_gemini(app, contents, prompt);
+    } else {
+        DEBUG_PRINT("[DEBUG]: [Init Phase] Bypassing history retrieval.\n");
+    }
 
     // Compute prompt hash for cache lookup/storage
     char *prompt_hash = g_compute_checksum_for_string(G_CHECKSUM_SHA256, prompt, -1);
@@ -68,37 +134,33 @@ char* perform_gemini_request(AppContext *app, const char *prompt) {
 
     int total_history_turns = json_object_array_length(contents);
 
-    // 5. If using a valid cache, slice the history array to only transmit the delta
+    // Slice history array if using active server-side cache
     if (app->sys.smart_cache_enabled && app->gemini_cache.id != NULL) {
         struct json_object *trimmed_contents = json_object_new_array();
         for (int i = app->gemini_cache.turn_count; i < total_history_turns; i++) {
             struct json_object *turn = json_object_array_get_idx(contents, i);
-            json_object_get(turn); // Increment reference count safely
+            json_object_get(turn);
             json_object_array_add(trimmed_contents, turn);
         }
-        json_object_put(contents);   // Drop full base history array cleanly
-        contents = trimmed_contents; // Swap delta back into place
+        json_object_put(contents);
+        contents = trimmed_contents;
 
-        // Inject the server-side cache reference handle to the root layout
         json_object_object_add(root, "cachedContent", json_object_new_string(app->gemini_cache.id));
     }
 
-    // 6. Construct and append the immediate foreground prompt transaction payload
-    struct json_object *content_obj = json_object_new_object();
-    struct json_object *parts = json_object_new_array();
-    struct json_object *part_text = json_object_new_object();
+    // 3. Append SINGLE Final User Turn (Terminal Screen + Prompt)
+    struct json_object *user_msg = json_object_new_object();
+    struct json_object *user_parts = json_object_new_array();
+    struct json_object *user_part = json_object_new_object();
 
-    // Build the full prompt with the wrapped TEE chunk
-    char *full_prompt = g_strdup_printf(
-        "%s\n\nUSER INSTRUCTION: %s",
-        tee_chunk, prompt);
+    char *full_prompt = g_strdup_printf("%s\n\nUSER INSTRUCTION: %s", tee_chunk, prompt);
 
-    json_object_object_add(part_text, "text", json_object_new_string(full_prompt));
-    json_object_array_add(parts, part_text);
-    json_object_object_add(content_obj, "parts", parts);
+    json_object_object_add(user_part, "text", json_object_new_string(full_prompt));
+    json_object_array_add(user_parts, user_part);
+    json_object_object_add(user_msg, "role", json_object_new_string("user"));
+    json_object_object_add(user_msg, "parts", user_parts);
     
-    // Append current conversation turn to the end of our history array/delta
-    json_object_array_add(contents, content_obj);
+    json_object_array_add(contents, user_msg);
     json_object_object_add(root, "contents", contents);
 
     const char *post_data = json_object_to_json_string(root);
@@ -118,51 +180,42 @@ char* perform_gemini_request(AppContext *app, const char *prompt) {
         ratelimit_wait_if_needed(&app->limiter);
     }
 
-    curl_handle = curl_easy_init();
-    if (curl_handle) {
-        struct curl_slist *headers = curl_slist_append(NULL, "Content-Type: application/json");
-        curl_easy_setopt(curl_handle, CURLOPT_URL, url);
-        curl_easy_setopt(curl_handle, CURLOPT_POSTFIELDS, post_data);
-        curl_easy_setopt(curl_handle, CURLOPT_HTTPHEADER, headers);
-        curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
-        curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
+    // Delegate HTTP request execution and backoff logic to AI Retry subsystem
+    GeminiHttpData http_data = {
+        .app = app,
+        .url = url
+    };
 
-        // --- Fail-safe boundaries ---
-        curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10L);  
-        curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 30L);         
-        curl_easy_setopt(curl_handle, CURLOPT_TCP_KEEPALIVE, 1L);    
+    long final_http_code = 0;
+    char *raw_json = ai_retry_execute_with_retry(app, gemini_http_single_attempt, post_data, &http_data, &final_http_code);
 
-        res = curl_easy_perform(curl_handle);
-        if (res != CURLE_OK) {
-            DEBUG_PRINT("[DEBUG]: CURL Error: %s\n", curl_easy_strerror(res));
-        } else {
-            DEBUG_PRINT("[DEBUG]: \n--- RAW GEMINI RESPONSE ---\n%s\n--------------------------\n", chunk.memory);
-            
-            // Store response into local cache upon success
-            gemini_cache_store(prompt_hash, chunk.memory);
-
-            struct json_object *root_obj = json_tokener_parse(chunk.memory);
-            if (root_obj) {
-                struct json_object *usage_meta;
-                if (json_object_object_get_ex(root_obj, "usageMetadata", &usage_meta)) {
-                    struct json_object *total_toks = NULL;
-                    struct json_object *cand_toks = NULL;
-                    
-                    if (json_object_object_get_ex(usage_meta, "totalTokenCount", &total_toks)) {
-                        app->tokens.current = json_object_get_int64(total_toks);
-                    }
-                    if (json_object_object_get_ex(usage_meta, "candidatesTokenCount", &cand_toks)) {
-                        app->tokens.last = json_object_get_int64(cand_toks);
-                    }
-                    
-                    extern gboolean refresh_token_display(gpointer data);
-                    g_idle_add(refresh_token_display, app);
-                }
-                json_object_put(root_obj); 
-            }
+    if (raw_json != NULL) {
+        DEBUG_PRINT("[DEBUG]: \n--- RAW GEMINI RESPONSE (HTTP %ld) ---\n%s\n--------------------------\n", final_http_code, raw_json);
+        
+        // Cache successful responses
+        if (final_http_code == 200) {
+            gemini_cache_store(prompt_hash, raw_json);
         }
-        curl_slist_free_all(headers);
-        curl_easy_cleanup(curl_handle);
+
+        struct json_object *root_obj = json_tokener_parse(raw_json);
+        if (root_obj) {
+            struct json_object *usage_meta;
+            if (json_object_object_get_ex(root_obj, "usageMetadata", &usage_meta)) {
+                struct json_object *total_toks = NULL;
+                struct json_object *cand_toks = NULL;
+                
+                if (json_object_object_get_ex(usage_meta, "totalTokenCount", &total_toks)) {
+                    app->tokens.current = json_object_get_int64(total_toks);
+                }
+                if (json_object_object_get_ex(usage_meta, "candidatesTokenCount", &cand_toks)) {
+                    app->tokens.last = json_object_get_int64(cand_toks);
+                }
+                
+                extern gboolean refresh_token_display(gpointer data);
+                g_idle_add(refresh_token_display, app);
+            }
+            json_object_put(root_obj); 
+        }
     }
 
     g_free(prompt_hash);
@@ -171,17 +224,16 @@ char* perform_gemini_request(AppContext *app, const char *prompt) {
     if (screen_text) g_free(screen_text);
     json_object_put(root);
 
-    return chunk.memory; // Return the raw JSON (Caller must free)
+    return raw_json;
 }
 
-// --- 2. The Background Thread Worker ---
+// --- 2. Background Thread Worker ---
 gpointer ai_thread_func(gpointer data) {
     AIThreadData *td = (AIThreadData *)data;
     if (!td) return NULL;
 
     char *raw_json = NULL;
 
-    // Route to correct provider
     if (td->app->provider_config.kind == PROVIDER_KIND_GEMINI_GENERATE) {
         raw_json = perform_gemini_request(td->app, td->prompt);
     } else {
@@ -238,7 +290,6 @@ gpointer ai_thread_func(gpointer data) {
     rd->response_text = final_text;
     rd->original_prompt = g_strdup(td->prompt);
 
-    // Hand back to the Main UI Thread
     g_idle_add((GSourceFunc)update_gui_with_response, rd);
 
     g_free(td->prompt);
@@ -246,7 +297,7 @@ gpointer ai_thread_func(gpointer data) {
     return NULL;
 }
 
-// Compatibility wrapper for tee_handler.c and other legacy calls
+// Legacy compatibility wrapper
 char* send_to_gemini(AppContext *app, const char *prompt) {
     if (app->sys.ratelimit_enabled) {
         ratelimit_wait_if_needed(&app->limiter);
@@ -259,9 +310,9 @@ char* send_to_gemini(AppContext *app, const char *prompt) {
     char *output = g_strdup(noise_filter_apply(app, prompt));
     app->sys.ai_busy = TRUE;
     DEBUG_PRINT("[DEBUG] SEND_TO_GEMINI: set ai_busy flag TRUE\n");
-    char *data = g_strdup(perform_gemini_request(app, output));
+    char *data = perform_gemini_request(app, output);
     app->sys.ai_busy = FALSE;
-    DEBUG_PRINT("[DEBUG] SEND_TO_GEMINI: Cleared ai_busy flag, returning %ld bytes\n", sizeof(data));
+    DEBUG_PRINT("[DEBUG] SEND_TO_GEMINI: Cleared ai_busy flag, returning response\n");
     g_free(output);
     return data;
 }
@@ -354,3 +405,4 @@ char* gemini_list_models(AppContext *app) {
 
     return g_string_free(model_output_str, FALSE); 
 }
+

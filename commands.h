@@ -48,6 +48,8 @@ void handle_save_config_wrapper(AppContext *app, const char *args);
 void handle_extended_help(AppContext *app, const char *args);
 
 void cmd_set_rpm(AppContext *app, const char *args);
+void cmd_set_retry_times(AppContext *app, const char *args);
+void cmd_set_retry_delay(AppContext *app, const char *args);
 void cmd_reset_db_connect(AppContext *app, const char *args);
 
 // CMD Session Prototypes
@@ -85,6 +87,7 @@ void cmd_toggle_auto_all(AppContext *app, const char *args);
 void cmd_toggle_tee(AppContext *app, const char *args);
 void cmd_toggle_autoexe(AppContext *app, const char *args);
 void cmd_toggle_autoreply(AppContext *app, const char *args);
+void cmd_toggle_autoretry(AppContext *app, const char *args);
 void cmd_toggle_debug(AppContext *app, const char *args);
 void cmd_toggle_noise_filter(AppContext *app, const char *args);
 void cmd_toggle_smart_cache(AppContext *app, const char *args);

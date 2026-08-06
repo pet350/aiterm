@@ -54,5 +54,6 @@ void on_preferences(GtkWidget *widget, gpointer data);
 void on_tee_flush(GtkWidget *widget, gpointer data);
 void on_menu_session_manager(GtkMenuItem *item, gpointer data);
 void sync_toggle_ui_elements(AppContext *app);
+void sync_toggle_ui_elements(AppContext *app);
 
 #endif

@@ -63,6 +63,9 @@ void initialize_booleans(AppContext *app) {
     app->database.sequence_id = 0;
     app->limiter.requests_per_minute=20;
 
+    // the ONLY app->sys.xxxxx boolen that is TRUE on startup
+    app->sys.is_initializing = TRUE;
+
 }
 
 // Added 0.9.5-beta
@@ -891,17 +894,27 @@ void print_version() {
     printf("Build Time: %s\n", AITERM_BUILD_TIME);
 }
 
+
+// Updated 0.9.6-omega
+void on_initialization_complete(AppContext *app) {
+    if (app->sys.is_initializing) {
+        app->sys.is_initializing = false;
+        fprintf(stderr, "[DEBUG]: Initialization complete. Normal session active.\n");
+        fflush(stderr);
+    }
+}
+
+// Updated 0.9.6-omega
 gboolean on_app_startup_prime(gpointer user_data) {
-        AppContext *app = (AppContext *)user_data;
+    AppContext *app = (AppContext *)user_data;
     if (!app) return G_SOURCE_REMOVE;
 
-    // Send initialization prompt once GTK event loop is live
-    GString *init_prompt = g_string_new("System Initialized. Acknowledge readiness in 1 sentence.");
-    g_string_append_printf(init_prompt, "%s\n", GENERAL_DIRECTIVES);
-
     DEBUG_PRINT("[DEBUG]: [INIT]: Priming Gemini session after GTK loop start...");
-    send_to_gemini(app, (char*)init_prompt);
-
-    return G_SOURCE_REMOVE; // Run once and remove source
+    
+    // GENERAL_DIRECTIVES will now automatically be injected into the root JSON 
+    // payload by perform_gemini_request() during this priming call.
+    send_to_gemini(app, "System Initialized. Acknowledge readiness in 1 sentence.");
+    on_initialization_complete(app);
+    return G_SOURCE_REMOVE;
 }
 

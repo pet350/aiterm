@@ -1,9 +1,9 @@
 // part of aiterm project
 // menu.c
-// Function for handling GUI Menu events
+// Function for handling GUI Menu events, toggles, and AI Retry settings
 // By: Peter Talbott
 // Assisted by: Gemini
-// May 2026
+// August 2026
 
 #include <vte/vte.h>
 #include <mariadb/mysql.h>
@@ -22,9 +22,12 @@
 #include "tee_handler.h"
 #include "toggles.h"
 #include "config.h"
+#include "status.h"
+#include "ai_retry.h"
 #include "history_manager_gui.h"
 #include "noise_filter_manager_gui.h"
 #include "policy_manager_gui.h"
+#include "session_manager_gui.h"
 
 // Memory clean up helper for signal hooks
 void free_menu_data(gpointer data, GClosure *closure) {
@@ -116,6 +119,91 @@ void on_paste(GtkWidget *widget, gpointer data) {
     vte_terminal_paste_clipboard(VTE_TERMINAL(app->gui.terminal_view));
 }
 
+void on_show_status_activate(GtkMenuItem *item, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    if (app) {
+        display_status(app);
+    }
+}
+
+// AI Retry Options Callbacks
+static void on_toggle_ai_retry_toggled(GtkCheckMenuItem *item, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    if (!app) return;
+
+    app->retry_config.is_enabled = gtk_check_menu_item_get_active(item);
+    app->retry_state.config.is_enabled = app->retry_config.is_enabled;
+
+    DEBUG_PRINT("[DEBUG]: [MENU] AI Retry toggle set to: %s\n", app->retry_config.is_enabled ? "ON" : "OFF");
+    save_config(app);
+}
+
+static void on_set_max_retries_activate(GtkMenuItem *item, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    if (!app) return;
+
+    GtkWidget *dialog = gtk_dialog_new_with_buttons(
+        "Set AI Max Retries",
+        GTK_WINDOW(app->gui.window),
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        "_Cancel", GTK_RESPONSE_CANCEL,
+        "_OK", GTK_RESPONSE_ACCEPT,
+        NULL
+    );
+
+    GtkWidget *content_area = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    GtkWidget *label = gtk_label_new("Enter maximum retry attempts (1-10):");
+    GtkWidget *spin_btn = gtk_spin_button_new_with_range(1, 10, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin_btn), app->retry_config.max_retries);
+
+    gtk_box_pack_start(GTK_BOX(content_area), label, FALSE, FALSE, 5);
+    gtk_box_pack_start(GTK_BOX(content_area), spin_btn, FALSE, FALSE, 5);
+    gtk_widget_show_all(dialog);
+
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        int new_val = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(spin_btn));
+        app->retry_config.max_retries = new_val;
+        app->retry_state.config.max_retries = new_val;
+        DEBUG_PRINT("[DEBUG]: [MENU] AI Max Retries set to: %d\n", new_val);
+        save_config(app);
+    }
+
+    gtk_widget_destroy(dialog);
+}
+
+static void on_set_retry_delay_activate(GtkMenuItem *item, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    if (!app) return;
+
+    GtkWidget *dialog = gtk_dialog_new_with_buttons(
+        "Set AI Retry Delay",
+        GTK_WINDOW(app->gui.window),
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        "_Cancel", GTK_RESPONSE_CANCEL,
+        "_OK", GTK_RESPONSE_ACCEPT,
+        NULL
+    );
+
+    GtkWidget *content_area = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    GtkWidget *label = gtk_label_new("Enter retry delay interval in seconds (1-60):");
+    GtkWidget *spin_btn = gtk_spin_button_new_with_range(1, 60, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin_btn), app->retry_config.delay_sec);
+
+    gtk_box_pack_start(GTK_BOX(content_area), label, FALSE, FALSE, 5);
+    gtk_box_pack_start(GTK_BOX(content_area), spin_btn, FALSE, FALSE, 5);
+    gtk_widget_show_all(dialog);
+
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        int new_val = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(spin_btn));
+        app->retry_config.delay_sec = new_val;
+        app->retry_state.config.delay_sec = new_val;
+        DEBUG_PRINT("[DEBUG]: [MENU] AI Retry Delay set to: %d sec\n", new_val);
+        save_config(app);
+    }
+
+    gtk_widget_destroy(dialog);
+}
+
 // Forward declarations for mutual dependency blocking
 void on_tee_toggle(GtkWidget *widget, gpointer data) {
     AppContext *app = (AppContext *)data;
@@ -148,7 +236,6 @@ void on_autoreply_toggle(GtkWidget *widget, gpointer data) {
     }
     write_to_ai_pane(app, "System: ", app->sys.autoreply_enabled ? "Autoreply & Tee ENABLED" : "Autoreply DISABLED", "cmd_tag", "cmd_tag");
 }
-
 
 // --- Visual Preferences Callbacks ---
 void on_transparency_changed(GtkRange *range, gpointer data) {
@@ -276,10 +363,10 @@ void append_ai_action(GtkWidget *menu, const char *label, const char *cmd, gbool
     g_signal_connect_data(item, "activate", G_CALLBACK(on_menu_command_clicked), data, (GClosureNotify)free_menu_data, 0);
 }
 
+// --- Toggle UI Synchronization ---
 
 void sync_toggle_ui_elements(AppContext *app) {
     if (!app) return;
-
 
     // Sync Autoreply Checkbox
     if (app->ui.toggle_autoreply) {
@@ -351,22 +438,36 @@ void sync_toggle_ui_elements(AppContext *app) {
         g_signal_handlers_unblock_by_func(app->ui.toggle_session_read_global, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
     }
 
+    // Sync AI Auto-Retry Toggle UI state safely if GTK window is instantiated
+    if (app->gui.window && G_IS_OBJECT(app->gui.window)) {
+        GtkWidget *retry_item = g_object_get_data(G_OBJECT(app->gui.window), "retry_toggle_menu_item");
+        if (retry_item && GTK_IS_CHECK_MENU_ITEM(retry_item)) {
+            g_signal_handlers_block_by_func(retry_item, G_CALLBACK(on_toggle_ai_retry_toggled), app);
+            gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(retry_item), app->retry_config.is_enabled);
+            g_signal_handlers_unblock_by_func(retry_item, G_CALLBACK(on_toggle_ai_retry_toggled), app);
+        }
+    }
 }
-
 
 // --- Menu Builder ---
 
 GtkWidget* create_menu_bar(AppContext *app) {
     GtkWidget *menu_bar = gtk_menu_bar_new();
+
+    // File Menu
     GtkWidget *file_menu = gtk_menu_new();
     GtkWidget *file_item = gtk_menu_item_new_with_label("File");
+    GtkWidget *status_item = gtk_menu_item_new_with_label("System Status");
     GtkWidget *clear_item = gtk_menu_item_new_with_label("Clear AI History");
     GtkWidget *exit_item = gtk_menu_item_new_with_label("Exit");
+
+    // Edit Menu
     GtkWidget *edit_menu = gtk_menu_new();
     GtkWidget *edit_item = gtk_menu_item_new_with_label("Edit");
     GtkWidget *copy_item = gtk_menu_item_new_with_label("Copy Terminal");
     GtkWidget *paste_item = gtk_menu_item_new_with_label("Paste Terminal");
 
+    // Managers Menu
     GtkWidget *managers_menu = gtk_menu_new();
     GtkWidget *managers_root = gtk_menu_item_new_with_label("Managers");
     GtkWidget *session_item  = gtk_menu_item_new_with_label("Session Manager");
@@ -374,27 +475,53 @@ GtkWidget* create_menu_bar(AppContext *app) {
     GtkWidget *menu_item_noise   = gtk_menu_item_new_with_label("Noise Filter Manager");
     GtkWidget *menu_item_policy  = gtk_menu_item_new_with_label("Policy Manager");
 
+    // Tools Menu
     GtkWidget *tools_menu = gtk_menu_new();
     GtkWidget *tools_item = gtk_menu_item_new_with_label("Tools");
+    GtkWidget *tee_flush  = gtk_menu_item_new_with_label("Flush Tee Buffer");
+    GtkWidget *pref_item  = gtk_menu_item_new_with_label("Preferences");
+
+    // AI Root & Submenus
     GtkWidget *ai_root_item = gtk_menu_item_new_with_label("AI Controls");
     GtkWidget *ai_main_menu = gtk_menu_new();
-    GtkWidget *sys_item = gtk_menu_item_new_with_label("System & Help");
-    GtkWidget *sys_menu = gtk_menu_new();
-    GtkWidget *cfg_item = gtk_menu_item_new_with_label("Configuration");
-    GtkWidget *cfg_menu = gtk_menu_new();
+    
+    GtkWidget *sys_item  = gtk_menu_item_new_with_label("System & Help");
+    GtkWidget *sys_menu  = gtk_menu_new();
+    GtkWidget *cfg_item  = gtk_menu_item_new_with_label("Configuration");
+    GtkWidget *cfg_menu  = gtk_menu_new();
     GtkWidget *toggle_item = gtk_menu_item_new_with_label("Toggles");
     GtkWidget *toggle_menu = gtk_menu_new();
-    GtkWidget *tee_flush = gtk_menu_item_new_with_label("Flush Tee Buffer");
-    GtkWidget *pref_item = gtk_menu_item_new_with_label("Preferences");
-    GtkWidget *help_menu = gtk_menu_new();
-    GtkWidget *help_item = gtk_menu_item_new_with_label("Help");
-    GtkWidget *help_btn = gtk_menu_item_new_with_label("Help Content");
-    GtkWidget *about_btn = gtk_menu_item_new_with_label("About");
     GtkWidget *sess_item = gtk_menu_item_new_with_label("Sessions");
     GtkWidget *sess_menu = gtk_menu_new();
     GtkWidget *noise_item = gtk_menu_item_new_with_label("Noise Filters");
     GtkWidget *noise_menu = gtk_menu_new();
 
+    // AI Retry Submenu
+    GtkWidget *retry_item = gtk_menu_item_new_with_label("AI Retry Options");
+    GtkWidget *retry_menu = gtk_menu_new();
+
+    GtkWidget *toggle_retry = gtk_check_menu_item_new_with_label("Enable Auto-Retry");
+    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(toggle_retry), app->retry_config.is_enabled);
+    g_signal_connect(toggle_retry, "toggled", G_CALLBACK(on_toggle_ai_retry_toggled), app);
+
+    GtkWidget *max_attempts_item = gtk_menu_item_new_with_label("Set Max Retry Attempts...");
+    g_signal_connect(max_attempts_item, "activate", G_CALLBACK(on_set_max_retries_activate), app);
+
+    GtkWidget *delay_sec_item = gtk_menu_item_new_with_label("Set Retry Delay (Sec)...");
+    g_signal_connect(delay_sec_item, "activate", G_CALLBACK(on_set_retry_delay_activate), app);
+
+    gtk_menu_shell_append(GTK_MENU_SHELL(retry_menu), toggle_retry);
+    gtk_menu_shell_append(GTK_MENU_SHELL(retry_menu), max_attempts_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(retry_menu), delay_sec_item);
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(retry_item), retry_menu);
+
+    // Help Menu
+    GtkWidget *help_menu = gtk_menu_new();
+    GtkWidget *help_item = gtk_menu_item_new_with_label("Help");
+    GtkWidget *help_btn  = gtk_menu_item_new_with_label("Help Content");
+    GtkWidget *about_btn = gtk_menu_item_new_with_label("About");
+
+    // Populate AI System & Help
     append_ai_action(sys_menu, "Standard Help", "help", FALSE, app);
     append_ai_action(sys_menu, "Extended Help", "extended help", FALSE, app);
     append_ai_action(sys_menu, "Operational Status", "status", FALSE, app);
@@ -405,6 +532,7 @@ GtkWidget* create_menu_bar(AppContext *app) {
     append_ai_action(sys_menu, "Clear AI Response Pane", "clear", FALSE, app);
     append_ai_action(sys_menu, "Force Reset AI Async States", "reset state", FALSE, app);
     
+    // Populate AI Configuration
     append_ai_action(cfg_menu, "Show Active Provider Info", "provider", FALSE, app);
     append_ai_action(cfg_menu, "Query Available Remote Models", "list models", FALSE, app);
     append_ai_action(cfg_menu, "Reload from Conf File", "load config", FALSE, app);
@@ -414,7 +542,7 @@ GtkWidget* create_menu_bar(AppContext *app) {
 
     GtkWidget *item;
 
-    // --- Toggles Submenu Population via setup_menu_toggle() ---
+    // Populate Toggles Submenu via setup_menu_toggle()
     item = gtk_check_menu_item_new_with_label("Toggle Real-Time Prompt Analysis");
     setup_menu_toggle(item, app, TOGGLE_AUTOREPLY, app->sys.autoreply_enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
@@ -465,7 +593,7 @@ GtkWidget* create_menu_bar(AppContext *app) {
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 
-    // AI Context command shortcuts
+    // Populate AI Context Submenu
     append_ai_action(sess_menu, "Initialize New Session Iteration", "session new", FALSE, app);
     append_ai_action(sess_menu, "List Saved Persistent Contexts", "session list", FALSE, app);
     append_ai_action(sess_menu, "Inspect Active Working Environment Metadata", "session show", FALSE, app);
@@ -477,23 +605,25 @@ GtkWidget* create_menu_bar(AppContext *app) {
     append_ai_action(sess_menu, "Toggle Reading From Global Context (0000...)", "session read from global", FALSE, app);
     append_ai_action(sess_menu, "Toggle Writing Out into Global Broadcast Stream", "session write to global", FALSE, app);
     
+    // Populate Noise Filters Submenu
     append_ai_action(noise_menu, "List Active Cleaning Filters", "noise list", FALSE, app);
     append_ai_action(noise_menu, "Register New Suppression Rule (Regex)", "noise add", TRUE, app);
     append_ai_action(noise_menu, "Remove Suppression Rule (ID/Pattern)", "noise delete", TRUE, app);
 
     // Signals Binding
-    g_signal_connect(G_OBJECT(menu_item_history), "activate", G_CALLBACK(on_menu_history_manager_activate), app);
-    g_signal_connect(G_OBJECT(menu_item_noise), "activate", G_CALLBACK(on_menu_noise_filter_manager_activate), app);
-    g_signal_connect(G_OBJECT(menu_item_policy), "activate", G_CALLBACK(on_menu_policy_manager_activate), app);
+    g_signal_connect(status_item, "activate", G_CALLBACK(on_show_status_activate), app);
     g_signal_connect(clear_item, "activate", G_CALLBACK(on_clear), app);
     g_signal_connect(exit_item, "activate", G_CALLBACK(on_menu_exit), app);
     g_signal_connect(copy_item, "activate", G_CALLBACK(on_copy), app);
     g_signal_connect(paste_item, "activate", G_CALLBACK(on_paste), app);
+    g_signal_connect(G_OBJECT(menu_item_history), "activate", G_CALLBACK(on_menu_history_manager_activate), app);
+    g_signal_connect(G_OBJECT(menu_item_noise), "activate", G_CALLBACK(on_menu_noise_filter_manager_activate), app);
+    g_signal_connect(G_OBJECT(menu_item_policy), "activate", G_CALLBACK(on_menu_policy_manager_activate), app);
+    g_signal_connect(session_item, "activate", G_CALLBACK(on_menu_session_manager), app);
     g_signal_connect(tee_flush, "activate", G_CALLBACK(on_tee_flush), app);
     g_signal_connect(pref_item, "activate", G_CALLBACK(on_preferences), app);
     g_signal_connect(help_btn, "activate", G_CALLBACK(on_help), app);
     g_signal_connect(about_btn, "activate", G_CALLBACK(on_about), app);
-    g_signal_connect(session_item, "activate", G_CALLBACK(on_menu_session_manager), app);
 
     // Menu Assembly: Main menu_bar mapping
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), file_item);
@@ -504,6 +634,8 @@ GtkWidget* create_menu_bar(AppContext *app) {
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), help_item);
 
     // Menu Assembly: Submenus
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), status_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), gtk_separator_menu_item_new());
     gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), clear_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), exit_item);
 
@@ -515,20 +647,20 @@ GtkWidget* create_menu_bar(AppContext *app) {
     gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), menu_item_noise);
     gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), menu_item_policy);
 
+    gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), tee_flush);
+    gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), pref_item);
+
     gtk_menu_shell_append(GTK_MENU_SHELL(ai_main_menu), cfg_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(ai_main_menu), toggle_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(ai_main_menu), retry_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(ai_main_menu), sess_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(ai_main_menu), sys_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(ai_main_menu), noise_item);
 
-    // Tools Submenu layout is now concise and uniform
-    gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), tee_flush);
-    gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), pref_item);
-
     gtk_menu_shell_append(GTK_MENU_SHELL(help_menu), help_btn);
     gtk_menu_shell_append(GTK_MENU_SHELL(help_menu), about_btn);
 
-    // Connect structural branches back up to headers
+    // Attach submenus to parent menu items
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(file_item), file_menu);
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(edit_item), edit_menu);
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(tools_item), tools_menu);
@@ -541,7 +673,11 @@ GtkWidget* create_menu_bar(AppContext *app) {
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(sess_item), sess_menu);
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(help_item), help_menu);
 
+    // Save dynamic reference to AI Retry toggle for sync_toggle_ui_elements
+    if (app->gui.window && G_IS_OBJECT(app->gui.window)) {
+        g_object_set_data(G_OBJECT(app->gui.window), "retry_toggle_menu_item", toggle_retry);
+    }
+
     return menu_bar;
 }
-
 
