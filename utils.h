@@ -106,6 +106,7 @@ void display_all_history(AppContext *app);
 void tee_handle_output(AppContext *app, const char *text) ;
 void tee_flush_timed(AppContext *app);
 void feed_terminal_header(VteTerminal *terminal, const char *msg);
+void on_initialization_complete(AppContext *app);
 
 gboolean is_ai_command(const char *text);
 gboolean on_app_startup_prime(gpointer user_data);

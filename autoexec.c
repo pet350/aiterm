@@ -18,9 +18,7 @@
 #include "update.h"
 #include "commands.h"
 
-/**
- * Identifies standard shell keywords and built-in commands.
- */
+// Identifies standard shell keywords and built-in commands.
 gboolean is_shell_builtin(const char *name) {
     if (!name) return FALSE;
 
@@ -65,10 +63,8 @@ gboolean is_output_artifact(const char *line) {
     return FALSE;
 }
 
-/**
- * Verifies if a binary name corresponds to a real executable in $PATH,
- * a built-in shell keyword, or an explicit file path.
- */
+// Verifies if a binary name corresponds to a real executable in $PATH,
+// a built-in shell keyword, or an explicit file path.
 gboolean is_valid_executable(const char *binary) {
     if (!binary || strlen(binary) == 0) return FALSE;
 
@@ -91,9 +87,7 @@ gboolean is_valid_executable(const char *binary) {
     return FALSE;
 }
 
-/**
- * Extracts the primary executable binary name from a command line.
- */
+// Extracts the primary executable binary name from a command line.
 char* extract_binary_name(const char *cmd_line) {
     if (!cmd_line) return NULL;
 
@@ -106,9 +100,7 @@ char* extract_binary_name(const char *cmd_line) {
     return g_strndup(start, cmd_line - start);
 }
 
-/**
- * Parses markdown code blocks (```bash ... ```) from AI responses.
- */
+// Parses markdown code blocks (```bash ... ```) from AI responses.
 GList* extract_code_blocks(const char *text) {
     GList *commands = NULL;
     if (!text) return NULL;
@@ -138,9 +130,7 @@ GList* extract_code_blocks(const char *text) {
     return commands;
 }
 
-/**
- * Injects approved command bytes into the VTE child shell.
- */
+// Injects approved command bytes into the VTE child shell.
 void feed_command_to_vte(AppContext *app, const char *cmd) {
     if (!VTE_IS_TERMINAL(app->gui.terminal_view)) return;
 
@@ -218,11 +208,9 @@ void process_auto_execution(AppContext *app, const char *ai_text) {
             if (p) free_policy_record(p);
             g_free(binary);
         }
-
         g_strfreev(lines);
         g_free(block_text);
     }
-
     g_list_free(blocks);
 }
 
