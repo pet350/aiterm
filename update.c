@@ -3,7 +3,7 @@
 // Functions for updateing AI
 // By: Peter Talbott
 // Assisted by: Gemini
-// May 2026
+// April 2026 - August 2026
 
 #include <stdio.h>
 #include <string.h>

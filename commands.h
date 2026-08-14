@@ -31,8 +31,10 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]);
 void display_dynamic_help(AppContext *app);
 void cmd_show_command_line_help_wrapper(AppContext *app, const char *args);
 void cmd_invalidate_cache(AppContext *app, const char *args);
+void dispatch_command_to_pane(AppContext *app, int target_pane_id, const char *cmd);
 
 // Handle Wrapper Prototypes
+void handle_directive_wrapper(AppContext *app, const char *args);
 void handle_help_wrapper(AppContext *app, const char *args);
 void handle_status_wrapper(AppContext *app, const char *args);
 void handle_features_wrapper(AppContext *app, const char *args);

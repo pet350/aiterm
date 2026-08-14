@@ -3,7 +3,7 @@
 // functions for sending/recieving data to and from Gemini
 // By: Peter Talbott
 // Assisted by: Gemini
-// July 2026, August 2026
+// March 2026 - August 2026
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -309,10 +309,10 @@ char* send_to_gemini(AppContext *app, const char *prompt) {
 
     char *output = g_strdup(noise_filter_apply(app, prompt));
     app->sys.ai_busy = TRUE;
-    DEBUG_PRINT("[DEBUG] SEND_TO_GEMINI: set ai_busy flag TRUE\n");
+    DEBUG_PRINT("[DEBUG]: [SEND_TO_GEMINI] set ai_busy flag TRUE\n");
     char *data = perform_gemini_request(app, output);
     app->sys.ai_busy = FALSE;
-    DEBUG_PRINT("[DEBUG] SEND_TO_GEMINI: Cleared ai_busy flag, returning response\n");
+    DEBUG_PRINT("[DEBUG]: [SEND_TO_GEMINI] Cleared ai_busy flag, returning response\n");
     g_free(output);
     return data;
 }

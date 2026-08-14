@@ -3,7 +3,7 @@
 // local command handler / registry / wrappers
 // By: Peter Talbott
 // Assisted by: Gemini
-// June 2026
+// June 2026, July 2026, August 2026
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +32,7 @@
 #include "menu.h"
 
 extern const char* HIGHLIGHT_STRING;
+extern const char* GENERAL_DIRECTIVES;
 
 // Parse command line options and handle early-exit CLI queries
 void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
@@ -43,6 +44,7 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--debug") == 0) {
+            print_version();
             app->sys.debug_mode = TRUE;
             app->sys.debug_mode_override = TRUE;
         } else if (strcmp(argv[i], "--version") == 0) {
@@ -50,6 +52,7 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
             exit(0);
         } else if (strcmp(argv[i], "--list-models") == 0) {
             load_config(app);
+            print_version();
             if (!app->security.master_key) {
                 printf("Error: no master key found!\n");
                 exit(1);
@@ -67,15 +70,33 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
             exit(0);
         } else if (strcmp(argv[i], "--provider") == 0) {
             load_config(app);
+            print_version();
             char info[512];
             snprintf(info, sizeof(info), "Provider: %s\nModel: %s", app->provider_config.provider, app->aiterm_runtime.model);
             printf("%s\n", info);
+            exit(0);
+        } else if (strcmp(argv[i], "--directives") == 0) {
+            load_config(app);
+            print_version();
+            printf("\n%s\n", GENERAL_DIRECTIVES);
             exit(0);
         } else if (strcmp(argv[i], "--features") == 0) {
             printf("%s\n", get_features_text());
             exit(0);
         } else if (strcmp(argv[i], "--help") == 0) {
+            print_version();
             printf("%s\n%s\n", get_cmd_help(), HIGHLIGHT_STRING);
+            exit(0);
+        // Added decrypt functionality 0.9.6-omega
+        } else if (strcmp(argv[i], "--decrypt-pw") == 0) {
+                if (!app->security.master_key) {
+                fprintf(stderr, "Error: You must provide a master key (via --master or AITERM_MASTER_KEY) before encrypting.\n");
+                exit(1);
+            }
+            print_version();
+            load_config(app);            
+            printf("Decrypted AI Key:\t%s\n", app->security.api_key);
+            printf("Decrypted DB Password:\t%s\n", app->database.db_pass);
             exit(0);
         } else if (strncmp(argv[i], "--master=", 9) == 0) {
             app->security.master_key = strdup(argv[i] + 9);
@@ -86,6 +107,7 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
     	    }
             char *plaintext = argv[i] + 11;
             char *encrypted = crypt_to_hex(plaintext, app->security.master_key);
+            print_version();
             if (encrypted) {
         	printf("Encrypted string: %s\n", encrypted);
         	free(encrypted);
@@ -113,6 +135,7 @@ static CommandRegistry registry[] = {
     {"close session manager", "Closes the session manager window", cmd_close_session_manager_wrapper},
     {"command line help", "display all command line options", cmd_show_command_line_help_wrapper},
     {"debug", "Toggle debug mode out stderr (on/off)", cmd_toggle_debug},
+    {"directives", "Display AI Directives", handle_directive_wrapper},
     {"extended help", "Display extended help message", handle_extended_help},
     {"features", "Display new aiterm features", handle_features_wrapper},
     {"help", "Display this dynamic help menu", handle_help_wrapper},
@@ -318,6 +341,7 @@ void cmd_close_noise_manager_wrapper(AppContext *app, const char *args) {
 }
 
 
+
 // command helper wrappers
 void handle_help_wrapper(AppContext *app, const char *args) {
     write_to_ai_pane(app, "System: ", "==== Available Functions ====", "system_tag", "body_tag");
@@ -354,6 +378,14 @@ void handle_provider_wrapper(AppContext *app, const char *args) {
     write_to_ai_pane(app, "System: ", "==== System provider ====", "system_tag", "body_tag");
     char info[512];
     snprintf(info, sizeof(info), "Provider: %s\nModel: %s", app->provider_config.provider, app->aiterm_runtime.model);
+    write_to_ai_pane(app, "System: ", info, "cmd_tag", "cmd_tag");
+}
+
+
+void handle_directive_wrapper(AppContext *app, const char *args) {
+    write_to_ai_pane(app, "System: ", "==== AI Directives ====", "system_tag", "body_tag");
+    char info[1700];
+    snprintf(info, sizeof(info), "\n%s\n", GENERAL_DIRECTIVES);
     write_to_ai_pane(app, "System: ", info, "cmd_tag", "cmd_tag");
 }
 
@@ -1078,3 +1110,23 @@ void cmd_noisefilter_reload_wrapper(AppContext *app, const char *args) {
     noise_filter_load_from_db(app);
     write_to_ai_pane(app, "System: ", "Reloaded noise filters from database into running cache", "ai_tag", "cmd_tag");
 }
+
+void dispatch_command_to_pane(AppContext *app, int target_pane_id, const char *cmd) {
+    if (!app || !cmd) return;
+
+    GtkWidget *term_widget = NULL;
+
+    if (app->gui.notebook && target_pane_id >= 0) {
+        term_widget = gtk_notebook_get_nth_page(GTK_NOTEBOOK(app->gui.notebook), target_pane_id);
+    }
+
+    if (!term_widget) {
+        term_widget = app->ui.vterm ? app->ui.vterm : app->gui.terminal_view;
+    }
+
+    if (term_widget && VTE_IS_TERMINAL(term_widget)) {
+        vte_terminal_feed_child(VTE_TERMINAL(term_widget), cmd, -1);
+        vte_terminal_feed_child(VTE_TERMINAL(term_widget), "\n", 1);
+    }
+}
+

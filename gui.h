@@ -22,8 +22,21 @@
 #include <time.h>
 #include "ratelimit.h"
 
+
 #define APP_NAME	"aiterm"
 #define MAX_TABS	32
+#define MAX_DLG 	16
+
+//added 0.9.6-lambda
+typedef struct {
+    GtkWidget *dialog;
+    GtkWidget *check_policy;
+    GtkWidget *combo_action;
+    char *command_text;
+    gboolean active;
+    int target_pane_id;
+    int slot_id;
+} exe_dlg;
 
 typedef struct {
     struct ifaddrs *ifaddr;
@@ -180,6 +193,24 @@ typedef struct {
     gboolean is_valid;         // Active valid cache flag
 } GeminiCacheState;
 
+
+// Sub-structure for Export Configurations
+// Added 0.9.7-alpha
+typedef struct {
+    char *console_export_path;
+    char *ai_export_path;
+    gboolean include_timestamps;
+    gboolean format_as_json;
+} ExportConfig;
+
+// Sub-structure for Print Configurations
+// Added 0.9.7-alpha
+typedef struct {
+    GtkPrintSettings *settings;
+    GtkPageSetup *page_setup;
+    gboolean print_selection_only;
+} PrintConfig;
+
 // Moved all system booleans to it's own structure
 // Added 0.9.5-omega
 typedef struct {
@@ -196,13 +227,16 @@ typedef struct {
     gboolean is_processing;
     gboolean db_initialized;
     gboolean is_initializing;
+    gboolean xml_payload_tagging_enabled; // Added 0.9.7-alpha
+    gboolean session_write_global;        // Added 0.9.7-alpha
+    gboolean session_read_global;         // Added 0.9.7-alpha
+    gboolean load_from_session; 	  // Added 0.9.7-alpha
 } SystemBooleans;
 
 // All main GUI related variable structure
 // Added 0.9.5-omega
 typedef struct {
     GtkCssProvider *ai_css_provider;
-
 
     GtkWidget *window;
     GtkWidget *notebook;
@@ -259,6 +293,8 @@ typedef struct {
     char *untagged_text;
     char *cache;
     char *model;
+    int active_dialog_count;
+    GQueue *cmd_queue;      
 } RunTimeVariables;
 
 // Security configuration
@@ -273,7 +309,6 @@ typedef struct {
 // Completely modularized AppContext: 0.9.5-omega
 // Gemini stated: `AppContext` root now exclusively acts as a "Table of Contents" for your sub-systems.
 typedef struct {
-    // Global DB Connection - Adden 0.7.4-delta
     SQL_DataBase database;		 // Sub-Structure for mysql database access
     RunTimeVariables aiterm_runtime;     // Sub-Structure for misc runtime variables
     ResourceControl access;		 // Sub-Structure for control over resources
@@ -293,7 +328,10 @@ typedef struct {
     SysWidgets gui;			 // Sub-Structure for handling system GUI Widgets
     SecurityConfig security;		 // Sub-Structure for security keys
     AIRetryConfig retry_config;		 // Sub-Structure for configuration of AI retry
-    AIRetryState retry_state;		 // Sub-structure for the current state of AI retry 
+    AIRetryState retry_state;		 // Sub-structure for the current state of AI retry
+    exe_dlg exec_dialog[MAX_DLG];        // Sub-Structure for Embedded dialog
+    ExportConfig export_opts;            // Sub-Structure for Exporting data. Added 0.9.7
+    PrintConfig print_opts;              // Sub-Structure far Printing data   Added 0.9.7
 }  AppContext;
 
 // AIThreadData threaded sending data backbone
@@ -316,6 +354,9 @@ typedef struct {
 void init_local_cmd_history(AppContext *app);
 void init_token_tracker(AppContext *app);
 void setup_gui(AppContext *app);
+void dispatch_command_to_pane(AppContext *app, int target_pane_id, const char *cmd);
+void on_exec_confirm_response(GtkDialog *dialog, gint response_id, gpointer user_data);
+void on_vte_populate_popup(VteTerminal *vte, GtkWidget *popup_menu, gpointer user_data);
 void append_ai_text(AppContext *app, const char *text, const char *tag_name);
 void apply_custom_theme();
 void apply_block_cursor_to_input(GtkWidget *entry);

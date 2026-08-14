@@ -3,7 +3,7 @@
 // Various utilities used in this project
 // By: Peter Talbott
 // Assisted by: Gemini
-// May 2026
+// April 2026 - August 2026
 
 #include <stdlib.h>
 #include <glib.h>
@@ -16,10 +16,11 @@
 #include <mariadb/mysql.h>
 #include <gtk/gtk.h>
 #include <pthread.h>
+
 #include "utils.h"
 #include "gui.h"
 #include "openai.h"
-#include "crypto.h" // Add this include
+#include "crypto.h"
 #include "update.h"
 #include "tee_handler.h"
 #include "ratelimit.h"
@@ -42,6 +43,7 @@ void initialize_booleans(AppContext *app) {
     app->sys.mysql_busy = FALSE;
     app->sys.ai_busy = FALSE;
     app->sys.smart_cache_enabled = FALSE;
+    app->sys.load_from_session = FALSE;
     app->session.cfg_loaded_write_to_global = FALSE;
     app->session.cfg_loaded_read_from_global = FALSE;
     app->xml.tagging_enabled = FALSE;
@@ -65,79 +67,6 @@ void initialize_booleans(AppContext *app) {
 
     // the ONLY app->sys.xxxxx boolen that is TRUE on startup
     app->sys.is_initializing = TRUE;
-
-}
-
-// Added 0.9.5-beta
-// For wrapping payload in XML tags that AI will understand
-char* xml_wrap(AppContext *app, const char *input) {
-    if (!input) return NULL;
-    if (!app->xml.tagging_enabled) return g_strdup(input);
-    if (!app->xml.type) return g_strdup(input);
-
-    GString *xml_buffer = g_string_new(NULL);
-    time_t now = time(NULL);
-    char time_str[20];
-    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&now));
-    switch(app->xml.type) {
-        case TAG_NONE:
-            // xml buffer was already initialized so we're just going to append input to it
-            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is none, not wrapping\n");
-            g_string_append(xml_buffer, input);
-            break;
-        case TAG_HISTORY:
-            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is history, wrapping with <context>\n");
-            // Being a history payload we don't want to send the current timestamp
-            g_string_append(xml_buffer, "<context");
-            if (app->session.session_uuid) {
-                g_string_append_printf(xml_buffer, " session=\"%s\"", app->session.session_uuid);
-            }
-            g_string_append_printf(xml_buffer, ">%s</context>\n", input);
-            break;
-        case TAG_MEMORY:
-            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is memory, wrapping with <memory>\n");
-            // Here this would be user data loaded from database,
-            //if the timestamp from the database is available we'll use it
-            g_string_printf(xml_buffer, "<memory");
-            if (app->xml.database_timestamp) {
-                g_string_append_printf(xml_buffer, " timestamp=\"%s\"", app->xml.database_timestamp);
-            }
-            if (app->session.session_uuid) {
-                g_string_append_printf(xml_buffer, " session=\"%s\"", app->session.session_uuid);
-            }
-            g_string_append_printf(xml_buffer, ">%s</memory>\n", input);
-            break;
-        case TAG_LOG_DUMP: // Was ** TAG_TEE: **
-            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is log_dump, wrapping with <log_dump>\n");
-            // Tee is live data payload, we will timestamp it
-	    // A Wise AI assistant suggested log_dump as the tag instead of Tee
-            g_string_printf(xml_buffer, "<log_dump timestamp=\"%s\"", time_str);
-            if (app->session.session_uuid) {
-                g_string_append_printf(xml_buffer, " session=\"%s\"", app->session.session_uuid);
-            }
-            g_string_append_printf(xml_buffer, ">%s</log_dump>\n", input);
-            break;
-        case TAG_SYSTEM:
-            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is system, wrapping with <system>\n");
-            // System is live data payload, we will timestamp it
-            g_string_printf(xml_buffer, "<system timestamp=\"%s\"", time_str);
-            if (app->session.session_uuid) {
-                g_string_append_printf(xml_buffer, " session=\"%s\"", app->session.session_uuid);
-            }
-            g_string_append_printf(xml_buffer, ">%s</system>\n", input);
-            break;
-        case TAG_STATUS:
-            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is status, wrapping with <status>\n");
-            // System is live data payload, we will timestamp it
-            g_string_printf(xml_buffer, "<status timestamp=\"%s\"", time_str);
-            if (app->session.session_uuid) {
-                g_string_append_printf(xml_buffer, " session=\"%s\"", app->session.session_uuid);
-            }
-            g_string_append_printf(xml_buffer, ">%s</status>\n", input);
-            break;
-    }
-    // Return the string and destroy the container, keeping the data alive
-    return g_string_free(xml_buffer, FALSE);
 }
 
 static void provider_replace_string(char **field, const char *value) {
@@ -243,7 +172,6 @@ void feed_terminal_header(VteTerminal *terminal, const char *msg) {
     snprintf(buf, sizeof(buf), "\r%s[AI Executing]: %s%s\n", ANSI_CYAN, msg, ANSI_RESET);
     vte_terminal_feed(terminal, buf, -1);
 }
-
 
 // Function to display All History
 // Modified 0.7.4-delta to use global mysql connection
@@ -482,7 +410,25 @@ int init_remote_db(AppContext *app) {
     DEBUG_PRINT("[DEBUG]: [DB] Executing: CREATE TABLE IF NOT EXISTS command_policies\n");
     mysql_query(app->database.global_db_conn, command_policy_table);
 
+    // Run Migrations for Sessions Table
+    const char* session_migrations[] = {
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS load_from_session TINYINT(1) DEFAULT 0",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS debug_mode TINYINT(1) DEFAULT 0",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS tee_enabled TINYINT(1) DEFAULT 0",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS autoreply_enabled TINYINT(1) DEFAULT 0",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auto_execute_enabled TINYINT(1) DEFAULT 0",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ratelimit_enabled TINYINT(1) DEFAULT 1",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS smart_cache_enabled TINYINT(1) DEFAULT 0",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS noise_filter_enabled TINYINT(1) DEFAULT 1",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS xml_payload_tagging TINYINT(1) DEFAULT 1",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS write_to_global TINYINT(1) DEFAULT 0",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS read_from_global TINYINT(1) DEFAULT 1"
+    };
 
+    for (int i = 0; i < sizeof(session_migrations)/sizeof(char*); i++) {
+        DEBUG_PRINT("[DEBUG]: [DB] Running migration query [%d]: %s\n", i, session_migrations[i]);
+        mysql_query(app->database.global_db_conn, session_migrations[i]);
+    }
     DEBUG_PRINT("[DEBUG]: [DB] init_remote_db sequence fully complete!\n");
     return 1;
 }
@@ -899,7 +845,7 @@ void print_version() {
 void on_initialization_complete(AppContext *app) {
     if (app->sys.is_initializing) {
         app->sys.is_initializing = false;
-        fprintf(stderr, "[DEBUG]: Initialization complete. Normal session active.\n");
+        fprintf(stderr, "[DEBUG]: [Initialization]: complete. Normal session active.\n");
         fflush(stderr);
     }
 }
@@ -909,7 +855,7 @@ gboolean on_app_startup_prime(gpointer user_data) {
     AppContext *app = (AppContext *)user_data;
     if (!app) return G_SOURCE_REMOVE;
 
-    DEBUG_PRINT("[DEBUG]: [INIT]: Priming Gemini session after GTK loop start...");
+    DEBUG_PRINT("[DEBUG]: [INIT]: Priming Gemini session after GTK loop start...\n");
     
     // GENERAL_DIRECTIVES will now automatically be injected into the root JSON 
     // payload by perform_gemini_request() during this priming call.

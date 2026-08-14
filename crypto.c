@@ -1,9 +1,9 @@
-/* crypto.h					*/
-/* Part of project: aiterm			*/
-/* C Program file for for crypto functions	*/
-/* By: Peter Talbott				*/
-/* With assistance from Gemini and OpenAI	*/
-/* April, May 2026				*/
+// crypto.h
+// Part of project: aiterm
+// C Program file for for crypto functions
+// By: Peter Talbott
+// With assistance from Gemini and OpenAI
+// April, May 2026
 
 #include <stdio.h>
 #include <stdlib.h>

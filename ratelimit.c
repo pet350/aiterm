@@ -5,7 +5,6 @@
 /* With assistance from Gemini and OpenAI       */
 /* April, May 2026                              */
 
-
 #include "ratelimit.h"
 #include <unistd.h>
 #include <stdio.h>
@@ -44,7 +43,7 @@ bool ratelimit_check(RateLimiter *rl) {
 
     rl->last_request_time = now;
     pthread_mutex_unlock(&rl->lock);
-    DEBUG_PRINT("[DEBUG]: RATELIMIT_CHECK: Unlocked mutex (Success)\n");
+    DEBUG_PRINT("[DEBUG]: [RATELIMIT_CHECK]: Unlocked mutex (Success)\n");
     return true;
 }
 

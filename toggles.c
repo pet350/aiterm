@@ -22,6 +22,7 @@
 #include "terminal.h"
 #include "tee_handler.h"
 #include "config.h"
+#include "session_manager.h"
 
 
 gboolean toggle_function(AppContext *app, ToggleType toggle_type, GtkCheckMenuItem *menu_item, const char *args) {
@@ -95,6 +96,7 @@ void on_menu_item_toggled(GtkCheckMenuItem *menu_item, gpointer user_data)
     if (app) {
         toggle_function(app, toggle_type, menu_item, NULL);
         sync_toggle_ui_elements(app);
+        session_sync_booleans_to_db(app);
     }
 }
 
@@ -107,6 +109,7 @@ void on_menu_toggle_item_toggled(GtkCheckMenuItem *menu_item, gpointer user_data
     if (app) {
         toggle_function(app, toggle_type, menu_item, NULL);
         sync_toggle_ui_elements(app);
+        session_sync_booleans_to_db(app);
     }
 }
 

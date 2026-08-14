@@ -1,8 +1,10 @@
+// Part of the aiterm project
 // gui.c
 // C Program file for gui functions
 // By: Peter Talbott
 // With assistance from Gemini and OpenAI
-// May 2026
+// May 2026 - August 2026
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -13,12 +15,15 @@
 
 #include "utils.h"
 #include "gui.h"
+#include "policy_dao.h"
+#include "commands.h"
 #include "openai.h"
 #include "crypto.h"
 #include "update.h"
 #include "terminal.h"
 #include "menu.h"
 #include "gemini.h"
+#include "autoexec.h"
 
 // Initialize local command cache
 void init_local_cmd_history(AppContext *app) {
@@ -276,7 +281,7 @@ void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_num, gpoi
     if (VTE_IS_TERMINAL(terminal)) {
         app->gui.terminal_view = terminal;
         app->ui.vterm = terminal; // 0.9.4 addition
-        DEBUG_PRINT("[DEBUG]: TAB_CHANGED: Focused tab shifted to Page #%d (Widget: %p)\n", page_num, (void*)terminal);
+        DEBUG_PRINT("[DEBUG]: [TAB_CHANGED]: Focused tab shifted to Page #%d (Widget: %p)\n", page_num, (void*)terminal);
 
         // Push current fonts and transparency settings dynamically down to the new pane
         apply_visual_settings(app);
@@ -461,7 +466,7 @@ void set_icon(AppContext *app) {
     if (icon) {
         gtk_window_set_icon(GTK_WINDOW(app->gui.window), icon);
         g_object_unref(icon);
-        DEBUG_PRINT("[DEBUG]: Embedded icon loaded from GResource successfully.\n");
+        DEBUG_PRINT("[DEBUG]: [Embedded icon]: loaded from GResource successfully.\n");
     } else {
         g_warning("Could not load embedded icon: %s", icon_error->message);
         if (icon_error) g_error_free(icon_error);
@@ -641,3 +646,124 @@ void append_ai_text(AppContext *app, const char *text, const char *tag_name) {
     // Use g_idle_add to ensure the scroll happens AFTER the buffer update finishes
     g_idle_add((GSourceFunc)scroll_ai_pane_to_bottom, app);
 }
+
+/* Helper callback triggered when set_command_policy_async finishes */
+void on_policy_saved_callback(gboolean success, gpointer user_data) {
+    PolicyRecord *p = (PolicyRecord *)user_data;
+    
+    if (!success) {
+        g_warning("[aiterm] Failed to persist command policy record for: %s", 
+                  p && p->name ? p->name : "unknown");
+    } else {
+        g_info("[aiterm] Successfully saved policy [%s] for command: %s", 
+               p->type, p->name);
+    }
+
+    // Clean up heap allocated policy record created prior to dispatching async thread
+    if (p) {
+        free_policy_record(p);
+    }
+}
+
+void on_exec_confirm_response(GtkDialog *dialog, gint response_id, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    int slot_id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(dialog), "slot_id"));
+
+    if (!app || slot_id < 0 || slot_id >= MAX_DLG) {
+        gtk_widget_destroy(GTK_WIDGET(dialog));
+        return;
+    }
+
+    exe_dlg *dlg = &app->exec_dialog[slot_id];
+
+    if (response_id == GTK_RESPONSE_ACCEPT) {
+        gboolean save_to_policy = dlg->check_policy ? 
+            gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(dlg->check_policy)) : FALSE;
+
+        char *selected_action = dlg->combo_action ? 
+            gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(dlg->combo_action)) : NULL;
+
+        if (save_to_policy && dlg->command_text && selected_action) {
+            char *binary = extract_binary_name(dlg->command_text);
+            if (binary) {
+                PolicyRecord rec = {
+                    .name = binary,
+                    .type = selected_action,
+                    .risk = 0
+                };
+                set_command_policy(app, &rec);
+                g_free(binary);
+            }
+        }
+
+        if (selected_action) {
+            if (g_ascii_strcasecmp(selected_action, "ALLOW") == 0 || 
+                g_ascii_strncasecmp(selected_action, "ALLOW", 5) == 0) {
+                if (dlg->command_text) {
+                    feed_command_to_vte(app, dlg->command_text);
+                }
+            } else {
+                g_info("[Policy Blocked]: Command execution blocked by user choice: %s", 
+                       dlg->command_text ? dlg->command_text : "");
+            }
+            g_free(selected_action);
+        }
+    } else {
+        g_info("[Policy Rejected]: User cancelled execution: %s", 
+               dlg->command_text ? dlg->command_text : "");
+    }
+
+    // Reset array slot state
+    if (dlg->command_text) {
+        g_free(dlg->command_text);
+        dlg->command_text = NULL;
+    }
+    dlg->dialog = NULL;
+    dlg->check_policy = NULL;
+    dlg->combo_action = NULL;
+    dlg->target_pane_id = 0;
+    dlg->active = FALSE;
+
+    // Decrement counter inside aiterm_runtime substructure
+    if (app->aiterm_runtime.active_dialog_count > 0) {
+        app->aiterm_runtime.active_dialog_count--;
+    }
+
+    gtk_widget_destroy(GTK_WIDGET(dialog));
+}
+
+/* VTE Context Menu Handler for Close/Rename Tab (Requirement 4) */
+void on_vte_populate_popup(VteTerminal *vte, GtkWidget *popup_menu, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+
+    GtkWidget *rename_tab_item = gtk_menu_item_new_with_label("Rename Tab");
+    GtkWidget *close_tab_item = gtk_menu_item_new_with_label("Close Tab");
+
+    extern void on_menu_rename_tab(GtkMenuItem *item, gpointer data);
+    extern void on_menu_close_tab(GtkMenuItem *item, gpointer data);
+
+    g_signal_connect(rename_tab_item, "activate", G_CALLBACK(on_menu_rename_tab), app);
+    g_signal_connect(close_tab_item, "activate", G_CALLBACK(on_menu_close_tab), app);
+
+    gtk_widget_show(rename_tab_item);
+    gtk_widget_show(close_tab_item);
+
+    GList *children = gtk_container_get_children(GTK_CONTAINER(popup_menu));
+    int insert_idx = 1; // Fallback right under item 0
+    int idx = 0;
+
+    for (GList *iter = children; iter != NULL; iter = iter->next, idx++) {
+        GtkWidget *item = GTK_WIDGET(iter->data);
+        const char *label = gtk_menu_item_get_label(GTK_MENU_ITEM(item));
+        if (label && g_ascii_strcasecmp(label, "New Tab") == 0) {
+            insert_idx = idx + 1;
+            break;
+        }
+    }
+    g_list_free(children);
+
+    gtk_menu_shell_insert(GTK_MENU_SHELL(popup_menu), rename_tab_item, insert_idx);
+    gtk_menu_shell_insert(GTK_MENU_SHELL(popup_menu), close_tab_item, insert_idx + 1);
+}
+
+

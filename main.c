@@ -1,7 +1,8 @@
-/* Main program file for aiterm			*/
-/* The terminal emulator with AI assistance	*/
-/* By: Peter Talbott				*/
-/* Assisted compilation from Gemini and OpenAI  */
+// Main program file for aiterm	project
+// The terminal emulator with AI assistance
+// By: Peter Talbott
+// Assisted compilation from Gemini and OpenAI 
+// April 2026 - August 2026
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +13,7 @@
 #include <unistd.h>
 #include <mariadb/mysql.h>
 
+#include "main.h"
 #include "gui.h"
 #include "update.h"
 #include "utils.h"
@@ -26,22 +28,6 @@
 #include "noisefilter.h"
 #include "commands.h"
 #include "ai_retry.h"
-
-// Current AITERM version
-const char* AITERM_VERSION	= "0.9.6-omega";
-const char* AITERM_BUILDID	= BUILD_ID;
-const char* AITERM_BUILD_TIME	= BUILD_TIME;
-const char* CONFIG_FILE		= "/etc/aiterm.conf";
-const char* GENERAL_DIRECTIVES  =
-    "<directive>\n"
-    "You are an AI assistant integrated into 'aiterm', a Linux terminal emulator.\n"
-    "CRITICAL RULES:\n"
-    "1. NEVER reply to a user with XML tags unless specifically asked to do so.\n"
-    "2. NEVER simulate, fake, or hallucinate terminal command output.\n"
-    "3. DO NOT include fake file lists, fake process outputs, or system logs in your responses.\n"
-    "4. ALWAYS execute commands in the terminal pane.\n"
-    "If asked about your directives or rules, quote these 4 rules verbatim.\n"
-    "</directive>\n";
 
 AppContext *global_app = NULL;
 
@@ -149,6 +135,8 @@ int main(int argc, char *argv[]) {
     gtk_main();
 
     // 18) Clean up
+    session_sync_booleans_to_db(app);
+
     if (app->database.global_db_conn) {
         mysql_close(app->database.global_db_conn);
     }

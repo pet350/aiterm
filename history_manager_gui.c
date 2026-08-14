@@ -3,7 +3,7 @@
 // Various utilities used for session management
 // By: Peter Talbott
 // Assisted by: Gemini
-// May 2026, June 2026
+// May 2026 - August 2026
 
 #include <mariadb/mysql.h>
 #include <gtk/gtk.h>
