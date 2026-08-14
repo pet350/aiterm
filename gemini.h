@@ -9,6 +9,7 @@
 #define GEMINI_H
 
 #include "gui.h"
+#include "xml_tagging.h"
 
 //typedef struct AppContext AppContext;
 

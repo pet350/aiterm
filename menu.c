@@ -126,6 +126,17 @@ void on_show_status_activate(GtkMenuItem *item, gpointer user_data) {
     }
 }
 
+void on_toggle_load_from_session(GtkCheckMenuItem *checkmenuitem, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    if (!app) return;
+
+    app->sys.load_from_session = gtk_check_menu_item_get_active(checkmenuitem);
+    DEBUG_PRINT("[DEBUG]: Toggled load_from_session: %d\n", app->sys.load_from_session);
+
+    // Sync state back to MariaDB
+    session_sync_booleans_to_db(app);
+}
+
 // AI Retry Options Callbacks
 static void on_toggle_ai_retry_toggled(GtkCheckMenuItem *item, gpointer user_data) {
     AppContext *app = (AppContext *)user_data;
@@ -447,6 +458,127 @@ void sync_toggle_ui_elements(AppContext *app) {
             g_signal_handlers_unblock_by_func(retry_item, G_CALLBACK(on_toggle_ai_retry_toggled), app);
         }
     }
+}
+
+void on_menu_rename_tab(GtkMenuItem *item, gpointer data) {
+    AppContext *app = (AppContext *)data;
+    if (!app) return;
+
+    /* TODO: Implement tab rename dialog */
+}
+
+void on_menu_close_tab(GtkMenuItem *item, gpointer data) {
+    AppContext *app = (AppContext *)data;
+    if (!app) return;
+
+    if (app->gui.notebook) {
+        gint current_page = gtk_notebook_get_current_page(GTK_NOTEBOOK(app->gui.notebook));
+        if (current_page != -1) {
+            gtk_notebook_remove_page(GTK_NOTEBOOK(app->gui.notebook), current_page);
+        }
+    }
+}
+
+void export_to_console(AppContext *app) {
+    if (!app || !app->gui.terminal_view) return;
+
+    GtkFileChooserNative *native = gtk_file_chooser_native_new(
+        "Export Console Output",
+        GTK_WINDOW(app->gui.window),
+        GTK_FILE_CHOOSER_ACTION_SAVE,
+        "_Save",
+        "_Cancel"
+    );
+
+    if (gtk_native_dialog_run(GTK_NATIVE_DIALOG(native)) == GTK_RESPONSE_ACCEPT) {
+        char *filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(native));
+        
+        // Example: Dumping terminal/tee accumulator context to file
+        FILE *fp = fopen(filename, "w");
+        if (fp) {
+            if (app->aiterm_runtime.tee_accumulator) {
+                fputs(app->aiterm_runtime.tee_accumulator->str, fp);
+            }
+            fclose(fp);
+            g_print("[INFO]: Exported console output to %s\n", filename);
+        }
+        g_free(filename);
+    }
+    g_object_unref(native);
+}
+
+/* File -> Export -> AI */
+void export_to_ai(AppContext *app) {
+    if (!app || !app->gui.gemini_view) return;
+
+    GtkFileChooserNative *native = gtk_file_chooser_native_new(
+        "Export AI Conversation Context",
+        GTK_WINDOW(app->gui.window),
+        GTK_FILE_CHOOSER_ACTION_SAVE,
+        "_Save",
+        "_Cancel"
+    );
+
+    if (gtk_native_dialog_run(GTK_NATIVE_DIALOG(native)) == GTK_RESPONSE_ACCEPT) {
+        char *filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(native));
+
+        GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gui.gemini_view));
+        GtkTextIter start, end;
+        gtk_text_buffer_get_bounds(buffer, &start, &end);
+        char *text = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
+
+        FILE *fp = fopen(filename, "w");
+        if (fp) {
+            fputs(text, fp);
+            fclose(fp);
+            g_print("[INFO]: Exported AI context to %s\n", filename);
+        }
+        g_free(text);
+        g_free(filename);
+    }
+    g_object_unref(native);
+}
+
+/* Helper for GTK Print operation drawing */
+static void draw_page_cb(GtkPrintOperation *operation, GtkPrintContext *context, gint page_nr, gpointer user_data) {
+    char *text = (char *)user_data;
+    cairo_t *cr = gtk_print_context_get_cairo_context(context);
+
+    cairo_set_source_rgb(cr, 0, 0, 0);
+    cairo_select_font_face(cr, "Monospace", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, 10.0);
+
+    cairo_move_to(cr, 50, 50);
+    cairo_show_text(cr, text);
+}
+
+/* File -> Print */
+void print_ai_pane(AppContext *app) {
+    if (!app || !app->gui.gemini_view) return;
+
+    GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gui.gemini_view));
+    GtkTextIter start, end;
+    gtk_text_buffer_get_bounds(buffer, &start, &end);
+    char *text = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
+
+    GtkPrintOperation *print_op = gtk_print_operation_new();
+    gtk_print_operation_set_n_pages(print_op, 1);
+
+    g_signal_connect(print_op, "draw-page", G_CALLBACK(draw_page_cb), text);
+
+    GtkPrintOperationResult res = gtk_print_operation_run(
+        print_op, 
+        GTK_PRINT_OPERATION_ACTION_PRINT_DIALOG, 
+        GTK_WINDOW(app->gui.window), 
+        NULL
+    );
+
+    if (res == GTK_PRINT_OPERATION_RESULT_ERROR) {
+        g_printerr("[ERROR]: Print Operation Failed\n");
+    }
+
+    g_object_unref(print_op);
+    g_free(text);
 }
 
 // --- Menu Builder ---

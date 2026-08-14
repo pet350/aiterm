@@ -23,7 +23,7 @@ void tee_handler_init(AppContext *app) {
     if (!app) return;
     app->aiterm_runtime.tee_accumulator = g_string_new("");
     g_mutex_init(&app->access.buffer_mutex);
-    DEBUG_PRINT("[DEBUG]: Tee Handler initialized.\n");
+    DEBUG_PRINT("[DEBUG]: [Tee Handler] initialized.\n");
 }
 
 // ATOMIC SNAPSHOT (The 0.8.2 fix):
@@ -34,13 +34,13 @@ char* tee_extract_for_ai(AppContext *app) {
     char *snapshot = NULL;
 
     g_mutex_lock(&app->access.buffer_mutex);
-    DEBUG_PRINT("[DEBUG]: TEE_EXTRACT_FOR_AI: Locked buffer mutex\n");
+    DEBUG_PRINT("[DEBUG]: [TEE_EXTRACT_FOR_AI]: Locked buffer mutex\n");
     if (app->aiterm_runtime.tee_accumulator->len > 5) {
         snapshot = g_strdup(app->aiterm_runtime.tee_accumulator->str);
         g_string_assign(app->aiterm_runtime.tee_accumulator, "");
     }
     g_mutex_unlock(&app->access.buffer_mutex);
-    DEBUG_PRINT("[DEBUG]: TEE_EXTRACT_FOR_AI: Unlocked buffer mutex\n");
+    DEBUG_PRINT("[DEBUG]: [TEE_EXTRACT_FOR_AI]: Unlocked buffer mutex\n");
     return strip_blank_lines(snapshot);
 }
 

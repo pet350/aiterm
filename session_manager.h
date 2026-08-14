@@ -59,6 +59,7 @@ void cmd_session_new(AppContext *app, const char *args);
 void cmd_session_load(AppContext *app, const char *uuid);
 void cmd_session_delete(AppContext *app, const char *uuid);
 void write_to_ai_pane_wrapper(AppContext *app, char *data);
+void session_sync_booleans_to_db(AppContext *app) ;
 
 gpointer session_db_worker(gpointer data);
 

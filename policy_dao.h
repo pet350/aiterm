@@ -26,10 +26,15 @@ typedef struct {
     PolicyRecord *result;
 } GetPolicyArgs;
 
+// Function Prototypes
 PolicyRecord* get_policy_for_command(AppContext *app, const char *cmd);
+
 gboolean set_command_policy(AppContext *app, PolicyRecord *p);
 gboolean delete_command_policy(AppContext *app, const char *cmd);
+
 GList* get_all_policies(AppContext *app);
+
+void set_command_policy_async(AppContext *app, PolicyRecord *p, void (*callback)(gboolean, gpointer), gpointer user_data);
 void free_policy_record(PolicyRecord *p);
 
 #endif

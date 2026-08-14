@@ -12,6 +12,7 @@
 #include <vte/vte.h>
 #include <json-c/json.h>
 #include "gui.h"
+#include "xml_tagging.h"
 
 // ANSI Codes for VTE coloring
 #define ANSI_CYAN  "\033[1;36m"
@@ -25,6 +26,7 @@ char* extract_ai_text(const char *json);
 extern AppContext *global_app;
 extern int debug_mode;
 extern int tee_enabled;
+
 extern const char* AITERM_VERSION;
 extern const char* AITERM_BUILDID;
 extern const char* AITERM_BUILD_TIME;

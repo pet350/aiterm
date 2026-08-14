@@ -53,7 +53,14 @@ void on_ai_font_set(GtkFontButton *btn, gpointer data);
 void on_preferences(GtkWidget *widget, gpointer data);
 void on_tee_flush(GtkWidget *widget, gpointer data);
 void on_menu_session_manager(GtkMenuItem *item, gpointer data);
+void on_menu_rename_tab(GtkMenuItem *item, gpointer data);
+void on_menu_close_tab(GtkMenuItem *item, gpointer data);
 void sync_toggle_ui_elements(AppContext *app);
 void sync_toggle_ui_elements(AppContext *app);
+void on_toggle_load_from_session(GtkCheckMenuItem *checkmenuitem, gpointer user_data);
+// Function Prototypes for new actions in 0.9.7-1lpha
+void export_to_console(AppContext *app);
+void export_to_ai(AppContext *app);
+void print_ai_pane(AppContext *app);
 
 #endif

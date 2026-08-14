@@ -3,7 +3,7 @@
 // Implementation of Gemini Context Caching
 // By: Peter Talbott
 // Assisted by: Gemini
-// May 2026 - July 2026
+// May 2026 - August 2026
 
 #include <stdio.h>
 #include <stdlib.h>

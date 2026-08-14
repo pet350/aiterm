@@ -25,7 +25,6 @@ static gboolean ui_notify_callback(gpointer data) {
     return FALSE;    // Return FALSE so the idle source is removed
 }
 
-
 void write_to_ai_pane_wrapper(AppContext *app, char *data) {
     // We duplicate the string because the worker thread might free its
     // local copy before the UI thread gets a chance to read it.
@@ -35,7 +34,44 @@ void write_to_ai_pane_wrapper(AppContext *app, char *data) {
     g_idle_add(ui_notify_callback, msg_copy);
 }
 
+/* Saves all AppContext system booleans back to the database session record */
+void session_sync_booleans_to_db(AppContext *app) {
+    if (!app || !app->session.session_uuid) return;
 
+    pthread_mutex_lock(&app->access.db_mutex);
+    DEBUG_PRINT("[DEBUG]: [Session Sync Booleans] Locked DB Mutex.\n");
+
+    char *query = g_strdup_printf(
+        "UPDATE sessions SET "
+        "debug_mode = %d, tee_enabled = %d, autoreply_enabled = %d, auto_execute_enabled = %d, "
+        "ratelimit_enabled = %d, smart_cache_enabled = %d, noise_filter_enabled = %d, "
+        "xml_payload_tagging = %d, write_to_global = %d, read_from_global = %d, "
+        "load_from_session = %d "
+        "WHERE uuid = '%s';",
+        app->sys.debug_mode,
+        app->sys.tee_enabled,
+        app->sys.autoreply_enabled,
+        app->sys.auto_execute_enabled,
+        app->sys.ratelimit_enabled,
+        app->sys.smart_cache_enabled,
+        app->sys.noise_filter_enabled,
+        app->sys.xml_payload_tagging_enabled,
+        app->sys.session_write_global,
+        app->sys.session_read_global,
+        app->sys.load_from_session,
+        app->session.session_uuid
+    );
+
+    if (mysql_query(app->database.global_db_conn, query) != 0) {
+        DEBUG_PRINT("[ERROR]: Failed to sync session booleans: %s\n", mysql_error(app->database.global_db_conn));
+    } else {
+        DEBUG_PRINT("[DEBUG]: Successfully synced session booleans to DB.\n");
+    }
+
+    g_free(query);
+    pthread_mutex_unlock(&app->access.db_mutex);
+    DEBUG_PRINT("[DEBUG]: [Session Sync Booleans] Unlocked DB Mutex.\n");
+}
 
 void session_init(AppContext *app) {
     // 1. Setup Mutex and Condition Variable for DB sync
@@ -43,7 +79,7 @@ void session_init(AppContext *app) {
     pthread_cond_init(&app->access.db_init_cond, NULL);
     app->sys.db_initialized = FALSE;
 
-    DEBUG_PRINT("[DEBUG]: SESSION_INIT: Waiting for DB_INIT Mutex to be unlocked.\n");
+    DEBUG_PRINT("[DEBUG]: [SESSION_INIT]: Waiting for DB_INIT Mutex to be unlocked.\n");
 
     // 2. Wait for the DB initialization thread to signal completion
     pthread_mutex_lock(&app->access.db_init_mutex);
@@ -74,24 +110,47 @@ void session_init(AppContext *app) {
          DEBUG_PRINT("[DEBUG]: SESSION_INIT: set Session read from global: TRUE\n");
     }
 
-    // 5. Query for Default Session
+    // 5. Query for Default Session & Session Booleans
     pthread_mutex_lock(&app->access.session_mutex);
     MYSQL_RES *res = NULL;
 
-    DEBUG_PRINT("[DEBUG]: SESSION_INIT: DB is ready. Querying is_default...\n");
-    // Note: Ensure global_db_conn is initialized by the time we get here
-    if (mysql_query(app->database.global_db_conn, "SELECT uuid FROM sessions WHERE is_default = 1 LIMIT 1") == 0) {
+    char query[512];
+    snprintf(query, sizeof(query), 
+        "SELECT uuid, debug_mode, tee_enabled, autoreply_enabled, auto_execute_enabled, "
+        "ratelimit_enabled, smart_cache_enabled, noise_filter_enabled, xml_payload_tagging, "
+        "write_to_global, read_from_global, load_from_session FROM sessions WHERE is_default = 1 LIMIT 1;");
+
+    if (mysql_query(app->database.global_db_conn, query) == 0) {
         res = mysql_store_result(app->database.global_db_conn);
         if (res) {
             MYSQL_ROW row = mysql_fetch_row(res);
             if (row) {
                 app->session.session_uuid = g_strdup(row[0]);
-                DEBUG_PRINT("[DEBUG]: [SESSION]: Loaded DEFAULT session: %s\n", app->session.session_uuid);
+            
+                gboolean db_load_pref = row[11] ? atoi(row[11]) : FALSE;
+                app->sys.load_from_session = db_load_pref;
+
+                // Only load settings from DB if load_from_session flag is enabled
+                if (app->sys.load_from_session) {
+                    app->sys.debug_mode           = row[1] ? atoi(row[1]) : FALSE;
+                    app->sys.tee_enabled          = row[2] ? atoi(row[2]) : FALSE;
+                    app->sys.autoreply_enabled     = row[3] ? atoi(row[3]) : FALSE;
+                    app->sys.auto_execute_enabled  = row[4] ? atoi(row[4]) : FALSE;
+                    app->sys.ratelimit_enabled     = row[5] ? atoi(row[5]) : TRUE;
+                    app->sys.smart_cache_enabled   = row[6] ? atoi(row[6]) : FALSE;
+                    app->sys.noise_filter_enabled  = row[7] ? atoi(row[7]) : TRUE;
+                    app->sys.xml_payload_tagging_enabled = row[8] ? atoi(row[8]) : TRUE;
+                    app->sys.session_write_global = row[9] ? atoi(row[9]) : FALSE;
+                    app->sys.session_read_global  = row[10] ? atoi(row[10]) : TRUE;
+                    DEBUG_PRINT("[DEBUG]: [SESSION]: Loaded session booleans from DB for UUID: %s\n", app->session.session_uuid);
+                } else {
+                    DEBUG_PRINT("[DEBUG]: [SESSION]: load_from_session is FALSE; using local config values.\n");
+                }
             }
             mysql_free_result(res);
         }
     }
-
+    pthread_mutex_unlock(&app->access.session_mutex);
     // 6. Fallback: Generate New UUID if no default found
     if (!app->session.session_uuid) {
         uuid_t binuuid;
@@ -119,7 +178,6 @@ void session_sync_to_db(AppContext *app) {
 
     DEBUG_PRINT("[DEBUG]: SESSION: Synced %ld bytes to DB\n", strlen(data));
 }
-
 
 // This creates the <tee> tags for live stream
 char* session_create_tee_chunk(AppContext *app, const char *raw_data) {
@@ -319,4 +377,3 @@ gpointer session_db_worker(gpointer data) {
 
     return NULL;
 }
-

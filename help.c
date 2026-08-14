@@ -3,7 +3,7 @@
 // different functions for displaying various help info
 // By: Peter Talbott
 // Assisted by: Gemini
-// May 2026
+// May 2026 - August 2026
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -280,7 +280,9 @@ const char* get_cmd_help() {
         "  --debug\t\t\tEnable verbose debug logging to stderr\n"
         "  --features\t\t\tShow details on features supported by current version\n"
         "  --master=<key>\t\tProvide the master password directly to decrypt saved config options\n"
+        "  --directives\t\t\tDisplays AI directives\n" 
 	"  --list-models\t\t\tLists available Gemini models\n"
+        "  --decrypt-pw\t\t\tPrint decrypted passwords stored in aiterm.conf\n" 
         "  --crypt-pw=<password>\t\tEncrypt a plaintext password to AES-256-CBC encryption for aiterm.conf\n\n"
         "Environment Variables:\n"
         "  AITERM_MASTER_KEY\t\tFallback variable evaluated if the --master option flag is missing\n\n"
