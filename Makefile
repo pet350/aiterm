@@ -4,7 +4,7 @@
 CC = gcc
 CFLAGS = $(shell pkg-config --cflags gtk+-3.0 glib-2.0 vte-2.91 libcurl json-c libmariadb) -Wall -Wno-deprecated-declarations
 
-LIBS = $(shell pkg-config --libs gtk+-3.0 vte-2.91 libmariadb) -ljson-c -lpthread -lcurl -lcrypto -luuid -lgtk-3
+LIBS = $(shell pkg-config --libs gtk+-3.0 vte-2.91 libmariadb) -ljson-c -lpthread -lcurl -lcrypto -luuid -lgtk-3 -lnetsnmp
 
 
 
@@ -17,7 +17,8 @@ LIBS = $(shell pkg-config --libs gtk+-3.0 vte-2.91 libmariadb) -ljson-c -lpthrea
 OBJ = ai_retry.o autoexec.o commands.o config.o crypto.o gemini.o gemini_cache.o gui.o help.o		\
       history_manager_gui.o main.o menu.o noise_filter_manager_gui.o noisefilter.o openai.o		\
       policy_dao.o policy_manager_gui.o ratelimit.o resources.o session_manager_gui.o			\
-      session_manager.o status.o tee_handler.o terminal.o toggles.o update.o utils.o xml_tagging.o
+      session_manager.o snmp_manager.o snmp_manager_gui.o status.o tee_handler.o terminal.o toggles.o   \
+      update.o utils.o	xml_tagging.o
 
 TARGET = aiterm
 

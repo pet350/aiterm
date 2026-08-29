@@ -78,21 +78,15 @@ static char *gemini_http_single_attempt(const char *payload, long *out_http_code
 
 // --- 1. The Core API Logic ---
 // UI-neutral execution wrapped with AI Retry handler
-char* perform_gemini_request(AppContext *app, const char *prompt) {
+char* perform_gemini_request(AppContext *app, const char *prompt, const char *terminal_context) {
     char url[1024];
 
-    char *screen_text = NULL;
-    if (VTE_IS_TERMINAL(app->gui.terminal_view)) {
-        VteTerminal *vte = VTE_TERMINAL(app->gui.terminal_view);
-        long row, col;
-        vte_terminal_get_cursor_position(vte, &col, &row);
-        long context_depth = 1000;
-        long start_row = (row > context_depth) ? (row - context_depth) : 0;
-        screen_text = vte_terminal_get_text_range(vte, start_row, 0, row, col, NULL, NULL, NULL);
-    }
+    /* GTK/VTE objects belong to the main thread.  The caller captures the
+     * terminal context before launching this worker.  Never query VTE here. */
+    const char *screen_text = terminal_context ? terminal_context : "None";
 
-    // Wrap the screen text in our session-aware XML tag
-    char *tee_chunk = session_create_tee_chunk(app, screen_text ? screen_text : "None");
+    // Wrap the captured screen text in our session-aware XML tag
+    char *tee_chunk = session_create_tee_chunk(app, screen_text);
 
     struct json_object *root = json_object_new_object();
     struct json_object *contents = json_object_new_array();
@@ -127,7 +121,7 @@ char* perform_gemini_request(AppContext *app, const char *prompt) {
     if (cached_res != NULL) {
         g_free(prompt_hash);
         g_free(tee_chunk);
-        if (screen_text) g_free(screen_text);
+
         json_object_put(root);
         return cached_res; 
     }
@@ -221,7 +215,7 @@ char* perform_gemini_request(AppContext *app, const char *prompt) {
     g_free(prompt_hash);
     g_free(full_prompt);
     g_free(tee_chunk);
-    if (screen_text) g_free(screen_text);
+    /* terminal_context is borrowed here; AIThreadData owns and frees it. */
     json_object_put(root);
 
     return raw_json;
@@ -235,7 +229,7 @@ gpointer ai_thread_func(gpointer data) {
     char *raw_json = NULL;
 
     if (td->app->provider_config.kind == PROVIDER_KIND_GEMINI_GENERATE) {
-        raw_json = perform_gemini_request(td->app, td->prompt);
+        raw_json = perform_gemini_request(td->app, td->prompt, td->terminal_context);
     } else {
         raw_json = send_to_openai(td->app, td->prompt);
     }
@@ -292,6 +286,7 @@ gpointer ai_thread_func(gpointer data) {
 
     g_idle_add((GSourceFunc)update_gui_with_response, rd);
 
+    g_free(td->terminal_context);
     g_free(td->prompt);
     g_free(td);
     return NULL;
@@ -302,16 +297,16 @@ char* send_to_gemini(AppContext *app, const char *prompt) {
     if (app->sys.ratelimit_enabled) {
         ratelimit_wait_if_needed(&app->limiter);
     }
-    if (app->sys.ai_busy) {
+    if (g_atomic_int_get(&app->sys.ai_busy)) {
         DEBUG_PRINT("[DEBUG] SEND_TO_GEMINI: ai_busy flag set not executing perform_gemini_request\n");
         return NULL;
     }
 
     char *output = g_strdup(noise_filter_apply(app, prompt));
-    app->sys.ai_busy = TRUE;
+    g_atomic_int_set(&app->sys.ai_busy, 1);
     DEBUG_PRINT("[DEBUG]: [SEND_TO_GEMINI] set ai_busy flag TRUE\n");
-    char *data = perform_gemini_request(app, output);
-    app->sys.ai_busy = FALSE;
+    char *data = perform_gemini_request(app, output, NULL);
+    g_atomic_int_set(&app->sys.ai_busy, 0);
     DEBUG_PRINT("[DEBUG]: [SEND_TO_GEMINI] Cleared ai_busy flag, returning response\n");
     g_free(output);
     return data;

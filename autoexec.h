@@ -1,3 +1,11 @@
+// part of the aiterm project
+// autoexec.h
+// Header file for auto execute of AI payloads
+// By: Peter Talbott
+// Assisted by: Gemini
+// aiterm The terminal emulator with an AI Pane
+// August 2026
+
 #ifndef AUTOEXEC_H
 #define AUTOEXEC_H
 
@@ -14,6 +22,8 @@ char* extract_binary_name(const char *cmd_line);
 GList* extract_code_blocks(const char *text);
 int alloc_exec_dialog_slot(AppContext *app);
 
+void enqueue_autoexec_payload(AppContext *app, const char *raw_commands);
+void execute_next_queued_command(AppContext *app);
 void feed_command_to_vte(AppContext *app, const char *cmd);
 void free_exec_dialog_slot(AppContext *app, int slot_id);
 void on_action_combo_changed(GtkComboBox *combo, gpointer user_data);
@@ -21,6 +31,7 @@ void on_confirmation_response(GtkDialog *dialog, gint response_id, gpointer user
 void process_auto_execution(AppContext *app, const char *ai_text);
 void process_next_queued_command(AppContext *app);
 void show_exec_confirmation_dialog(AppContext *app, const char *cmd, int pane_id);
+void cmd_show_queue(AppContext *app);
 
 gboolean render_confirmation_dialog_idle(gpointer user_data);
 gboolean is_shell_builtin(const char *name);

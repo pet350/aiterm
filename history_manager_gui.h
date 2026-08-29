@@ -1,3 +1,11 @@
+// part of the aiterm project
+// history_manager_gui.h
+// Header file for history manager gui
+// By: Peter Talbott
+// Assisted by: Gemini
+// aiterm The terminal emulator with an AI Pane
+// August 2026
+
 #ifndef HISTORY_MANAGER_GUI_H
 #define HISTORY_MANAGER_GUI_H
 

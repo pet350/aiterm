@@ -23,7 +23,7 @@
 #include "tee_handler.h"
 #include "config.h"
 #include "session_manager.h"
-
+#include "snmp_manager.h"
 
 gboolean toggle_function(AppContext *app, ToggleType toggle_type, GtkCheckMenuItem *menu_item, const char *args) {
     if (!app) return FALSE;
@@ -68,11 +68,20 @@ gboolean toggle_function(AppContext *app, ToggleType toggle_type, GtkCheckMenuIt
         case TOGGLE_SMART_CACHE:
             snprintf(command_buffer, sizeof(command_buffer), "smart cache %s", state_str);
             break;
+        case TOGGLE_SNMP_PAYLOAD:
+            snprintf(command_buffer, sizeof(command_buffer), "snmp enable %s", state_str);
+            break;
+        case TOGGLE_SNMP_TICKER:
+            snprintf(command_buffer, sizeof(command_buffer), "snmp ticker %s", state_str);
+            break;
         case TOGGLE_RATELIMIT:
             snprintf(command_buffer, sizeof(command_buffer), "ratelimit %s", state_str);
             break;
         case TOGGLE_TEE:
             snprintf(command_buffer, sizeof(command_buffer), "tee %s", state_str);
+            break;
+        case TOGGLE_SESSION_CONFIG:
+	    snprintf(command_buffer, sizeof(command_buffer), "session config %s", state_str);
             break;
         case TOGGLE_XML:
             snprintf(command_buffer, sizeof(command_buffer), "xml tagging %s", state_str);
@@ -153,6 +162,15 @@ void setup_menu_toggle(GtkWidget *menu_item, AppContext *app, ToggleType type, g
         case TOGGLE_SESSION_WRITE_GLOBAL:
             app->ui.toggle_session_write_global = menu_item;
             break;
+        case TOGGLE_SESSION_CONFIG:
+	    app->ui.toggle_session_config = menu_item;
+            break;
+        case TOGGLE_SNMP_PAYLOAD:
+            app->ui.toggle_snmp_payload = menu_item;
+            break;
+        case TOGGLE_SNMP_TICKER:
+            app->ui.toggle_snmp_ticker = menu_item;
+            break;
         default:
             // Some toggles might not have explicit UI struct members, which is fine
             break;
@@ -160,4 +178,8 @@ void setup_menu_toggle(GtkWidget *menu_item, AppContext *app, ToggleType type, g
 
     // Connect the uniform signal handler
     g_signal_connect(menu_item, "toggled", G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+}
+
+void update_menu_toggles_from_app(AppContext *app) {
+    sync_toggle_ui_elements(app);
 }

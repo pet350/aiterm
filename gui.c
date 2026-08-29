@@ -234,6 +234,14 @@ void apply_custom_theme() {
         "   background-color: #0f380f; "
         "}"
 
+        /* SNMP Ticker Customization */
+        "#snmp-ticker { "
+        "   font-family: monospace; "
+        "   font-size: 9pt; "
+        "   color: #00FF00; "
+        "   background-color: transparent; "
+        "   padding: 2px 4px; "
+        "}"
         /* 7. Text inputs and global typography fallback */
         "textview { background-color: transparent; color: #dcdcdc; font-family: monospace; font-size: 10pt; }"
         "entry { background-color: #1a1a1a; color: #ffffff; border: 1px solid #333333; }"
@@ -407,10 +415,20 @@ void on_upload_clicked(GtkButton *button, gpointer data) {
         if (file_text) {
             char *prompt = g_strdup_printf("FILE ANALYSIS (%s):\n\n%s", filename, file_text);
 
+            if (!g_atomic_int_compare_and_exchange(&app->sys.is_processing, 0, 1)) {
+                write_to_ai_pane(app, "System: ", "AI is already busy. File analysis deferred.", "cmd_tag", "cmd_tag");
+                g_free(prompt);
+                g_free(file_text);
+                g_free(filename);
+                gtk_widget_destroy(dialog);
+                return;
+            }
+
             AIThreadData *td = g_malloc0(sizeof(AIThreadData));
             td->app = app;
             td->prompt = prompt;
-            g_thread_new("ai_worker", (GThreadFunc)ai_thread_func, td);
+            td->terminal_context = terminal_capture_context(app);
+            g_thread_unref(g_thread_new("ai_worker", (GThreadFunc)ai_thread_func, td));
 
             append_ai_text(app, "System: ", "system_tag");
             append_ai_text(app, " Uploading file for analysis...\n", "body_tag");
@@ -490,6 +508,215 @@ void on_buffer_changed_scroll(GtkTextBuffer *buffer, gpointer data) {
     g_idle_add(scroll_to_bottom_idle, data);
 }
 
+/*
+ * SNMP ticker implementation
+ *
+ * IMPORTANT: Do not use GtkLabel for the scrolling payload.  A GtkLabel's
+ * natural size is based on its complete text.  Our SNMP payload can contain
+ * dozens of targets and very long values (Cisco IOS descriptions are a good
+ * example), which can make GTK request a widget tens of thousands of pixels
+ * wide.  That was producing:
+ *   Gdk-WARNING: Native Windows wider or taller than 32767 pixels are not supported
+ *
+ * The ticker is therefore a fixed-size GtkDrawingArea.  Only the visible
+ * portion is rendered, so the full payload never becomes the widget's natural
+ * width and GTK never has to allocate a giant native window.
+ */
+static gboolean snmp_ticker_draw(GtkWidget *widget, cairo_t *cr, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    if (!app) return FALSE;
+
+    GtkAllocation allocation;
+    gtk_widget_get_allocation(widget, &allocation);
+    if (allocation.width <= 0 || allocation.height <= 0) return FALSE;
+
+    int width_px = allocation.width;
+    int height_px = allocation.height;
+
+    /*
+     * The old draw path converted the ENTIRE ticker payload from UTF-8 to
+     * UCS-4 on every animation frame.  With a large SNMP payload that meant
+     * repeatedly allocating and walking tens of thousands of characters from
+     * the GTK main thread.  The ticker is animated at 150 ms, so this could
+     * easily dominate CPU usage.
+     *
+     * The payload is now converted once, when it changes, and the draw path
+     * only walks the visible window.  This is deliberately kept on the GTK
+     * thread, so no additional locking is required for the cached fields.
+     */
+    static const char idle_text[] = "SNMP: Idle";
+    const gunichar *chars = app->gui.snmp_ticker_chars;
+    glong len = app->gui.snmp_ticker_len;
+
+    gunichar idle_chars[16] = { 0 };
+    if (!chars || len <= 0) {
+        gunichar *idle_utf32 = g_utf8_to_ucs4_fast(idle_text, -1, NULL);
+        if (!idle_utf32) return FALSE;
+        len = (glong)g_utf8_strlen(idle_text, -1);
+        if (len > (glong)(G_N_ELEMENTS(idle_chars) - 1))
+            len = G_N_ELEMENTS(idle_chars) - 1;
+        memcpy(idle_chars, idle_utf32, (size_t)len * sizeof(gunichar));
+        g_free(idle_utf32);
+        chars = idle_chars;
+        app->gui.snmp_ticker_offset = 0;
+    }
+
+    PangoLayout *measure = gtk_widget_create_pango_layout(widget, "M");
+    int char_width = 0;
+    int char_height = 0;
+    pango_layout_get_pixel_size(measure, &char_width, &char_height);
+    g_object_unref(measure);
+
+    if (char_width < 1) char_width = 8;
+    if (char_height < 1) char_height = 14;
+
+    int window_size = (width_px > 4) ? (width_px - 4) / char_width : 1;
+    if (window_size < 1) window_size = 1;
+
+    if ((glong)app->gui.snmp_ticker_offset >= len)
+        app->gui.snmp_ticker_offset = 0;
+
+    GString *visible = g_string_sized_new((gsize)window_size * 4 + 1);
+    for (int i = 0; i < window_size; i++) {
+        gunichar c = chars[(app->gui.snmp_ticker_offset + (size_t)i) % (size_t)len];
+        g_string_append_unichar(visible, c);
+    }
+
+    PangoLayout *layout = gtk_widget_create_pango_layout(widget, visible->str);
+    pango_layout_set_single_paragraph_mode(layout, TRUE);
+    pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
+
+    /* Never let the ticker draw outside its allocated pane. */
+    cairo_save(cr);
+    cairo_rectangle(cr, 0, 0, width_px, height_px);
+    cairo_clip(cr);
+
+    int text_width = 0, text_height = 0;
+    pango_layout_get_pixel_size(layout, &text_width, &text_height);
+    int y = (height_px - text_height) / 2;
+    if (y < 0) y = 0;
+
+    gtk_render_layout(gtk_widget_get_style_context(widget), cr, 2, y, layout);
+    cairo_restore(cr);
+
+    g_object_unref(layout);
+    g_string_free(visible, TRUE);
+    /* chars is cached in app->gui and must not be freed here. */
+
+    return FALSE;
+}
+
+GtkWidget *create_snmp_ticker(AppContext *app) {
+    GtkWidget *ticker = gtk_drawing_area_new();
+    app->gui.snmp_ticker_label = ticker;
+
+    gtk_widget_set_name(ticker, "snmp-ticker");
+    gtk_widget_set_hexpand(ticker, TRUE);
+    gtk_widget_set_halign(ticker, GTK_ALIGN_FILL);
+    gtk_widget_set_vexpand(ticker, FALSE);
+    gtk_widget_set_valign(ticker, GTK_ALIGN_CENTER);
+
+    /* A drawing area has no natural width based on the ticker payload. */
+    gtk_widget_set_size_request(ticker, 1, 22);
+    g_signal_connect(ticker, "draw", G_CALLBACK(snmp_ticker_draw), app);
+
+    GtkCssProvider *provider = gtk_css_provider_new();
+    gtk_css_provider_load_from_data(provider,
+        "#snmp-ticker {\n"
+        "    font-family: 'Monospace';\n"
+        "    font-size: 9pt;\n"
+        "    color: #00FF00;\n"
+        "    background-color: transparent;\n"
+        "}\n", -1, NULL);
+
+    GtkStyleContext *context = gtk_widget_get_style_context(ticker);
+    gtk_style_context_add_provider(context, GTK_STYLE_PROVIDER(provider),
+                                   GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    g_object_unref(provider);
+
+    return ticker;
+}
+
+gboolean update_snmp_ticker_scroll(gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+
+    if (!app || !app->gui.snmp_ticker_label) return FALSE;
+
+    const char *text = app->gui.snmp_ticker_text;
+    if (!text || !*text) {
+        app->gui.snmp_ticker_offset = 0;
+        app->aiterm_runtime.ticker_completed = TRUE;
+        gtk_widget_queue_draw(app->gui.snmp_ticker_label);
+        return TRUE;
+    }
+
+    glong len = g_utf8_strlen(text, -1);
+    if (len <= 0) {
+        app->gui.snmp_ticker_offset = 0;
+        app->aiterm_runtime.ticker_completed = TRUE;
+        gtk_widget_queue_draw(app->gui.snmp_ticker_label);
+        return TRUE;
+    }
+
+    if ((glong)app->gui.snmp_ticker_offset >= len)
+        app->gui.snmp_ticker_offset = 0;
+
+    /* Draw the current position first, then advance.  Once the offset has
+     * traversed the complete payload, mark the ticker complete.  The next
+     * SNMP poll may replace the payload only after this flag becomes TRUE. */
+    gtk_widget_queue_draw(app->gui.snmp_ticker_label);
+
+    app->gui.snmp_ticker_offset++;
+    if ((glong)app->gui.snmp_ticker_offset >= len) {
+        app->gui.snmp_ticker_offset = 0;
+        app->aiterm_runtime.ticker_completed = TRUE;
+        DEBUG_PRINT("[DEBUG]: [SNMP Ticker] Full payload completed one pass. Ready for next poll.\n");
+    }
+
+    return TRUE;
+}
+
+void update_snmp_ticker_payload(AppContext *app, const char *payload_summary) {
+    if (!app) return;
+
+    /* A new payload starts a new complete ticker pass.  The SNMP poller
+     * must not replace the payload while the previous one is still scrolling. */
+    app->aiterm_runtime.ticker_completed = FALSE;
+
+    /* Payload ownership lives entirely on the GTK/main thread. */
+    g_free(app->gui.snmp_ticker_text);
+    app->gui.snmp_ticker_text = NULL;
+    g_free(app->gui.snmp_ticker_chars);
+    app->gui.snmp_ticker_chars = NULL;
+    app->gui.snmp_ticker_len = 0;
+
+    GString *ticker = g_string_new("  [SNMP PAYLOAD]: ");
+    g_string_append(ticker, payload_summary ? payload_summary : "IDLE");
+
+    /* A few spaces create a clean visual break before the loop.  We do not
+     * size this from the payload and we never put the payload into a widget's
+     * natural-size calculation. */
+    g_string_append(ticker, "     ");
+
+    app->gui.snmp_ticker_text = g_string_free(ticker, FALSE);
+
+    /* Convert once per payload update instead of once per animation frame. */
+    app->gui.snmp_ticker_chars = g_utf8_to_ucs4_fast(
+        app->gui.snmp_ticker_text, -1, &app->gui.snmp_ticker_len);
+    if (!app->gui.snmp_ticker_chars) {
+        app->gui.snmp_ticker_len = 0;
+    }
+
+    app->gui.snmp_ticker_offset = 0;
+
+    if (app->gui.snmp_ticker_label)
+        gtk_widget_queue_draw(app->gui.snmp_ticker_label);
+
+    DEBUG_PRINT("[DEBUG]: [SNMP Ticker] Payload length=%zu chars=%zu\n",
+                strlen(app->gui.snmp_ticker_text),
+                (size_t)g_utf8_strlen(app->gui.snmp_ticker_text, -1));
+}
+
 // Self explainatory!! Totally Revised 0.9.4
 void setup_gui(AppContext *app) {
     apply_custom_theme();
@@ -507,7 +734,12 @@ void setup_gui(AppContext *app) {
     }
     gtk_widget_set_app_paintable(app->gui.window, TRUE);
 
+    // Updated 0.9.7-delta Setting WM_ROLE and WM_CLASS
     gtk_window_set_title(GTK_WINDOW(app->gui.window), "AI-Term C/GTK Edition");
+    gtk_window_set_role(GTK_WINDOW(app->gui.window), AITERM_WM_ROLE);
+    gtk_window_set_wmclass(GTK_WINDOW(app->gui.window), AITERM_WM_CLASS, "Aiterm");
+    DEBUG_PRINT("[DEBUG]: [Setup Gui] Set Window Title, Role and wmclass\n");
+
     gtk_window_set_default_size(GTK_WINDOW(app->gui.window), 1000, 600);
     g_signal_connect(app->gui.window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
@@ -555,7 +787,17 @@ void setup_gui(AppContext *app) {
 
     gtk_box_pack_start(GTK_BOX(right_vbox), app->tokens.bar, FALSE, FALSE, 2);
 
-    // Existing AI text area setup
+    // SNMP Ticker Label
+    // Use the helper so the ticker receives its CSS/theme setup in one place.
+    create_snmp_ticker(app);
+    gtk_box_pack_start(GTK_BOX(right_vbox), app->gui.snmp_ticker_label, FALSE, FALSE, 2);
+
+    // Start the scrolling animation.  The payload is replaced by the SNMP
+    // poll completion callback, while this timer only handles animation.
+    app->gui.snmp_ticker_timer_id = g_timeout_add(150, update_snmp_ticker_scroll, app);
+    g_source_set_name_by_id(app->gui.snmp_ticker_timer_id, "aiterm-snmp-ticker");
+
+    // 3. AI Text View Container
     GtkWidget *gem_scroll = gtk_scrolled_window_new(NULL, NULL);
     app->gui.gemini_view = gtk_text_view_new();
     GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gui.gemini_view));
@@ -567,8 +809,9 @@ void setup_gui(AppContext *app) {
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(app->gui.gemini_view), GTK_WRAP_WORD);
     gtk_container_add(GTK_CONTAINER(gem_scroll), app->gui.gemini_view);
 
-    // Pack the text scrolling area underneath the token bar
+    // Pack the text scrolling area underneath the token bar and SNMP ticker
     gtk_box_pack_start(GTK_BOX(right_vbox), gem_scroll, TRUE, TRUE, 0);
+
 
     // Pack the complete right vertical stack into the right side of the split pane
     gtk_paned_pack2(GTK_PANED(paned), right_vbox, TRUE, FALSE);
@@ -618,18 +861,31 @@ void setup_gui(AppContext *app) {
 }
 
 gboolean scroll_ai_pane_to_bottom(AppContext *app) {
-    if (!app || !app->gui.gemini_view) return FALSE;
+    if (!app || !app->gui.gemini_view) {
+        if (app) app->gui.ai_scroll_pending = FALSE;
+        return FALSE;
+    }
 
     GtkWidget *parent = gtk_widget_get_parent(app->gui.gemini_view);
     if (GTK_IS_SCROLLED_WINDOW(parent)) {
         GtkAdjustment *adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(parent));
         gdouble upper = gtk_adjustment_get_upper(adj);
         gdouble page_size = gtk_adjustment_get_page_size(adj);
-        
-        // Scroll to the end position
-        gtk_adjustment_set_value(adj, upper - page_size);
+        gdouble target = upper - page_size;
+        if (target < 0) target = 0;
+        gtk_adjustment_set_value(adj, target);
     }
-    return FALSE; // Essential for g_idle_add
+
+    /* This callback is deliberately one-shot. */
+    app->gui.ai_scroll_pending = FALSE;
+    return FALSE;
+}
+
+static void queue_ai_scroll(AppContext *app) {
+    if (!app || !app->gui.gemini_view) return;
+    if (app->gui.ai_scroll_pending) return;
+    app->gui.ai_scroll_pending = TRUE;
+    g_idle_add((GSourceFunc)scroll_ai_pane_to_bottom, app);
 }
 
 void append_ai_text(AppContext *app, const char *text, const char *tag_name) {
@@ -643,8 +899,9 @@ void append_ai_text(AppContext *app, const char *text, const char *tag_name) {
         gtk_text_buffer_insert(buffer, &end, text, -1);
     }
 
-    // Use g_idle_add to ensure the scroll happens AFTER the buffer update finishes
-    g_idle_add((GSourceFunc)scroll_ai_pane_to_bottom, app);
+    /* Coalesce scroll requests.  AI/Tee/auto-exec can append many fragments
+     * in one main-loop turn; one idle callback is enough for the final state. */
+    queue_ai_scroll(app);
 }
 
 /* Helper callback triggered when set_command_policy_async finishes */

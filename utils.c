@@ -27,6 +27,7 @@
 #include "commands.h"
 #include "noisefilter.h"
 #include "gemini.h"
+#include "snmp_manager.h"
 
 // Kept the functions "legacy name"
 // for the most part it all booleans initialized here 
@@ -38,15 +39,22 @@ void initialize_booleans(AppContext *app) {
     app->sys.auto_execute_enabled = FALSE;
     app->sys.debug_mode = FALSE;
     app->sys.debug_mode_override = FALSE;
-    app->sys.is_processing = FALSE;
+    g_atomic_int_set(&app->sys.is_processing, 0);
     app->sys.ratelimit_enabled = FALSE;
     app->sys.mysql_busy = FALSE;
-    app->sys.ai_busy = FALSE;
+    g_atomic_int_set(&app->sys.ai_busy, 0);
     app->sys.smart_cache_enabled = FALSE;
     app->sys.load_from_session = FALSE;
+    app->sys.snmp_ticker_enabled = TRUE;
     app->session.cfg_loaded_write_to_global = FALSE;
     app->session.cfg_loaded_read_from_global = FALSE;
     app->xml.tagging_enabled = FALSE;
+    app->SnmpContext.enable_gemini_feed = FALSE;
+
+    // Noise-filter patterns are copied into a non-GTK cache so background
+    // workers never access the GTK ListStore.
+    g_mutex_init(&app->noise.patterns_mutex);
+    app->noise.patterns = g_ptr_array_new_with_free_func(g_free);
 
     // NON-Boolean initializer
     // [ I know the function's name is 
@@ -67,6 +75,16 @@ void initialize_booleans(AppContext *app) {
 
     // the ONLY app->sys.xxxxx boolen that is TRUE on startup
     app->sys.is_initializing = TRUE;
+}
+
+// Added 0.9.8-alpha
+void init_runtime_queues(AppContext *app) {
+    if (!app) return;
+    DEBUG_PRINT("[DEBUG]: [Runtime Queues] Initializing... ");
+    app->aiterm_runtime.pending_autoexec_queue = g_queue_new();
+    app->aiterm_runtime.is_command_running = FALSE;
+    app->aiterm_runtime.ticker_completed = TRUE;
+    fprintf(stderr,"Done!\n");
 }
 
 static void provider_replace_string(char **field, const char *value) {
@@ -249,69 +267,150 @@ void display_all_history(AppContext *app) {
 // Rewritten 0.8.4-delta
 // Modified 0.8.5-gamma for target uuid
 void* db_worker_thread(void *arg) {
+    DEBUG_PRINT("[MEMDBG]: [WORKER] ENTER arg=%p\n", arg);
     mysql_thread_init();
     DBWorkerData *data = (DBWorkerData *)arg;
-    if (!data) { DEBUG_PRINT("[DEBUG]: [WORKER] Received NULL data pointer!\n"); return NULL; }
+    DEBUG_PRINT("[MEMDBG]: [WORKER] data=%p terminal=%p ai_analysis=%p user=%p ai=%p uuid=%p\n",
+                (void*)data,
+                data ? (void*)data->terminal_output : NULL,
+                data ? (void*)data->ai_analysis : NULL,
+                data ? (void*)data->user_text : NULL,
+                data ? (void*)data->ai_text : NULL,
+                data ? (void*)data->session_uuid : NULL);
+    if (!data) {
+        DEBUG_PRINT("[DEBUG]: [WORKER] Received NULL data pointer!\n");
+        mysql_thread_end();
+        return NULL;
+    }
+
     extern AppContext *global_app;
+    if (!global_app || !global_app->database.global_db_conn) {
+        DEBUG_PRINT("[MEMDBG]: [WORKER] No global app/DB connection, jumping to cleanup data=%p\n", (void*)data);
+        goto cleanup;
+    }
 
-    if (!global_app->database.global_db_conn) goto cleanup;
-
-    // ROUTING LOGIC: Respect the write_to_global flag
     const char *target_uuid = global_app->session.write_to_global
                               ? GLOBAL_SESSION_UUID
                               : global_app->session.session_uuid;
 
-    // LOCK: Ensure only one thread uses the database pipe at a time
     pthread_mutex_lock(&global_app->access.db_mutex);
     DEBUG_PRINT("[DEBUG]: [WORKER] Locked DB Mutex\n");
-    DEBUG_PRINT("[DEBUG]: [WORKER] Starting job for seq %d, is_tee=%d\n", data->sequence_id, data->is_tee);
+    DEBUG_PRINT("[DEBUG]: [WORKER] Starting job for seq %d, is_tee=%d\n",
+                data->sequence_id, data->is_tee);
+
     if (data->is_tee) {
-        char *esc_out = malloc(strlen(data->terminal_output) * 2 + 1);
-        char *esc_ai = malloc(strlen(data->ai_analysis) * 2 + 1);
+        DEBUG_PRINT("[MEMDBG]: [WORKER] TEE pointers before strlen: data=%p terminal=%p ai=%p uuid=%p\n",
+                    (void*)data, (void*)data->terminal_output, (void*)data->ai_analysis, (void*)data->session_uuid);
+        size_t out_len = data->terminal_output ? strlen(data->terminal_output) : 0;
+        size_t ai_len  = data->ai_analysis ? strlen(data->ai_analysis) : 0;
+        size_t uuid_len = data->session_uuid ? strlen(data->session_uuid) : 0;
 
-        mysql_real_escape_string(global_app->database.global_db_conn, esc_out, data->terminal_output, strlen(data->terminal_output));
-        mysql_real_escape_string(global_app->database.global_db_conn, esc_ai, data->ai_analysis, strlen(data->ai_analysis));
+        DEBUG_PRINT("[MEMDBG]: [WORKER] TEE lengths out=%zu ai=%zu uuid=%zu\n", out_len, ai_len, uuid_len);
+        char *esc_out = malloc(out_len * 2 + 1);
+        char *esc_ai  = malloc(ai_len * 2 + 1);
+        char *esc_uuid = malloc(uuid_len * 2 + 1);
 
-        size_t query_len = strlen(esc_out) + strlen(esc_ai) + strlen(data->session_uuid) + 1024;
-        char *query = malloc(query_len);
-        if (query) {
-            snprintf(query, query_len,
-                     "INSERT INTO aiterm_history (role, content, is_tee, session_uuid, sequence_id) VALUES "
-                     "('terminal', '%s', 1, '%s', %d), ('assistant', '%s', 1, '%s', %d)",
-                     esc_out, target_uuid, data->sequence_id, esc_ai, data->session_uuid, data->sequence_id);
-            mysql_query(global_app->database.global_db_conn, query);
-            free(query);
+        DEBUG_PRINT("[MEMDBG]: [WORKER] escaped allocations out=%p ai=%p uuid=%p\n",
+                    (void*)esc_out, (void*)esc_ai, (void*)esc_uuid);
+        if (esc_out && esc_ai && esc_uuid) {
+            mysql_real_escape_string(global_app->database.global_db_conn,
+                                     esc_out, data->terminal_output ? data->terminal_output : "", out_len);
+            mysql_real_escape_string(global_app->database.global_db_conn,
+                                     esc_ai, data->ai_analysis ? data->ai_analysis : "", ai_len);
+            mysql_real_escape_string(global_app->database.global_db_conn,
+                                     esc_uuid, data->session_uuid ? data->session_uuid : "", uuid_len);
+
+            size_t query_len = strlen(esc_out) + strlen(esc_ai) + strlen(esc_uuid) +
+                               strlen(target_uuid ? target_uuid : "") + 512;
+            char *query = malloc(query_len);
+            DEBUG_PRINT("[MEMDBG]: [WORKER] query alloc=%p size=%zu\n", (void*)query, query_len);
+            if (query) {
+                snprintf(query, query_len,
+                         "INSERT INTO aiterm_history (role, content, is_tee, session_uuid, sequence_id) VALUES "
+                         "('terminal', '%s', 1, '%s', %d), ('assistant', '%s', 1, '%s', %d)",
+                         esc_out, target_uuid ? target_uuid : "", data->sequence_id,
+                         esc_ai, esc_uuid, data->sequence_id);
+                int qrc = mysql_query(global_app->database.global_db_conn, query);
+                DEBUG_PRINT("[MEMDBG]: [WORKER] mysql_query rc=%d query=%p\n", qrc, (void*)query);
+                DEBUG_PRINT("[MEMDBG]: [WORKER] FREE query=%p\n", (void*)query);
+                free(query);
+            }
         }
-        free(esc_out); free(esc_ai);
+
+        DEBUG_PRINT("[MEMDBG]: [WORKER] FREE esc_out=%p\n", (void*)esc_out);
+        free(esc_out);
+        DEBUG_PRINT("[MEMDBG]: [WORKER] FREE esc_ai=%p\n", (void*)esc_ai);
+        free(esc_ai);
+        DEBUG_PRINT("[MEMDBG]: [WORKER] FREE esc_uuid=%p\n", (void*)esc_uuid);
+        free(esc_uuid);
     } else {
-        char *esc_user = malloc(strlen(data->user_text) * 2 + 1);
-        char *esc_ai = malloc(strlen(data->ai_text) * 2 + 1);
-        mysql_real_escape_string(global_app->database.global_db_conn, esc_user, data->user_text, strlen(data->user_text));
-        mysql_real_escape_string(global_app->database.global_db_conn, esc_ai, data->ai_text, strlen(data->ai_text));
+        size_t user_len = data->user_text ? strlen(data->user_text) : 0;
+        size_t ai_len   = data->ai_text ? strlen(data->ai_text) : 0;
+        size_t uuid_len = data->session_uuid ? strlen(data->session_uuid) : 0;
 
-        size_t query_len = strlen(esc_user) + strlen(esc_ai) + strlen(data->session_uuid) + 512;
-        char *query = malloc(query_len);
-        if (query) {
-	     snprintf(query, query_len,
-                     "INSERT INTO aiterm_history (role, content, is_tee, session_uuid, sequence_id) " // ADD sequence_id
-                     "VALUES ('user', '%s', 0, '%s', %d), ('assistant', '%s', 0, '%s', %d)",         // ADD %d twice
-                     esc_user, target_uuid, data->sequence_id, esc_ai, data->session_uuid, data->sequence_id);
-            mysql_query(global_app->database.global_db_conn, query);
-            free(query);
+        char *esc_user = malloc(user_len * 2 + 1);
+        char *esc_ai   = malloc(ai_len * 2 + 1);
+        char *esc_uuid = malloc(uuid_len * 2 + 1);
+
+        if (esc_user && esc_ai && esc_uuid) {
+            mysql_real_escape_string(global_app->database.global_db_conn,
+                                     esc_user, data->user_text ? data->user_text : "", user_len);
+            mysql_real_escape_string(global_app->database.global_db_conn,
+                                     esc_ai, data->ai_text ? data->ai_text : "", ai_len);
+            mysql_real_escape_string(global_app->database.global_db_conn,
+                                     esc_uuid, data->session_uuid ? data->session_uuid : "", uuid_len);
+
+            size_t query_len = strlen(esc_user) + strlen(esc_ai) + strlen(esc_uuid) +
+                               strlen(target_uuid ? target_uuid : "") + 512;
+            char *query = malloc(query_len);
+            DEBUG_PRINT("[MEMDBG]: [WORKER] nonTEE query alloc=%p size=%zu\n", (void*)query, query_len);
+            if (query) {
+                snprintf(query, query_len,
+                         "INSERT INTO aiterm_history (role, content, is_tee, session_uuid, sequence_id) "
+                         "VALUES ('user', '%s', 0, '%s', %d), ('assistant', '%s', 0, '%s', %d)",
+                         esc_user, target_uuid ? target_uuid : "", data->sequence_id,
+                         esc_ai, esc_uuid, data->sequence_id);
+                int qrc = mysql_query(global_app->database.global_db_conn, query);
+                DEBUG_PRINT("[MEMDBG]: [WORKER] nonTEE mysql_query rc=%d query=%p\n", qrc, (void*)query);
+                DEBUG_PRINT("[MEMDBG]: [WORKER] FREE nonTEE query=%p\n", (void*)query);
+                free(query);
+            }
         }
-        free(esc_user); free(esc_ai);
+
+        DEBUG_PRINT("[MEMDBG]: [WORKER] FREE esc_user=%p\n", (void*)esc_user);
+        free(esc_user);
+        DEBUG_PRINT("[MEMDBG]: [WORKER] FREE nonTEE esc_ai=%p\n", (void*)esc_ai);
+        free(esc_ai);
+        DEBUG_PRINT("[MEMDBG]: [WORKER] FREE nonTEE esc_uuid=%p\n", (void*)esc_uuid);
+        free(esc_uuid);
     }
-    // UNLOCK: Let the next thread in
+
     pthread_mutex_unlock(&global_app->access.db_mutex);
-    DEBUG_PRINT("[DEBUG]: [WORKER] Unlocked DB Mutex]n\n");
-    cleanup:
-    if (data->terminal_output) free(data->terminal_output);
-    if (data->ai_analysis) free(data->ai_analysis);
-    if (data->user_text) free(data->user_text);
-    if (data->ai_text) free(data->ai_text);
-    if (data->session_uuid) free(data->session_uuid);
-    DEBUG_PRINT("[DEBUG]: [WORKER] Job completed and memory freed for seq %d\n", data->sequence_id);
+    DEBUG_PRINT("[DEBUG]: [WORKER] Unlocked DB Mutex\n");
+
+cleanup:
+    /* DBWorkerData owns these copies exclusively.  The caller never frees them
+     * after successful pthread_create(). */
+    DEBUG_PRINT("[MEMDBG]: [WORKER] CLEANUP data=%p\n", (void*)data);
+    DEBUG_PRINT("[MEMDBG]: [WORKER] FREE terminal_output=%p\n", (void*)data->terminal_output);
+    g_free(data->terminal_output);
+    DEBUG_PRINT("[MEMDBG]: [WORKER] FREE ai_analysis=%p\n", (void*)data->ai_analysis);
+    g_free(data->ai_analysis);
+    DEBUG_PRINT("[MEMDBG]: [WORKER] FREE user_text=%p\n", (void*)data->user_text);
+    g_free(data->user_text);
+    DEBUG_PRINT("[MEMDBG]: [WORKER] FREE ai_text=%p\n", (void*)data->ai_text);
+    g_free(data->ai_text);
+    DEBUG_PRINT("[MEMDBG]: [WORKER] FREE session_uuid=%p\n", (void*)data->session_uuid); 
+    g_free(data->session_uuid);
+    /* Save scalar debug information before releasing the owning structure.
+     * Do not evaluate the freed pointer in a DEBUG_PRINT after free(). */
+    int completed_sequence_id = data->sequence_id;
+    DEBUG_PRINT("[DEBUG]: [WORKER] Job completed for seq %d\n",
+                completed_sequence_id);
+    DEBUG_PRINT("[MEMDBG]: [WORKER] FREE DBWorkerData=%p\n", (void*)data);
     free(data);
+    DEBUG_PRINT("[MEMDBG]: [WORKER] DBWorkerData released for seq %d\n",
+                completed_sequence_id);
     mysql_thread_end();
     return NULL;
 }
@@ -386,7 +485,7 @@ int init_remote_db(AppContext *app) {
     };
 
     for (int i = 0; i < sizeof(migrations)/sizeof(char*); i++) {
-        DEBUG_PRINT("[DEBUG]: [DB] Running migration query [%d]: %s\n", i, migrations[i]);
+        DEBUG_PRINT("[DEBUG]: [DB] query [%d]: %s\n", i, migrations[i]);
         mysql_query(app->database.global_db_conn, migrations[i]);
     }
 
@@ -426,7 +525,7 @@ int init_remote_db(AppContext *app) {
     };
 
     for (int i = 0; i < sizeof(session_migrations)/sizeof(char*); i++) {
-        DEBUG_PRINT("[DEBUG]: [DB] Running migration query [%d]: %s\n", i, session_migrations[i]);
+        DEBUG_PRINT("[DEBUG]: [DB] query [%d]: %s\n", i, session_migrations[i]);
         mysql_query(app->database.global_db_conn, session_migrations[i]);
     }
     DEBUG_PRINT("[DEBUG]: [DB] init_remote_db sequence fully complete!\n");
@@ -496,17 +595,18 @@ void load_history_to_gemini(AppContext *app, struct json_object *contents_array,
             // Apply noise filter to the data being loaded from the database
             char *data = noise_filter_apply(app, row[1]);
 
-	    // WRAPPING LOGIC:
-            // Wrap the database row content in the <history> tag
-            if        (strcmp(role, "model") == 0) {
-               app->xml.type = TAG_HISTORY;
+            // Choose the XML tag locally. Do not modify the shared
+            // app->xml.type field from an AI worker thread.
+            TagType row_type;
+            if (strcmp(role, "model") == 0) {
+               row_type = TAG_HISTORY;
             } else if (strcmp(role, "user") == 0) {
-               app->xml.type = TAG_MEMORY;
+               row_type = TAG_MEMORY;
             } else {
-               app->xml.type = TAG_LOG_DUMP;
+               row_type = TAG_LOG_DUMP;
             }
-            // Added 0.9.5-beta
-            char *wrapped_content = g_strdup(xml_wrap(app, data));
+            char *wrapped_content = xml_wrap_with_type(app, data, row_type);
+            g_free(data);
 
             // Old tag code
             //g_strdup_printf("<history session_uuid=\"%s\">\n%s\n</history>",app->session.session_uuid, data);
@@ -654,60 +754,80 @@ void save_to_history(const char *user_text, const char *ai_text) {
     data->session_uuid = g_strdup(global_app->session.session_uuid);
     data->is_tee = 0;
 
+    /* cleaned_ai_text is still needed by keyword extraction.  Do not free it
+     * until after extract_and_save_keywords() returns. */
     pthread_t thread_id;
-    pthread_create(&thread_id, NULL, db_worker_thread, data);
-    pthread_detach(thread_id);
+    if (pthread_create(&thread_id, NULL, db_worker_thread, data) != 0) {
+        DEBUG_PRINT("[DEBUG]: [WORKER] pthread_create failed for history save\n");
+        g_free(data->user_text);
+        g_free(data->ai_text);
+        g_free(data->session_uuid);
+        free(data);
+    } else {
+        pthread_detach(thread_id);
+    }
 
     // This part stays in the main thread
     extract_and_save_keywords(global_app, cleaned_ai_text); // Use cleaned text for keywords too
+    g_free(cleaned_user_text);
+    g_free(cleaned_ai_text);
 }
 
 void save_tee_to_history(const char *terminal_text, const char *ai_analysis) {
     extern AppContext *global_app;
 
-    if (!terminal_text || !ai_analysis || !global_app->session.session_uuid) {
-       DEBUG_PRINT("[DEBUG]: [TEE_SAVE] WARNING: Invalid inputs detected. Aborting.\n");
-       return;
-    }
-
-    char *terminal_output = noise_filter_apply(global_app, terminal_text);
-
-    mysql_thread_init();
-    // Apply strip_blank_lines to clean the text before saving
-    char *cleaned_terminal_output = strip_blank_lines(terminal_output);
-    char *cleaned_ai_analysis = strip_blank_lines(ai_analysis);
-    DEBUG_PRINT("[DEBUG]: [TEE_SAVE] Data cleaned. Allocating DBWorkerData.\n");
-
-    // 1. Pack the data
-    DBWorkerData *data = malloc(sizeof(DBWorkerData));
-    if (!data) {
-        DEBUG_PRINT("[DEBUG]: [TEE_SAVE] FATAL: Malloc failed for DBWorkerData\n");
+    if (!global_app || !terminal_text || !ai_analysis || !global_app->session.session_uuid) {
+        DEBUG_PRINT("[DEBUG]: [TEE_SAVE] WARNING: Invalid inputs detected. Aborting.\n");
         return;
     }
 
-    data->terminal_output = cleaned_terminal_output; // Assign the cleaned text
-    data->ai_analysis = cleaned_ai_analysis;         // Assign the cleaned text
-    data->session_uuid = strdup(global_app->session.session_uuid);
-    data->sequence_id = global_app->database.sequence_id;
-    global_app->database.sequence_id++;
-    data->is_tee = 1;
-    data->user_text = NULL;
-    data->ai_text = NULL;
+    /* Build the cleaned copies in this thread.  DBWorkerData takes ownership
+     * of these exact allocations and the worker frees them exactly once. */
+    char *terminal_output = noise_filter_apply(global_app, terminal_text);
+    if (!terminal_output) terminal_output = g_strdup("");
 
-    // 3. Launch the worker thread
-    DEBUG_PRINT("[DEBUG]: [TEE_SAVE] Launching thread for sequence_id: %d\n", data->sequence_id);
+    DEBUG_PRINT("[MEMDBG]: [TEE_SAVE] after noise_filter terminal_output=%p\n", (void*)terminal_output);
+    char *cleaned_terminal_output = strip_blank_lines(terminal_output);
+    char *cleaned_ai_analysis = strip_blank_lines(ai_analysis);
+    DEBUG_PRINT("[MEMDBG]: [TEE_SAVE] cleaned terminal=%p ai=%p\n", (void*)cleaned_terminal_output, (void*)cleaned_ai_analysis);
+    g_free(terminal_output);
+
+    if (!cleaned_terminal_output) cleaned_terminal_output = g_strdup("");
+    if (!cleaned_ai_analysis) cleaned_ai_analysis = g_strdup("");
+
+    DEBUG_PRINT("[DEBUG]: [TEE_SAVE] Data cleaned. Allocating DBWorkerData.\n");
+
+    DBWorkerData *data = calloc(1, sizeof(*data));
+    if (!data) {
+        DEBUG_PRINT("[DEBUG]: [TEE_SAVE] FATAL: Malloc failed for DBWorkerData\n");
+        g_free(cleaned_terminal_output);
+        g_free(cleaned_ai_analysis);
+        return;
+    }
+
+    data->terminal_output = cleaned_terminal_output;
+    data->ai_analysis = cleaned_ai_analysis;
+    data->session_uuid = g_strdup(global_app->session.session_uuid);
+    data->sequence_id = global_app->database.sequence_id++;
+    DEBUG_PRINT("[MEMDBG]: [TEE_SAVE] DBWorkerData=%p terminal=%p ai=%p uuid=%p seq=%d\n",
+                (void*)data, (void*)data->terminal_output, (void*)data->ai_analysis,
+                (void*)data->session_uuid, data->sequence_id);
+    data->is_tee = 1;
+
+    DEBUG_PRINT("[DEBUG]: [TEE_SAVE] Launching thread for sequence_id: %d\n",
+                data->sequence_id);
+
     pthread_t thread_id;
     if (pthread_create(&thread_id, NULL, db_worker_thread, data) != 0) {
         DEBUG_PRINT("[DEBUG]: [TEE_SAVE] FATAL: pthread_create failed!\n");
-        // Don't leak memory if thread creation fails
-        g_free(cleaned_terminal_output);
-        g_free(cleaned_ai_analysis);
-        g_free(data->session_uuid); // Assuming it was strdup'd
+        g_free(data->terminal_output);
+        g_free(data->ai_analysis);
+        g_free(data->session_uuid);
         free(data);
-    } else {
-        pthread_detach(thread_id); // Thread cleans up itself
+        return;
     }
-    mysql_thread_end();
+
+    pthread_detach(thread_id);
 }
 
 
@@ -809,7 +929,13 @@ char* strip_blank_lines(const char *input_text) {
         return g_strdup("");
     }
     long in_len = strlen(input_text);
-    char *input_string = g_strdup(noise_filter_apply(global_app, input_text));
+    char *noise_result = noise_filter_apply(global_app, input_text);
+    DEBUG_PRINT("[MEMDBG]: [BLANK_LINES] noise_result=%p len=%zu input=%p\n",
+                (void*)noise_result, noise_result ? strlen(noise_result) : 0, (void*)input_text);
+    char *input_string = g_strdup(noise_result ? noise_result : "");
+    DEBUG_PRINT("[MEMDBG]: [BLANK_LINES] input_string copy=%p\n", (void*)input_string);
+    DEBUG_PRINT("[MEMDBG]: [BLANK_LINES] FREE noise_result=%p\n", (void*)noise_result);
+    g_free(noise_result);
     int trimmed_count=0;
     GString *output_buffer = g_string_new("");
     char **lines = g_strsplit(input_string, "\n", -1);
@@ -831,7 +957,11 @@ char* strip_blank_lines(const char *input_text) {
     }
     DEBUG_PRINT("[DEBUG]: [Blank Lines] Input length: %ld bytes, Output length: %ld bytes. Stripped %d blank lines\n",
           in_len, output_buffer->len, trimmed_count);
-    return g_string_free(output_buffer, FALSE);
+    DEBUG_PRINT("[MEMDBG]: [BLANK_LINES] FREE input_string=%p\n", (void*)input_string);
+    g_free(input_string);
+    char *result = g_string_free(output_buffer, FALSE);
+    DEBUG_PRINT("[MEMDBG]: [BLANK_LINES] RETURN result=%p len=%zu\n", (void*)result, result ? strlen(result) : 0);
+    return result;
 }
 
 void print_version() {
@@ -845,7 +975,7 @@ void print_version() {
 void on_initialization_complete(AppContext *app) {
     if (app->sys.is_initializing) {
         app->sys.is_initializing = false;
-        fprintf(stderr, "[DEBUG]: [Initialization]: complete. Normal session active.\n");
+        DEBUG_PRINT("[DEBUG]: [Initialization]: complete. Normal session active.\n");
         fflush(stderr);
     }
 }

@@ -15,8 +15,10 @@
 //typedef struct AppContext AppContext;
 
 GtkWidget* setup_terminal(AppContext *app);
+void on_vte_child_exited(VteTerminal *vte, gint status, gpointer user_data);
 void apply_terminal_transparency(AppContext *app);
 void apply_visual_settings(AppContext *app);
+char *terminal_capture_context(AppContext *app);
 
 #endif
 

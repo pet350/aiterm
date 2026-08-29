@@ -8,6 +8,8 @@
 
 #ifndef UTILS_H
 #define UTILS_H
+#include <stdio.h>
+#include <time.h>
 #include <pthread.h>
 #include <vte/vte.h>
 #include <json-c/json.h>
@@ -33,9 +35,15 @@ extern const char* AITERM_BUILD_TIME;
 extern const char* CONFIG_FILE;
 extern const char* GENERAL_DIRECTIVES;
 
-
 #define DEBUG_PRINT(fmt, ...) \
-    do { if (global_app->sys.debug_mode) fprintf(stderr, fmt, ##__VA_ARGS__); } while (0)
+    do { \
+        if (global_app && global_app->sys.debug_mode) { \
+            struct timespec ts; \
+            clock_gettime(CLOCK_MONOTONIC, &ts); \
+            fprintf(stderr, "[%5ld.%06ld] " fmt, \
+                    (long)ts.tv_sec, (long)(ts.tv_nsec / 1000), ##__VA_ARGS__); \
+        } \
+    } while (0)
 
 typedef struct {
     char *user_text;
@@ -109,6 +117,7 @@ void tee_handle_output(AppContext *app, const char *text) ;
 void tee_flush_timed(AppContext *app);
 void feed_terminal_header(VteTerminal *terminal, const char *msg);
 void on_initialization_complete(AppContext *app);
+void init_runtime_queues(AppContext *app);
 
 gboolean is_ai_command(const char *text);
 gboolean on_app_startup_prime(gpointer user_data);

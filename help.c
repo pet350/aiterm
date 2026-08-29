@@ -19,16 +19,16 @@ extern const char* AITERM_BUILD_TIME;
 
 const char* HIGHLIGHT_STRING =
     "Application Highlights:\n"
-    "  - Atomic 'Snapshot & Clear' Capture Pipeline (Race-Condition Proof)\n"
-    "  - Dynamic SQL Allocation Engine (Supports unlimited terminal dumps)\n"
-    "  - Deep Context 'Smart History' (100-message lookback via MariaDB)\n"
-    "  - Multi-Tab VTE Architecture with isolated pointer synchronization\n"
-    "  - AI Integration (OpenAI/Gemini) with persistent analysis logging\n"
+    "  - Controls: Toggle (ON/OFF/STATUS) for all subsystems.\n"
+    "  - Automation: Auto-Retry on busy, Rate-limiting, and Auto-Execute command queue.\n"
+    "  - Management: Unified managers for Sessions, History, Noise, Policy, and SNMP.\n"
+    "  - Performance: Threaded SQL/AI transactions, atomic snapshot pipeline, dynamic SQL.\n"
+    "  - Intelligence: SNMP-to-AI data piping, Token-optimized XML tagging, Smart History.\n"
+    "  - Architecture: Multi-tab VTE with isolated sync; persistent analysis logging.\n"
     "  - Contact: Peter Talbott\t\t\tpet.350.pt@gmail.com\n";
 
-
 const char* get_version_info() {
-    static char v_buf[768];
+    static char v_buf[2048];
     snprintf(v_buf, sizeof(v_buf), "AI-Term GTK Version: %-16s\nBuild ID: %s\nBuild Time: %s\nLocation: Weston, WV\n%s", AITERM_VERSION, AITERM_BUILDID, AITERM_BUILD_TIME, HIGHLIGHT_STRING);
     return(v_buf);
 }
@@ -279,6 +279,7 @@ const char* get_cmd_help() {
         "  --version\t\t\tDisplay current version\n"
         "  --debug\t\t\tEnable verbose debug logging to stderr\n"
         "  --features\t\t\tShow details on features supported by current version\n"
+        "  --highlights\t\t\tShow appliction highlights\n"
         "  --master=<key>\t\tProvide the master password directly to decrypt saved config options\n"
         "  --directives\t\t\tDisplays AI directives\n" 
 	"  --list-models\t\t\tLists available Gemini models\n"

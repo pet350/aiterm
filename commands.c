@@ -30,6 +30,10 @@
 #include "status.h"
 #include "config.h"
 #include "menu.h"
+#include "snmp_manager.h"
+#include "snmp_manager_gui.h"
+#include "autoexec.h"
+#include "terminal.h"
 
 extern const char* HIGHLIGHT_STRING;
 extern const char* GENERAL_DIRECTIVES;
@@ -80,6 +84,11 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
             print_version();
             printf("\n%s\n", GENERAL_DIRECTIVES);
             exit(0);
+        } else if (strcmp(argv[i], "--highlights") == 0) {
+            load_config(app);
+            print_version();
+            printf("\n%s\n", HIGHLIGHT_STRING);
+            exit(0);
         } else if (strcmp(argv[i], "--features") == 0) {
             printf("%s\n", get_features_text());
             exit(0);
@@ -124,17 +133,18 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
 }
 
 static CommandRegistry registry[] = {
-    {"auto all", "Toggle (on/off): Tee, AutoReply, & AutoExecute", cmd_toggle_auto_all},
-    {"autoreply", "Toggle real-time prompt analysis (on/off)", cmd_toggle_autoreply},
-    {"autoretry", "Toggles auto AI retry (on/off)", cmd_toggle_autoretry},
-    {"autoexe", "Toggle execution of AI payloads (on/off)", cmd_toggle_autoexe},
+    {"auto all", "Toggle (on/off/status): Tee, AutoReply, & AutoExecute", cmd_toggle_auto_all},
+    {"autoreply", "Toggle real-time prompt analysis (on/off/status)", cmd_toggle_autoreply},
+    {"autoretry", "Toggles auto AI retry (on/off/status)", cmd_toggle_autoretry},
+    {"autoexe", "Toggle execution of AI payloads (on/off/status)", cmd_toggle_autoexe},
     {"clear", "Clear the contents of the AI pane", handle_clear_wrapper},
     {"close history manager", "Closes the history manager window", cmd_close_history_manager_wrapper},
     {"close noise manager", "Closes the noise filter manager window", cmd_close_noise_manager_wrapper},
     {"close policy manager", "Closes the policy manager window", cmd_close_policy_manager_wrapper},
     {"close session manager", "Closes the session manager window", cmd_close_session_manager_wrapper},
+    {"close snmp manager", "Closes the snmp manager window", cmd_close_snmp_manager_wrapper},
     {"command line help", "display all command line options", cmd_show_command_line_help_wrapper},
-    {"debug", "Toggle debug mode out stderr (on/off)", cmd_toggle_debug},
+    {"debug", "Toggle debug mode out stderr (on/off/status)", cmd_toggle_debug},
     {"directives", "Display AI Directives", handle_directive_wrapper},
     {"extended help", "Display extended help message", handle_extended_help},
     {"features", "Display new aiterm features", handle_features_wrapper},
@@ -144,7 +154,7 @@ static CommandRegistry registry[] = {
     {"invalidate cache", "Force a reload of smart cache", cmd_invalidate_cache},
     {"list models", "Display all models from current provider", handle_list_models_wrapper},
     {"load config", "Loads configurations from aiterm.conf", handle_load_config_wrapper},
-    {"noise filter", "Toggle noise filter (on/off)", cmd_toggle_noise_filter},
+    {"noise filter", "Toggle noise filter (on/off/status)", cmd_toggle_noise_filter},
     {"noise add", "Add a pattern to the noise filter list", cmd_noise_add},
     {"noise delete", "Remove a pattern from the noise filter (TBA)", cmd_noise_delete},
     {"noise list", "List all active noise filter patterns (TBA)", cmd_noise_list},
@@ -152,8 +162,10 @@ static CommandRegistry registry[] = {
     {"open history manager", "Open History Manager window", cmd_history_manager_wrapper},
     {"open noise manager", "Opens Noise Filter Manager window", cmd_noisefilter_manager_wrapper},
     {"open policy manager", "Open Policy Manager window", cmd_policy_manager_wrapper},
+    {"open snmp manager", "Opens SNMP Target Manager window", cmd_snmp_manager_wrapper},
     {"open session manager", "Opens the session manager window", cmd_session_manager_wrapper},
     {"save config", "Saves configuration to aiterm.conf", handle_save_config_wrapper},
+    {"session config", "Toggle loading config per session (on/off/status)", cmd_toggle_session_config},
     {"session default", "Sets current or specified UUID as default", cmd_session_default},
     {"session delete", "Deletes a session from the database", cmd_session_delete},
     {"session description", "Sets a desctiption to current session",  cmd_session_description},
@@ -161,21 +173,28 @@ static CommandRegistry registry[] = {
     {"session load", "Loads a previous session from database", cmd_session_load},
     {"session new", "Starts a new AI session", cmd_session_new},
     {"session no default", "Sets no session tto default", cmd_session_no_default},
-    {"session read from global", "Toggle reading from global (on/off)", cmd_session_read_from_gloal_toggle},
+    {"session read from global", "Toggle reading from global (on/off/status)", cmd_session_read_from_gloal_toggle},
     {"session show", "shows the current session uuid and description", cmd_session_show},
-    {"session write to global", "Toggle writing to global (on/off)", cmd_session_write_to_global_toggle},
-    {"smart cache", "Smart Cache Toggle (on/off)", cmd_toggle_smart_cache},
+    {"session sync", "Sync all settings to current session table", cmd_session_sync},
+    {"session write to global", "Toggle writing to global (on/off/status)", cmd_session_write_to_global_toggle},
+    {"show queue", "Display queue of commands Auto Execute is waiting to perform", cmd_show_queue_wrapper},
+    {"smart cache", "Smart Cache Toggle (on/off/status)", cmd_toggle_smart_cache},
+    {"snmp cmd", "SNMP management: list, add, edit, delete, manager", handle_snmp_command},
+    {"snmp dump", "Dump Raw SNMP data to AI pane", dump_raw_snmp_payload_to_ai_wrapper},
+    {"snmp enable", "Toggle send SNMP payload to AI (on/off/status)", cmd_toggle_snmp_payload},
+    {"snmp force", "Force flush SNMP payload to AI", cmd_force_snmp_flush}, 
+    {"snmp ticker", "Toggles SNMP Ticker (on/off/status)", cmd_toggle_snmp_ticker},
     {"provider", "Display AI provider [OpenAI/Gemini]", handle_provider_wrapper},
-    {"ratelimit", "Toggle Raate Limiting (on/off)", cmd_toggle_ratelimit},
+    {"ratelimit", "Toggle Raate Limiting (on/off/status)", cmd_toggle_ratelimit},
     {"reset db", "Reset database connection", cmd_reset_db_connect},
     {"reset state", "Reeset current AI state back to ready", handle_reset_state_wrapper},
     {"retry times", "Set the number of time to Autorety", cmd_set_retry_times}, 
     {"retry delay", "Set the delay between retries", cmd_set_retry_delay},
     {"rpm", "Set ratelimit Requests Per Minute", cmd_set_rpm},
     {"status", "Display operational metrics", handle_status_wrapper},
-    {"tee", "Toggle immediate terminal capturing (on/off)", cmd_toggle_tee},
+    {"tee", "Toggle immediate terminal capturing (on/off/status)", cmd_toggle_tee},
     {"version", "Display running aiterm version, build ID, and build time", handle_version_wrapper},
-    {"xml tagging", "Toggle XML Tagging of AI payloads (on/off)", cmd_toggle_xml_tagging},
+    {"xml tagging", "Toggle XML Tagging of AI payloads (on/off/status)", cmd_toggle_xml_tagging},
     {NULL, NULL, NULL} // Sentinel
 };
 
@@ -191,6 +210,130 @@ gboolean execute_command(AppContext *app, const char *input) {
         }
     }
     return FALSE; // No command found, pass to AI
+}
+
+void handle_snmp_command(AppContext *app, const char *args) {
+    const char *ptr = args;
+    while (ptr && *ptr == ' ') ptr++; // Strip leading spaces
+
+    if (!ptr || strlen(ptr) == 0 || strcmp(ptr, "list") == 0) {
+        pthread_mutex_lock(&app->SnmpContext.lock);
+        append_ai_text(app, "\n--- Active SNMP Targets ---\n", "ai_tag");
+        for (guint i = 0; i < app->SnmpContext.total_targets; i++) {
+            char *formatted = g_strdup_printf("[%d] ID:%d | %s (%s) | OID: %s | Value: %s\n",
+                                  i, app->SnmpMetric[i].id,
+                                  app->SnmpMetric[i].label, 
+                                  app->SnmpMetric[i].ip_address,
+                                  app->SnmpMetric[i].oid_str, 
+                                  app->SnmpMetric[i].last_value[0] ? app->SnmpMetric[i].last_value : "N/A");
+            append_ai_text(app, formatted, "ai_tag");
+            g_free(formatted);
+        }
+        pthread_mutex_unlock(&app->SnmpContext.lock);
+        return;
+    }
+
+    if (strncmp(ptr, "add ", 4) == 0) {
+        char label[64], ip[64], community[64], oid_str[128];
+        if (sscanf(ptr + 4, "%63s %63s %63s %127s", label, ip, community, oid_str) == 4) {
+            pthread_mutex_lock(&app->access.db_mutex);
+            char query[512];
+            snprintf(query, sizeof(query),
+                     "INSERT INTO snmp_targets (label, ip_address, community, oid_str, is_active) "
+                     "VALUES ('%s', '%s', '%s', '%s', 1);",
+                     label, ip, community, oid_str);
+            
+            if (mysql_query(app->database.global_db_conn, query) == 0) {
+                append_ai_text(app, "[SNMP] Target inserted into DB. Reloading...\n", "ai_tag");
+                pthread_mutex_unlock(&app->access.db_mutex);
+                snmp_load_targets_from_db(app);
+            } else {
+                append_ai_text(app, "[SNMP] Failed to insert target into DB.\n", "ai_tag");
+                pthread_mutex_unlock(&app->access.db_mutex);
+            }
+        } else {
+            append_ai_text(app, "Usage: /snmp add <label> <ip> <community> <oid>\n", "ai_tag");
+        }
+        return;
+    }
+
+    if (strncmp(ptr, "edit ", 5) == 0) {
+        int id = 0;
+        char label[64], ip[64], community[64], oid_str[128];
+        if (sscanf(ptr + 5, "%d %63s %63s %63s %127s", &id, label, ip, community, oid_str) == 5) {
+            pthread_mutex_lock(&app->access.db_mutex);
+            char query[512];
+            snprintf(query, sizeof(query),
+                     "UPDATE snmp_targets SET label='%s', ip_address='%s', community='%s', oid_str='%s' WHERE id=%d;",
+                     label, ip, community, oid_str, id);
+            
+            if (mysql_query(app->database.global_db_conn, query) == 0) {
+                append_ai_text(app, "[SNMP] Target updated in DB. Reloading...\n", "ai_tag");
+                pthread_mutex_unlock(&app->access.db_mutex);
+                snmp_load_targets_from_db(app);
+            } else {
+                append_ai_text(app, "[SNMP] Failed to update target in DB.\n", "ai_tag");
+                pthread_mutex_unlock(&app->access.db_mutex);
+            }
+        } else {
+            append_ai_text(app, "Usage: /snmp edit <id> <label> <ip> <community> <oid>\n", "ai_tag");
+        }
+        return;
+    }
+
+    if (strncmp(ptr, "delete ", 7) == 0 || strncmp(ptr, "del ", 4) == 0) {
+        int id = 0;
+        const char *id_ptr = (strncmp(ptr, "delete ", 7) == 0) ? ptr + 7 : ptr + 4;
+        if (sscanf(id_ptr, "%d", &id) == 1) {
+            pthread_mutex_lock(&app->access.db_mutex);
+            char query[256];
+            snprintf(query, sizeof(query), "DELETE FROM snmp_targets WHERE id=%d;", id);
+            
+            if (mysql_query(app->database.global_db_conn, query) == 0) {
+                append_ai_text(app, "[SNMP] Target deleted from DB. Reloading...\n", "ai_tag");
+                pthread_mutex_unlock(&app->access.db_mutex);
+                snmp_load_targets_from_db(app);
+            } else {
+                append_ai_text(app, "[SNMP] Failed to delete target from DB.\n", "ai_tag");
+                pthread_mutex_unlock(&app->access.db_mutex);
+            }
+        } else {
+            append_ai_text(app, "Usage: /snmp delete <id>\n", "ai_tag");
+        }
+        return;
+    }
+
+    if (strcmp(ptr, "manager") == 0 || strcmp(ptr, "gui") == 0) {
+        cmd_snmp_manager_wrapper(app, NULL);
+        return;
+    }
+}
+
+void dump_raw_snmp_payload_to_ai_wrapper(AppContext *app, const char *args) {
+    write_to_ai_pane(app, "System: ", "Dump raw SNMP Payload:", "ai_tag", "cmd_tag");
+    dump_raw_snmp_payload_to_ai(app);
+}
+
+void cmd_force_snmp_flush(AppContext *app, const char *args) {
+    (void)args;
+    if (!app) return;
+    write_to_ai_pane(app, "System: ", "Forced SNMP payload flush", "ai_tag", "cmd_tag");
+    pthread_mutex_lock(&app->SnmpContext.lock);
+    app->SnmpContext.force_gemini_feed = TRUE;
+    pthread_cond_signal(&app->SnmpContext.poller_cond);
+    pthread_mutex_unlock(&app->SnmpContext.lock);
+}
+
+void cmd_snmp_manager_wrapper(AppContext *app, const char *args) {
+    open_snmp_manager_window(app);
+}
+
+void cmd_close_snmp_manager_wrapper(AppContext *app, const char *args) {
+    close_snmp_manager(app);
+}
+
+void cmd_show_queue_wrapper(AppContext *app, const char *args) {
+    cmd_show_queue(app);
 }
 
 void display_dynamic_help(AppContext *app) {
@@ -279,29 +422,43 @@ void cmd_invalidate_cache(AppContext *app, const char *args) {
     }
 }
 
+void cmd_session_sync(AppContext *app, const char *args) {
+    session_sync_booleans_to_db(app);
+    write_to_ai_pane(app, "System: ", "Synchronized settings with sesssion", "ai_tag", "cmd_tag");
+}
+
 void cmd_show_command_line_help_wrapper(AppContext *app, const char *args) {
     write_to_ai_pane(app, "AITerm Command Line Help: ", get_cmd_help(), "ai_tag", "cmd_tag");
 }
 
 void cmd_reset_db_connect(AppContext *app, const char *args) {
+    (void)args;
+    if (!app) return;
+
     write_to_ai_pane_wrapper(app, "Attempting to reset Global Database connection.");
+
+    /* Never re-initialize a live mutex.  Doing so while DB workers may hold or
+     * wait on it is undefined behaviour and was a major source of intermittent
+     * corruption.  Serialize the complete connection replacement instead. */
+    pthread_mutex_lock(&app->access.db_mutex);
+
     if (app->database.global_db_conn) {
         mysql_close(app->database.global_db_conn);
+        app->database.global_db_conn = NULL;
     }
 
-    pthread_mutex_init(&app->access.db_mutex, NULL);
-    pthread_t db_init_thread;
-    DEBUG_PRINT("[DEBUG]: [MAIN] Spawning asynchronous DB initialization thread...\n");
-    if (pthread_create(&db_init_thread, NULL, init_db_thread_worker, app) == 0) {
-        pthread_detach(db_init_thread); // Allow thread to clean itself up on exit
+    mysql_thread_init();
+    int connected = init_remote_db(app);
+    mysql_thread_end();
+
+    pthread_mutex_unlock(&app->access.db_mutex);
+
+    if (connected && app->database.global_db_conn) {
+        write_to_ai_pane_wrapper(app, "Global Database connection re-established.");
+        gemini_cache_invalidate(app);
     } else {
-        fprintf(stderr, "Error: Failed to spawn database initialization thread.\n");
-        return;
+        write_to_ai_pane_wrapper(app, "Global Database connection reset failed.");
     }
-    if (app->database.global_db_conn) {
-        write_to_ai_pane_wrapper(app, "Asynchronous DB thread re-established!");
-    }
-    gemini_cache_invalidate(app);
 }
 
 void cmd_close_policy_manager_wrapper(AppContext *app, const char *args) {
@@ -396,12 +553,12 @@ void handle_list_models_wrapper(AppContext *app, const char *args) {
 
 void handle_reset_state_wrapper(AppContext *app, const char *args) {
     write_to_ai_pane(app, "AI State:", "Reset processing state", "system_tag", "ai_tag");
-    if (app->sys.is_processing) {
-        app->sys.is_processing = FALSE;
+    if (g_atomic_int_get(&app->sys.is_processing)) {
+        g_atomic_int_set(&app->sys.is_processing, 0);
         DEBUG_PRINT("[DEBUG]: RESET_STATE: cleared is_processing flag\n");
     }
-    if (app->sys.ai_busy) {
-        app->sys.ai_busy = FALSE;
+    if (g_atomic_int_get(&app->sys.ai_busy)) {
+        g_atomic_int_set(&app->sys.ai_busy, 0);
         DEBUG_PRINT("[DEBUG]: RESET_STATE: cleared ai_busy flag\n");
     }
     gemini_cache_invalidate(app);
@@ -710,7 +867,112 @@ void cmd_set_retry_delay(AppContext *app, const char *args) {
 }
 
 
-// ================= Start of Toggle ON / OFF functions  ======================
+// ================= Start of Toggle ON / OFF / STATUS functions  ======================
+void cmd_toggle_session_config(AppContext *app, const char *args) {
+    const char *ptr = args;
+    gboolean state;
+
+    if (ptr && *ptr == ' ') {
+        ptr++;
+    }
+
+    if (!ptr || strlen(ptr) == 0) {
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON, OFF, or STATUS");
+        return;
+    }
+
+    if (strcmp(ptr, "on") == 0) {
+        state = TRUE;
+    } else if (strcmp(ptr, "off") == 0) {
+        state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        write_to_ai_pane_wrapper(app, app->sys.load_from_session ? ": Session based config Enabled" : ": Session based config Disabled");
+        sync_toggle_ui_elements(app);
+        return;
+    } else {
+        GString *msg = g_string_new(": Unknown parameter parsed: ");
+        g_string_append_printf(msg, "%s ", ptr);
+        write_to_ai_pane_wrapper(app, msg->str);
+        return;
+    }
+    //gboolean state = (strstr(ptr, "on") != NULL);
+    app->sys.load_from_session = state;
+    write_to_ai_pane_wrapper(app, app->sys.load_from_session ? ": Session based config Enabled" : ": Session based config Disabled");
+    sync_toggle_ui_elements(app);
+}
+
+void cmd_toggle_snmp_payload(AppContext *app, const char *args) {
+    const char *ptr = args;
+    gboolean state;
+
+    if (ptr && *ptr == ' ') {
+        ptr++;
+    }
+
+    if (!ptr || strlen(ptr) == 0) {
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON, OFF, or STATUS");
+        return;
+    }
+
+    if (strcmp(ptr, "on") == 0) {
+        state = TRUE;
+    } else if (strcmp(ptr, "off") == 0) {
+        state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        write_to_ai_pane_wrapper(app, app->SnmpContext.enable_gemini_feed ? ": Send SNMP Payloads Enabled" : ": Send SNMP Payloads Disabled");
+        sync_toggle_ui_elements(app);
+        return;
+    } else {
+        GString *msg = g_string_new(": Unknown parameter parsed: ");
+        g_string_append_printf(msg, "%s ", ptr);
+        write_to_ai_pane_wrapper(app, msg->str);
+        return;
+    }
+    //gboolean state = (strstr(ptr, "on") != NULL);
+    app->SnmpContext.enable_gemini_feed = state;
+    write_to_ai_pane_wrapper(app, app->SnmpContext.enable_gemini_feed ? ": Send SNMP Payloads Enabled" : ": Send SNMP Payloads Disabled");
+    sync_toggle_ui_elements(app);
+}
+
+void cmd_toggle_snmp_ticker(AppContext *app, const char *args) {
+    const char *ptr = args;
+    gboolean state;
+
+    if (ptr && *ptr == ' ') {
+        ptr++;
+    }
+
+    if (!ptr || strlen(ptr) == 0) {
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON, OFF, or STATUS");
+        return;
+    }
+
+    if (strcmp(ptr, "on") == 0) {
+        state = TRUE;
+    } else if (strcmp(ptr, "off") == 0) {
+        state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        state = app->sys.snmp_ticker_enabled;
+        write_to_ai_pane_wrapper(app, state ? ": SNMP Ticker Enabled" : ": SNMP Ticker Disabled");
+        sync_toggle_ui_elements(app);
+        return;
+    } else {
+        GString *msg = g_string_new(": Unknown parameter parsed: ");
+        g_string_append_printf(msg, "%s ", ptr);
+        write_to_ai_pane_wrapper(app, msg->str);
+        return;
+    }
+    //gboolean state = (strstr(ptr, "on") != NULL);
+    app->sys.snmp_ticker_enabled = state;
+    write_to_ai_pane_wrapper(app, state ? ": SNMP Ticker Enabled" : ": SNMP Ticker Disabled");
+    if (app->sys.snmp_ticker_enabled) {
+        app->gui.snmp_ticker_timer_id =
+        g_timeout_add(150, update_snmp_ticker_scroll, app);
+    } else {
+        app->gui.snmp_ticker_timer_id = 0;
+    }
+    sync_toggle_ui_elements(app);
+}
 
 void cmd_toggle_auto_all(AppContext *app, const char *args) {
     const char *ptr = args;
@@ -721,7 +983,7 @@ void cmd_toggle_auto_all(AppContext *app, const char *args) {
     }
 
     if (!ptr || strlen(ptr) == 0) {
-        write_to_ai_pane_wrapper(app,": Required parameter missing: ON or OFF");
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON, OFF, or STATUS");
         return;
     }
 
@@ -729,6 +991,12 @@ void cmd_toggle_auto_all(AppContext *app, const char *args) {
 	state = TRUE;
     } else if (strcmp(ptr, "off") == 0) {
         state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        write_to_ai_pane_wrapper(app, app->sys.tee_enabled ?          ": Tee Collection Enabled" : ": Tee Collection Disabled");
+        write_to_ai_pane_wrapper(app, app->sys.autoreply_enabled ?    ": Auto Reply Enabled"     : ": Auto Reply Disabled");
+        write_to_ai_pane_wrapper(app, app->sys.auto_execute_enabled ? ": Auto Execute Enabled"   : ": Auto Execute Disabled");
+        sync_toggle_ui_elements(app);
+        return;
     } else {
         GString *msg = g_string_new(": Unknown parameter parsed: ");
         g_string_append_printf(msg, "%s ", ptr);
@@ -754,7 +1022,7 @@ void cmd_toggle_debug(AppContext *app, const char *args) {
     }
 
     if (!ptr || strlen(ptr) == 0) {
-        write_to_ai_pane_wrapper(app,": Required parameter missing: ON or OFF");
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON, OFF, or STATUS");
         return;
     }
 
@@ -762,6 +1030,10 @@ void cmd_toggle_debug(AppContext *app, const char *args) {
         state = TRUE;
     } else if (strcmp(ptr, "off") == 0) {
         state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        write_to_ai_pane_wrapper(app, app->sys.debug_mode ? ": Debug Mode Enabled" : ": Debug Mode Disabled");
+        sync_toggle_ui_elements(app);
+        return;
     } else {
         GString *msg = g_string_new(": Unknown parameter parsed: ");
         g_string_append_printf(msg, "%s ", ptr);
@@ -784,7 +1056,7 @@ void cmd_session_read_from_gloal_toggle(AppContext *app, const char *args) {
     }
 
     if (!ptr || strlen(ptr) == 0) {
-        write_to_ai_pane_wrapper(app,": Required parameter missing: ON or OFF");
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON, OFF, or STATUS");
         return;
     }
 
@@ -792,6 +1064,11 @@ void cmd_session_read_from_gloal_toggle(AppContext *app, const char *args) {
         state = TRUE;
     } else if (strcmp(ptr, "off") == 0) {
         state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        state = app->session.read_from_global;
+        write_to_ai_pane_wrapper(app, state ? ": Reading from GLOBAL history." : ": Reading STRICT history.");
+        sync_toggle_ui_elements(app);
+        return;
     } else {
         GString *msg = g_string_new(": Unknown parameter parsed: ");
         g_string_append_printf(msg, "%s ", ptr);
@@ -813,7 +1090,7 @@ void cmd_session_write_to_global_toggle(AppContext *app, const char *args) {
     }
 
     if (!ptr || strlen(ptr) == 0) {
-        write_to_ai_pane_wrapper(app,": Required parameter missing: ON or OFF");
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON, OFF, or STATUS");
         return;
     }
 
@@ -821,6 +1098,11 @@ void cmd_session_write_to_global_toggle(AppContext *app, const char *args) {
         state = TRUE;
     } else if (strcmp(ptr, "off") == 0) {
         state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        state = app->session.write_to_global;
+        write_to_ai_pane_wrapper(app, state ? ": Writing to GLOBAL session." : ": Writing to STRICT session.");
+        sync_toggle_ui_elements(app);
+        return;
     } else {
         GString *msg = g_string_new(": Unknown parameter parsed: ");
         g_string_append_printf(msg, "%s ", ptr);
@@ -842,7 +1124,7 @@ void cmd_toggle_tee(AppContext *app, const char *args) {
     }
 
     if (!ptr || strlen(ptr) == 0) {
-        write_to_ai_pane_wrapper(app,": Required parameter missing: ON or OFF");
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON, OFF, or STATUS");
         return;
     }
 
@@ -850,6 +1132,11 @@ void cmd_toggle_tee(AppContext *app, const char *args) {
         state = TRUE;
     } else if (strcmp(ptr, "off") == 0) {
         state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        state = app->sys.tee_enabled;
+        write_to_ai_pane_wrapper(app, state ? ": Tee Collection Enabled" : ": Tee Collection Disabled");
+        sync_toggle_ui_elements(app);
+        return;
     } else {
         GString *msg = g_string_new(": Unknown parameter parsed: ");
         g_string_append_printf(msg, "%s ", ptr);
@@ -871,7 +1158,7 @@ void cmd_toggle_autoreply(AppContext *app, const char *args) {
     }
 
     if (!ptr || strlen(ptr) == 0) {
-        write_to_ai_pane_wrapper(app,": Required parameter missing: ON or OFF");
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON, OFF, or STATUS");
         return;
     }
 
@@ -879,6 +1166,11 @@ void cmd_toggle_autoreply(AppContext *app, const char *args) {
         state = TRUE;
     } else if (strcmp(ptr, "off") == 0) {
         state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        state = app->sys.autoreply_enabled;
+        write_to_ai_pane_wrapper(app, state ? ": Auto Reply Enabled" : ": Auto Reply Disabled");
+        sync_toggle_ui_elements(app);
+        return;
     } else {
         GString *msg = g_string_new(": Unknown parameter parsed: ");
         g_string_append_printf(msg, "%s ", ptr);
@@ -900,7 +1192,7 @@ void cmd_toggle_autoretry(AppContext *app, const char *args) {
     }
 
     if (!ptr || strlen(ptr) == 0) {
-        write_to_ai_pane_wrapper(app,": Required parameter missing: ON or OFF");
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON, OFF, or STATUS");
         return;
     }
 
@@ -908,6 +1200,11 @@ void cmd_toggle_autoretry(AppContext *app, const char *args) {
         state = TRUE;
     } else if (strcmp(ptr, "off") == 0) {
         state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        state = app->retry_config.is_enabled;
+        write_to_ai_pane_wrapper(app, state ? ": Auto Retry Enabled" : ": Auto Retry Disabled");
+        sync_toggle_ui_elements(app);
+        return;
     } else {
         GString *msg = g_string_new(": Unknown parameter parsed: ");
         g_string_append_printf(msg, "%s ", ptr);
@@ -929,7 +1226,7 @@ void cmd_toggle_autoexe(AppContext *app, const char *args) {
     }
 
     if (!ptr || strlen(ptr) == 0) {
-        write_to_ai_pane_wrapper(app,": Required parameter missing: ON or OFF");
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON, OFF, or STATUS");
         return;
     }
 
@@ -937,6 +1234,11 @@ void cmd_toggle_autoexe(AppContext *app, const char *args) {
         state = TRUE;
     } else if (strcmp(ptr, "off") == 0) {
         state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        state = app->sys.auto_execute_enabled;
+        write_to_ai_pane_wrapper(app, state ? ": Auto Execute Enabled" : ": Auto Execute Disabled");
+        sync_toggle_ui_elements(app);
+        return;
     } else {
         GString *msg = g_string_new(": Unknown parameter parsed: ");
         g_string_append_printf(msg, "%s ", ptr);
@@ -958,7 +1260,7 @@ void cmd_toggle_ratelimit(AppContext *app, const char *args) {
     }
 
     if (!ptr || strlen(ptr) == 0) {
-        write_to_ai_pane_wrapper(app,": Required parameter missing: ON or OFF");
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON, OFF, or STATUS");
         return;
     }
 
@@ -966,6 +1268,11 @@ void cmd_toggle_ratelimit(AppContext *app, const char *args) {
         state = TRUE;
     } else if (strcmp(ptr, "off") == 0) {
         state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        state = app->sys.ratelimit_enabled;
+        write_to_ai_pane_wrapper(app, state ? ": Rate Limiting Enabled." : ": Rate Limiting Disabled.");
+        sync_toggle_ui_elements(app);
+        return;
     } else {
         GString *msg = g_string_new(": Unknown parameter parsed: ");
         g_string_append_printf(msg, "%s ", ptr);
@@ -987,7 +1294,7 @@ void cmd_toggle_smart_cache(AppContext *app, const char *args) {
     }
 
     if (!ptr || strlen(ptr) == 0) {
-        write_to_ai_pane_wrapper(app,": Required parameter missing: ON or OFF");
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON, OFF, or STATUS");
         return;
     }
 
@@ -995,6 +1302,11 @@ void cmd_toggle_smart_cache(AppContext *app, const char *args) {
         state = TRUE;
     } else if (strcmp(ptr, "off") == 0) {
         state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        state = app->sys.smart_cache_enabled;
+        write_to_ai_pane_wrapper(app, state ? ": Smart Cache Enabled." : ": Smart Cache Disabled.");
+        sync_toggle_ui_elements(app);
+        return;
     } else {
         GString *msg = g_string_new(": Unknown parameter parsed: ");
         g_string_append_printf(msg, "%s ", ptr);
@@ -1016,7 +1328,7 @@ void cmd_toggle_noise_filter(AppContext *app, const char *args) {
     }
 
     if (!ptr || strlen(ptr) == 0) {
-        write_to_ai_pane_wrapper(app,": required parameter missing: ON or OFF");
+        write_to_ai_pane_wrapper(app,": required parameter missing: ON, OFF, or STATUS");
         return;
     }
 
@@ -1024,6 +1336,11 @@ void cmd_toggle_noise_filter(AppContext *app, const char *args) {
         state = TRUE;
     } else if (strcmp(ptr, "off") == 0) {
         state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        state = app->sys.noise_filter_enabled;
+        write_to_ai_pane_wrapper(app, state ? ": Noise Block Enabled." : ": Noise Block Disabled.");
+        sync_toggle_ui_elements(app);
+        return;
     } else {
         GString *msg = g_string_new(": Unknown parameter parsed: ");
         g_string_append_printf(msg, "%s ", ptr);
@@ -1046,7 +1363,7 @@ void cmd_toggle_xml_tagging(AppContext *app, const char *args) {
     }
 
     if (!ptr || strlen(ptr) == 0) {
-        write_to_ai_pane_wrapper(app,": required parameter missing: ON or OFF");
+        write_to_ai_pane_wrapper(app,": required parameter missing: ON, OFF, or STATUS");
         return;
     }
 
@@ -1054,6 +1371,11 @@ void cmd_toggle_xml_tagging(AppContext *app, const char *args) {
         state = TRUE;
     } else if (strcmp(ptr, "off") == 0) {
         state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        state = app->xml.tagging_enabled;
+        write_to_ai_pane_wrapper(app, state ? ": XML Payload Tagging Enabled." : ": XML Payload Tagging Disabled.");
+        sync_toggle_ui_elements(app);
+        return;
     } else {
         GString *msg = g_string_new(": Unknown parameter parsed: ");
         g_string_append_printf(msg, "%s ", ptr);

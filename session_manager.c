@@ -74,14 +74,12 @@ void session_sync_booleans_to_db(AppContext *app) {
 }
 
 void session_init(AppContext *app) {
-    // 1. Setup Mutex and Condition Variable for DB sync
-    pthread_mutex_init(&app->access.db_init_mutex, NULL);
-    pthread_cond_init(&app->access.db_init_cond, NULL);
-    app->sys.db_initialized = FALSE;
+    /* db_init_mutex/db_init_cond are initialized by main() BEFORE the
+     * database worker is created.  They must never be initialized here
+     * after another thread may already be using them. */
+    DEBUG_PRINT("[DEBUG]: [SESSION_INIT]: Waiting for DB initialization.\n");
 
-    DEBUG_PRINT("[DEBUG]: [SESSION_INIT]: Waiting for DB_INIT Mutex to be unlocked.\n");
-
-    // 2. Wait for the DB initialization thread to signal completion
+    // Wait for the DB initialization thread to signal completion
     pthread_mutex_lock(&app->access.db_init_mutex);
     while (!app->sys.db_initialized) {
         pthread_cond_wait(&app->access.db_init_cond, &app->access.db_init_mutex);

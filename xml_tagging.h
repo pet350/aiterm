@@ -16,5 +16,6 @@
 
 // XML Tagging Function Prototypes
 char* xml_wrap(AppContext *app, const char *input);
+char* xml_wrap_with_type(AppContext *app, const char *input, TagType type);
 
 #endif
