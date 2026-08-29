@@ -55,9 +55,12 @@ void on_tee_flush(GtkWidget *widget, gpointer data);
 void on_menu_session_manager(GtkMenuItem *item, gpointer data);
 void on_menu_rename_tab(GtkMenuItem *item, gpointer data);
 void on_menu_close_tab(GtkMenuItem *item, gpointer data);
+void on_notebook_switch_page(GtkNotebook *notebook, GtkWidget *page, guint page_num, gpointer user_data);
 void sync_toggle_ui_elements(AppContext *app);
 void sync_toggle_ui_elements(AppContext *app);
 void on_toggle_load_from_session(GtkCheckMenuItem *checkmenuitem, gpointer user_data);
+void on_menu_policy_manager_activate(GtkMenuItem *menuitem, gpointer user_data);
+
 // Function Prototypes for new actions in 0.9.7-1lpha
 void export_to_console(AppContext *app);
 void export_to_ai(AppContext *app);

@@ -89,6 +89,11 @@ void on_menu_policy_manager_activate(GtkMenuItem *menuitem, gpointer user_data) 
     open_policy_manager_window(app);
 }
 
+void on_menu_snmp_manager_activate(GtkMenuItem *menuitem, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    cmd_snmp_manager_wrapper(app, NULL);
+}
+
 void on_clear(GtkWidget *widget, gpointer data) {
     AppContext *app = (AppContext *)data;
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->gui.gemini_view));
@@ -138,15 +143,29 @@ void on_toggle_load_from_session(GtkCheckMenuItem *checkmenuitem, gpointer user_
 }
 
 // AI Retry Options Callbacks
-static void on_toggle_ai_retry_toggled(GtkCheckMenuItem *item, gpointer user_data) {
+void on_toggle_ai_retry_toggled(GtkCheckMenuItem *item, gpointer user_data) {
     AppContext *app = (AppContext *)user_data;
     if (!app) return;
 
-    app->retry_config.is_enabled = gtk_check_menu_item_get_active(item);
-    app->retry_state.config.is_enabled = app->retry_config.is_enabled;
+    // Read the explicit active state straight from the GTK widget
+    gboolean is_active = gtk_check_menu_item_get_active(item);
 
-    DEBUG_PRINT("[DEBUG]: [MENU] AI Retry toggle set to: %s\n", app->retry_config.is_enabled ? "ON" : "OFF");
-    save_config(app);
+    // Prevent redundant execution if state hasn't actually changed
+    if (app->retry_config.is_enabled == is_active) {
+        return;
+    }
+
+    // Update config
+    app->retry_config.is_enabled = is_active;
+
+    // Optional: Keep active tab settings updated if tab state tracks retry
+    guint current_page = gtk_notebook_get_current_page(GTK_NOTEBOOK(app->ui.notebook));
+    if (current_page < MAX_TABS) {
+        app->tabs[current_page].is_active = is_active;
+    }
+
+    // Output feedback to AI pane
+    write_to_ai_pane_wrapper(app, is_active ? ": AI Retry Enabled." : ": AI Retry Disabled.");
 }
 
 static void on_set_max_retries_activate(GtkMenuItem *item, gpointer user_data) {
@@ -375,90 +394,129 @@ void append_ai_action(GtkWidget *menu, const char *label, const char *cmd, gbool
 }
 
 // --- Toggle UI Synchronization ---
-
 void sync_toggle_ui_elements(AppContext *app) {
     if (!app) return;
 
-    // Sync Autoreply Checkbox
     if (app->ui.toggle_autoreply) {
-        g_signal_handlers_block_by_func(app->ui.toggle_autoreply, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_block_by_func(app->ui.toggle_autoreply, G_CALLBACK(on_menu_toggle_item_toggled), app);
         gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_autoreply), app->sys.autoreply_enabled);
-        g_signal_handlers_unblock_by_func(app->ui.toggle_autoreply, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_autoreply, G_CALLBACK(on_menu_toggle_item_toggled), app);
     }
 
-    // Sync Autoexe Checkbox
     if (app->ui.toggle_autoexe) {
-        g_signal_handlers_block_by_func(app->ui.toggle_autoexe, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_block_by_func(app->ui.toggle_autoexe, G_CALLBACK(on_menu_toggle_item_toggled), app);
         gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_autoexe), app->sys.auto_execute_enabled);
-        g_signal_handlers_unblock_by_func(app->ui.toggle_autoexe, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_autoexe, G_CALLBACK(on_menu_toggle_item_toggled), app);
     }
 
-    // Sync Tee Checkbox
     if (app->ui.toggle_tee) {
-        g_signal_handlers_block_by_func(app->ui.toggle_tee, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_block_by_func(app->ui.toggle_tee, G_CALLBACK(on_menu_toggle_item_toggled), app);
         gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_tee), app->sys.tee_enabled);
-        g_signal_handlers_unblock_by_func(app->ui.toggle_tee, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_tee, G_CALLBACK(on_menu_toggle_item_toggled), app);
     }
 
-    // Sync Noise Filter Checkbox
     if (app->ui.toggle_noise_filter) {
-        g_signal_handlers_block_by_func(app->ui.toggle_noise_filter, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_block_by_func(app->ui.toggle_noise_filter, G_CALLBACK(on_menu_toggle_item_toggled), app);
         gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_noise_filter), app->sys.noise_filter_enabled);
-        g_signal_handlers_unblock_by_func(app->ui.toggle_noise_filter, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_noise_filter, G_CALLBACK(on_menu_toggle_item_toggled), app);
     }
 
-    // Sync Smart Cache Checkbox
     if (app->ui.toggle_smart_cache) {
-        g_signal_handlers_block_by_func(app->ui.toggle_smart_cache, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_block_by_func(app->ui.toggle_smart_cache, G_CALLBACK(on_menu_toggle_item_toggled), app);
         gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_smart_cache), app->sys.smart_cache_enabled);
-        g_signal_handlers_unblock_by_func(app->ui.toggle_smart_cache, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_smart_cache, G_CALLBACK(on_menu_toggle_item_toggled), app);
     }
 
-    // Sync ratelimit Checkbox
     if (app->ui.toggle_ratelimit) {
-        g_signal_handlers_block_by_func(app->ui.toggle_ratelimit, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_block_by_func(app->ui.toggle_ratelimit, G_CALLBACK(on_menu_toggle_item_toggled), app);
         gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_ratelimit), app->sys.ratelimit_enabled);
-        g_signal_handlers_unblock_by_func(app->ui.toggle_ratelimit, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_ratelimit, G_CALLBACK(on_menu_toggle_item_toggled), app);
     }
 
-    // Sync debug Checkbox
     if (app->ui.toggle_debug) {
-        g_signal_handlers_block_by_func(app->ui.toggle_debug, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_block_by_func(app->ui.toggle_debug, G_CALLBACK(on_menu_toggle_item_toggled), app);
         gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_debug), app->sys.debug_mode);
-        g_signal_handlers_unblock_by_func(app->ui.toggle_debug, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_debug, G_CALLBACK(on_menu_toggle_item_toggled), app);
     }
 
-    // Sync XML Payload Tagging Checkbox
+    if (app->ui.toggle_snmp_payload) {
+        g_signal_handlers_block_by_func(app->ui.toggle_snmp_payload, G_CALLBACK(on_menu_toggle_item_toggled), app);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_snmp_payload), app->SnmpContext.enable_gemini_feed);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_snmp_payload, G_CALLBACK(on_menu_toggle_item_toggled), app);
+    }
+
+    if (app->ui.toggle_snmp_ticker) {
+        g_signal_handlers_block_by_func(app->ui.toggle_snmp_ticker, G_CALLBACK(on_menu_toggle_item_toggled), app);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_snmp_ticker), app->sys.snmp_ticker_enabled);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_snmp_ticker, G_CALLBACK(on_menu_toggle_item_toggled), app);
+    }
+
     if (app->ui.toggle_xml_payload_tagging) {
-        g_signal_handlers_block_by_func(app->ui.toggle_xml_payload_tagging, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_block_by_func(app->ui.toggle_xml_payload_tagging, G_CALLBACK(on_menu_toggle_item_toggled), app);
         gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_xml_payload_tagging), app->xml.tagging_enabled);
-        g_signal_handlers_unblock_by_func(app->ui.toggle_xml_payload_tagging, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_xml_payload_tagging, G_CALLBACK(on_menu_toggle_item_toggled), app);
     }
 
-    // Sync session_write_global Checkbox
     if (app->ui.toggle_session_write_global) {
-        g_signal_handlers_block_by_func(app->ui.toggle_session_write_global, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_block_by_func(app->ui.toggle_session_write_global, G_CALLBACK(on_menu_toggle_item_toggled), app);
         gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_session_write_global), app->session.write_to_global);
-        g_signal_handlers_unblock_by_func(app->ui.toggle_session_write_global, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_session_write_global, G_CALLBACK(on_menu_toggle_item_toggled), app);
     }
 
-    // Sync session_read_global Checkbox
     if (app->ui.toggle_session_read_global) {
-        g_signal_handlers_block_by_func(app->ui.toggle_session_read_global, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_block_by_func(app->ui.toggle_session_read_global, G_CALLBACK(on_menu_toggle_item_toggled), app);
         gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_session_read_global), app->session.read_from_global);
-        g_signal_handlers_unblock_by_func(app->ui.toggle_session_read_global, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_session_read_global, G_CALLBACK(on_menu_toggle_item_toggled), app);
     }
 
-    // Sync AI Auto-Retry Toggle UI state safely if GTK window is instantiated
+    if (app->ui.toggle_session_config) {
+        g_signal_handlers_block_by_func(app->ui.toggle_session_config, G_CALLBACK(on_menu_toggle_item_toggled), app);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_session_config), app->sys.load_from_session);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_session_config, G_CALLBACK(on_menu_toggle_item_toggled), app);
+    }
+
     if (app->gui.window && G_IS_OBJECT(app->gui.window)) {
-        GtkWidget *retry_item = g_object_get_data(G_OBJECT(app->gui.window), "retry_toggle_menu_item");
-        if (retry_item && GTK_IS_CHECK_MENU_ITEM(retry_item)) {
+        GtkWidget *retry_item = GTK_WIDGET(g_object_get_data(G_OBJECT(app->gui.window), "retry_toggle_menu_item"));
+        if (retry_item) {
             g_signal_handlers_block_by_func(retry_item, G_CALLBACK(on_toggle_ai_retry_toggled), app);
             gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(retry_item), app->retry_config.is_enabled);
             g_signal_handlers_unblock_by_func(retry_item, G_CALLBACK(on_toggle_ai_retry_toggled), app);
         }
     }
 }
+
+void on_notebook_switch_page(GtkNotebook *notebook, GtkWidget *page, guint page_num, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    if (page_num >= MAX_TABS) return;
+
+    TabSettings *active_tab = &app->tabs[page_num];
+    if (!active_tab->is_active) return;
+
+    // 1. Update Active Session UUID
+    pthread_mutex_lock(&app->access.session_mutex);
+    if (app->session.session_uuid) g_free(app->session.session_uuid);
+    app->session.session_uuid = g_strdup(active_tab->session_uuid);
+    pthread_mutex_unlock(&app->access.session_mutex);
+
+    // 2. Load tab's flags into global app->sys for active execution
+    app->sys.debug_mode            = active_tab->enable_debug;
+    app->sys.tee_enabled           = active_tab->enable_tee;
+    app->sys.autoreply_enabled     = active_tab->enable_autoreply;
+    app->sys.auto_execute_enabled  = active_tab->enable_autoexe;
+    app->sys.noise_filter_enabled  = active_tab->enable_noise_filter;
+    app->sys.smart_cache_enabled   = active_tab->enable_smart_cache;
+    app->sys.ratelimit_enabled     = active_tab->enable_ratelimit;
+    app->sys.session_write_global  = active_tab->enable_session_write_global;
+    app->sys.session_read_global   = active_tab->enable_session_read_global;
+    app->sys.snmp_ticker_enabled   = active_tab->enable_snmp_ticker;
+    app->sys.xml_payload_tagging_enabled = active_tab->enable_xml_payload_tagging;
+
+    // 3. Update GTK menu check items to match active tab state
+    update_menu_toggles_from_app(app);
+
+    DEBUG_PRINT("[DEBUG]: Switched to Tab %d (Session: %s)\n", page_num, active_tab->session_uuid);
+}
+
 
 void on_menu_rename_tab(GtkMenuItem *item, gpointer data) {
     AppContext *app = (AppContext *)data;
@@ -606,6 +664,7 @@ GtkWidget* create_menu_bar(AppContext *app) {
     GtkWidget *menu_item_history = gtk_menu_item_new_with_label("History Manager");
     GtkWidget *menu_item_noise   = gtk_menu_item_new_with_label("Noise Filter Manager");
     GtkWidget *menu_item_policy  = gtk_menu_item_new_with_label("Policy Manager");
+    GtkWidget *menu_item_snmp    = gtk_menu_item_new_with_label("SNMP Manager"); // Removed GtkWidget *
 
     // Tools Menu
     GtkWidget *tools_menu = gtk_menu_new();
@@ -725,6 +784,28 @@ GtkWidget* create_menu_bar(AppContext *app) {
     gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
     gtk_widget_show(item);
 
+    item = gtk_check_menu_item_new_with_label("Toggle send SNMP Payload to AI");
+    setup_menu_toggle(item, app, TOGGLE_SNMP_PAYLOAD, app->SnmpContext.enable_gemini_feed);
+    gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
+    gtk_widget_show(item);
+
+    item = gtk_check_menu_item_new_with_label("Toggle SNMP Ticker");
+    setup_menu_toggle(item, app, TOGGLE_SNMP_TICKER, app->sys.snmp_ticker_enabled);
+    gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
+    gtk_widget_show(item);
+
+    // Fixed: Connect directly to the AI Retry callback instead of TOGGLE_AUTOREPLY
+    item = gtk_check_menu_item_new_with_label("Toggle AI retry");
+    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(item), app->retry_config.is_enabled);
+    g_signal_connect(item, "toggled", G_CALLBACK(on_toggle_ai_retry_toggled), app);
+    gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
+    gtk_widget_show(item);
+
+    item = gtk_check_menu_item_new_with_label("Toggle session config");
+    setup_menu_toggle(item, app, TOGGLE_SESSION_CONFIG, app->sys.load_from_session);
+    gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
+    gtk_widget_show(item);
+
     // Populate AI Context Submenu
     append_ai_action(sess_menu, "Initialize New Session Iteration", "session new", FALSE, app);
     append_ai_action(sess_menu, "List Saved Persistent Contexts", "session list", FALSE, app);
@@ -751,6 +832,7 @@ GtkWidget* create_menu_bar(AppContext *app) {
     g_signal_connect(G_OBJECT(menu_item_history), "activate", G_CALLBACK(on_menu_history_manager_activate), app);
     g_signal_connect(G_OBJECT(menu_item_noise), "activate", G_CALLBACK(on_menu_noise_filter_manager_activate), app);
     g_signal_connect(G_OBJECT(menu_item_policy), "activate", G_CALLBACK(on_menu_policy_manager_activate), app);
+    g_signal_connect(G_OBJECT(menu_item_snmp), "activate", G_CALLBACK(on_menu_snmp_manager_activate), app); // FIXED
     g_signal_connect(session_item, "activate", G_CALLBACK(on_menu_session_manager), app);
     g_signal_connect(tee_flush, "activate", G_CALLBACK(on_tee_flush), app);
     g_signal_connect(pref_item, "activate", G_CALLBACK(on_preferences), app);
@@ -778,6 +860,7 @@ GtkWidget* create_menu_bar(AppContext *app) {
     gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), menu_item_history);
     gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), menu_item_noise);
     gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), menu_item_policy);
+    gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), menu_item_snmp);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), tee_flush);
     gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), pref_item);

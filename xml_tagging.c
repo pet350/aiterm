@@ -25,16 +25,16 @@
 
 // Added 0.9.5-beta
 // For wrapping payload in XML tags that AI will understand
-char* xml_wrap(AppContext *app, const char *input) {
+char* xml_wrap_with_type(AppContext *app, const char *input, TagType type) {
     if (!input) return NULL;
     if (!app->xml.tagging_enabled) return g_strdup(input);
-    if (!app->xml.type) return g_strdup(input);
+    if (!type) return g_strdup(input);
 
     GString *xml_buffer = g_string_new(NULL);
     time_t now = time(NULL);
     char time_str[20];
     strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&now));
-    switch(app->xml.type) {
+    switch(type) {
         case TAG_NONE:
             // xml buffer was already initialized so we're just going to append input to it
             DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is none, not wrapping\n");
@@ -93,5 +93,10 @@ char* xml_wrap(AppContext *app, const char *input) {
     }
     // Return the string and destroy the container, keeping the data alive
     return g_string_free(xml_buffer, FALSE);
+}
+
+char* xml_wrap(AppContext *app, const char *input) {
+    if (!app) return input ? g_strdup(input) : NULL;
+    return xml_wrap_with_type(app, input, app->xml.type);
 }
 

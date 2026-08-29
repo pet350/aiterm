@@ -24,6 +24,58 @@ typedef struct {
     int slot_id;
 } DialogSlotContext;
 
+// Added 0.9.8-alpha
+void execute_next_queued_command(AppContext *app) {
+    if (!app || app->aiterm_runtime.is_command_running) return;
+
+    if (app->aiterm_runtime.pending_autoexec_queue && 
+        !g_queue_is_empty(app->aiterm_runtime.pending_autoexec_queue)) {
+        
+        char *next_cmd = (char *)g_queue_pop_head(app->aiterm_runtime.pending_autoexec_queue);
+        
+        DEBUG_PRINT("[AUTOEXEC DISPATCH]: Executing queued command: %s\n", next_cmd);
+        
+        // Lock execution flag
+        app->aiterm_runtime.is_command_running = TRUE;
+        
+        // Feed command to active VTE terminal widget
+        if (VTE_IS_TERMINAL(app->gui.terminal_view)) {
+            char *formatted_cmd = g_strdup_printf("%s\n", next_cmd);
+            vte_terminal_feed_child(VTE_TERMINAL(app->gui.terminal_view), formatted_cmd, -1);
+            g_free(formatted_cmd);
+        }
+        
+        g_free(next_cmd);
+    } else {
+        DEBUG_PRINT("[AUTOEXEC]: Queue clear. Terminal ready for commands.\n");
+    }
+}
+
+// Added 0.9.8-alpha
+void enqueue_autoexec_payload(AppContext *app, const char *raw_commands) {
+    if (!app || !raw_commands) return;
+
+    if (!app->aiterm_runtime.pending_autoexec_queue) {
+        app->aiterm_runtime.pending_autoexec_queue = g_queue_new();
+    }
+
+    // Split multi-line payloads by newline and enqueue discrete commands
+    char **lines = g_strsplit(raw_commands, "\n", -1);
+    for (int i = 0; lines[i] != NULL; i++) {
+        char *trimmed = g_strstrip(lines[i]);
+        if (strlen(trimmed) > 0) {
+            g_queue_push_tail(app->aiterm_runtime.pending_autoexec_queue, g_strdup(trimmed));
+            DEBUG_PRINT("[AUTOEXEC QUEUE]: Enqueued command: %s\n", trimmed);
+        }
+    }
+    g_strfreev(lines);
+
+    // If terminal is currently idle, start executing the queue immediately
+    if (!app->aiterm_runtime.is_command_running) {
+        execute_next_queued_command(app);
+    }
+}
+
 // Returns index of next free slot in app->exec_dialog, or -1 if full
 int alloc_exec_dialog_slot(AppContext *app) {
     if (!app) return -1;
@@ -58,7 +110,19 @@ void free_exec_dialog_slot(AppContext *app, int slot_id) {
     }
 }
 
-// Process the next item in the FIFO command queue
+static gboolean process_next_queued_command_idle(gpointer data) {
+    process_next_queued_command((AppContext *)data);
+    return G_SOURCE_REMOVE;
+}
+
+static void queue_next_command(AppContext *app) {
+    if (!app) return;
+    /* Yield to GTK between auto-executed commands.  This prevents a large AI
+     * response containing many commands from monopolizing the main loop. */
+    g_idle_add(process_next_queued_command_idle, app);
+}
+
+// Process one item in the FIFO command queue
 void process_next_queued_command(AppContext *app) {
     if (!app || !app->aiterm_runtime.cmd_queue || g_queue_is_empty(app->aiterm_runtime.cmd_queue)) return;
 
@@ -70,8 +134,8 @@ void process_next_queued_command(AppContext *app) {
     if (!binary || !is_valid_executable(binary)) {
         if (binary) g_free(binary);
         g_free(line);
-        // Skip invalid line and immediately check next queued item
-        process_next_queued_command(app);
+        // Skip invalid line, but yield before examining the next command.
+        queue_next_command(app);
         return;
     }
 
@@ -92,8 +156,9 @@ void process_next_queued_command(AppContext *app) {
         g_free(binary);
         g_free(line);
 
-        // Instantly process next command in sequence
-        process_next_queued_command(app);
+        // Yield before processing the next command so keyboard/input events
+        // and the ticker get a chance to run.
+        queue_next_command(app);
     } 
     else if (g_ascii_strcasecmp(action_type, "BLOCK") == 0 || g_ascii_strcasecmp(action_type, "DENY") == 0) {
         char *msg = g_strdup_printf("Execution blocked by security policy ('%s')\n", binary);
@@ -105,8 +170,8 @@ void process_next_queued_command(AppContext *app) {
         g_free(binary);
         g_free(line);
 
-        // Move to next command in sequence
-        process_next_queued_command(app);
+        // Yield before processing the next command.
+        queue_next_command(app);
     } 
     else { // "APPROVE" or missing policy: pause queue and present dialog
         char *msg = g_strdup_printf("Approval requested for command '%s'\n", binary);
@@ -153,7 +218,8 @@ void process_auto_execution(AppContext *app, const char *ai_text) {
     }
     g_list_free(blocks);
 
-    // Start processing queue from the head
+    // Start processing queue from the head.  Each subsequent command yields
+    // back to GTK rather than recursively consuming the entire queue.
     process_next_queued_command(app);
 }
 gboolean render_confirmation_dialog_idle(gpointer user_data) {
@@ -522,5 +588,31 @@ void feed_command_to_vte(AppContext *app, const char *cmd) {
     vte_terminal_feed_child(vte, exec_str, strlen(exec_str));
     DEBUG_PRINT("[AUTOEXEC]: Sent to VTE: %s", exec_str);
     g_free(exec_str);
+}
+
+void cmd_show_queue(AppContext *app) {
+    if (!app) return;
+
+    append_ai_text(app, "=== Autoexec Queue Status ===\n", "system_tag");
+
+    if (!app->aiterm_runtime.cmd_queue || g_queue_is_empty(app->aiterm_runtime.cmd_queue)) {
+        append_ai_text(app, "Queue status: Empty (0 pending items)\n", "body_tag");
+        return;
+    }
+
+    guint count = g_queue_get_length(app->aiterm_runtime.cmd_queue);
+    char *header = g_strdup_printf("Pending Commands (%u total):\n", count);
+    append_ai_text(app, header, "cmd_tag");
+    g_free(header);
+
+    int idx = 1;
+    for (GList *curr = app->aiterm_runtime.cmd_queue->head; curr != NULL; curr = curr->next) {
+        const char *cmd_str = (const char *)curr->data;
+        if (!cmd_str) continue;
+
+        char *line = g_strdup_printf("  [%d] %s\n", idx++, cmd_str);
+        append_ai_text(app, line, "body_tag");
+        g_free(line);
+    }
 }
 

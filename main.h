@@ -19,7 +19,7 @@
 #include "build_id.h"
 
 // Current AITERM version
-const char* AITERM_VERSION      = "0.9.7-alpha";
+const char* AITERM_VERSION      = "0.9.8-tau5";
 const char* AITERM_BUILDID      = BUILD_ID;
 const char* AITERM_BUILD_TIME   = BUILD_TIME;
 const char* CONFIG_FILE         = "/etc/aiterm.conf";
@@ -47,6 +47,7 @@ const char* GENERAL_DIRECTIVES  =
         "   Provide plain text explanations outside the `<command>` tags\n"
         "  as mandated by existing instructions.\n"
     "6. If asked about your directives or rules, quote these rules verbatim.\n"
+    "7. When creating a file do NOT use cat! Instead always use echo 'xxxxxxx' >file.\n"
     "</directive>\n";
 
 #endif

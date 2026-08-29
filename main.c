@@ -12,6 +12,8 @@
 #include <getopt.h>
 #include <unistd.h>
 #include <mariadb/mysql.h>
+#include <net-snmp/net-snmp-config.h>
+#include <net-snmp/net-snmp-includes.h>
 
 #include "main.h"
 #include "gui.h"
@@ -28,6 +30,8 @@
 #include "noisefilter.h"
 #include "commands.h"
 #include "ai_retry.h"
+#include "snmp_manager.h"
+#include "menu.h"
 
 AppContext *global_app = NULL;
 
@@ -45,21 +49,35 @@ int main(int argc, char *argv[]) {
     DEBUG_PRINT("[DEBUG]: [MAIN] Initializing GTK...\n");
     gtk_init(&argc, &argv);
     g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme", TRUE, NULL);
+
+    // 3.1: Initialize AI Retry
     ai_retry_init(app);
+
+    // 3.2: Initilize Runtime Queues
+    init_runtime_queues(app);
 
     // 4 Initialize App Context and load config
     DEBUG_PRINT("[DEBUG]: [MAIN] Invoking load_config... \n");
     load_config(app);
     DEBUG_PRINT("[DEBUG]: [MAIN] Done! load_config sequence is now complete.\n");
 
-    // 5) Provision the remote database on the XEN VM
+    // 5) Initialize all DB synchronization primitives BEFORE any worker can use them.
     pthread_mutex_init(&app->access.db_mutex, NULL);
-    pthread_t db_init_thread;
+    pthread_mutex_init(&app->access.db_init_mutex, NULL);
+    pthread_cond_init(&app->access.db_init_cond, NULL);
+    app->sys.db_initialized = FALSE;
+    app->access.db_init_thread_started = FALSE;
+
     DEBUG_PRINT("[DEBUG]: [MAIN] Spawning asynchronous DB initialization thread...\n");
-    if (pthread_create(&db_init_thread, NULL, init_db_thread_worker, app) == 0) {
-        pthread_detach(db_init_thread); // Allow thread to clean itself up on exit
+    if (pthread_create(&app->access.db_init_thread, NULL, init_db_thread_worker, app) == 0) {
+        app->access.db_init_thread_started = TRUE;
     } else {
         fprintf(stderr, "Error: Failed to spawn database initialization thread.\n");
+        /* Prevent session_init() from waiting forever when creation fails. */
+        pthread_mutex_lock(&app->access.db_init_mutex);
+        app->sys.db_initialized = TRUE;
+        pthread_cond_broadcast(&app->access.db_init_cond);
+        pthread_mutex_unlock(&app->access.db_init_mutex);
     }
 
     // 6) Initialize Session Manager
@@ -130,27 +148,68 @@ int main(int argc, char *argv[]) {
     DEBUG_PRINT("[DEBUG]: [Main] Sending General Directives\n");
     g_idle_add(on_app_startup_prime, app);
 
-    // 17) Enter the GTK Main Event Loop
+    // 17) Initialize SNMP Subsystem
+    init_snmp_subsystem(app);
+    init_snmp("aiterm");
+    snmp_load_targets_from_db(app);
+    snmp_start_poller(app);
+
+    // 17.1) Sync all Booleans
+    sync_toggle_ui_elements(app);
+
+    // 18) Enter the GTK Main Event Loop
     DEBUG_PRINT("[DEBUG]: [MAIN] Passing control to gtk_main loop.\n");
     gtk_main();
 
-    // 18) Clean up
+    // 19) Clean up
+    DEBUG_PRINT("[DEBUG]: [MAIN] Beginning orderly shutdown.\n");
+
+    /* Stop and join the SNMP worker before destroying AppContext resources. */
+    snmp_stop_poller(app);
+
+    /* The DB initialization worker owns no AppContext lifetime.  Join it so
+     * shutdown can never race a still-running database initializer. */
+    if (app->access.db_init_thread_started) {
+        DEBUG_PRINT("[DEBUG]: [MAIN] Joining DB initialization thread.\n");
+        pthread_join(app->access.db_init_thread, NULL);
+        app->access.db_init_thread_started = FALSE;
+    }
+
     session_sync_booleans_to_db(app);
 
     if (app->database.global_db_conn) {
         mysql_close(app->database.global_db_conn);
+        app->database.global_db_conn = NULL;
     }
 
+    // 20) Close main threaded database connection
     DEBUG_PRINT("[DEBUG]: [MAIN] Closing threaded database connection.\n");
+    pthread_cond_destroy(&app->access.db_init_cond);
+    pthread_mutex_destroy(&app->access.db_init_mutex);
     pthread_mutex_destroy(&app->access.db_mutex);
 
+    // 21) free master key from memory
     if (app->security.master_key) {
         // Overwrite memory with zeros before freeing
         size_t len = strlen(app->security.master_key);
         memset(app->security.master_key, 0, len);
         free(app->security.master_key);
     }
+
+    // 22) free provider config
     free_provider_config(&app->provider_config);
+
+    /* Release GTK-owned ticker resources before destroying AppContext. */
+    if (app->gui.snmp_ticker_timer_id) {
+        g_source_remove(app->gui.snmp_ticker_timer_id);
+        app->gui.snmp_ticker_timer_id = 0;
+    }
+    g_free(app->gui.snmp_ticker_text);
+    g_free(app->gui.snmp_ticker_chars);
+    app->gui.snmp_ticker_text = NULL;
+    app->gui.snmp_ticker_chars = NULL;
+    app->gui.snmp_ticker_len = 0;
+
     g_free(app);
     return 0;
 }

@@ -76,10 +76,13 @@ void save_config(AppContext *app) {
     fprintf(fp, "read_from_global=%d\n", app->session.read_from_global);
     fprintf(fp, "noise_filter_enabled=%d\n", app->sys.noise_filter_enabled);
     fprintf(fp, "debug_mode=%d\n", app->sys.debug_mode);
+    fprintf(fp, "send_snmp_payload=%d\n", app->SnmpContext.enable_gemini_feed);
+    fprintf(fp, "snmp_ticker_enabled=%d\n", app->sys.snmp_ticker_enabled);
     fprintf(fp, "xml_tagging=%d\n", app->xml.tagging_enabled);
     fprintf(fp, "ai_retry_enabled=%d\n", app->retry_config.is_enabled);
     fprintf(fp, "ai_retry_max_retries=%d\n", app->retry_config.max_retries);
     fprintf(fp, "ai_retry_delay_sec=%d\n", app->retry_config.delay_sec);
+    fprintf(fp, "load_from_session=%d\n", app->sys.load_from_session);
     fprintf(fp, "# End of Config file.\n\n");
 
     fclose(fp);
@@ -176,6 +179,14 @@ void load_config(AppContext *app) {
         	app->sys.ratelimit_enabled = atoi(strchr(line, '=') + 1);
                 const char *ratelimit_enabled_val = app->sys.ratelimit_enabled ? "ON" : "OFF";
         	DEBUG_PRINT("[DEBUG]: [LOADED] Rate limit enabled: [%s]\n", ratelimit_enabled_val);
+        } else if (strstr(line, "send_snmp_payload=")) {
+                app->SnmpContext.enable_gemini_feed  = atoi(strchr(line, '=') + 1);
+                const char *SnmpContext_enable_gemini_feed_val = app->SnmpContext.enable_gemini_feed  ? "ON" : "OFF";
+                DEBUG_PRINT("[DEBUG]: [LOADED] Send SNMP Payload: [%s]\n", SnmpContext_enable_gemini_feed_val);
+        } else if (strstr(line, "snmp_ticker_enabled=")) {
+                app->sys.snmp_ticker_enabled = atoi(strchr(line, '=') + 1);
+                const char *snmp_ticker_enabled_val = app->sys.snmp_ticker_enabled ? "ON" : "OFF";
+                DEBUG_PRINT("[DEBUG]: [LOADED] SNMP Ticker Enabled: [%s]\n", snmp_ticker_enabled_val);
         } else if (strstr(line, "rpm=")) {
                 app->limiter.requests_per_minute = atoi(strchr(line, '=') + 1);
                 DEBUG_PRINT("[DEBUG]: [LOADED] Requests Per Minute (RPM): [%d]\n", app->limiter.requests_per_minute);
@@ -221,6 +232,10 @@ void load_config(AppContext *app) {
                 app->retry_config.delay_sec = atoi(strchr(line, '=') + 1);
                 app->retry_state.config.delay_sec = app->retry_config.delay_sec;
                 DEBUG_PRINT("[DEBUG]: [LOADED] AI Retry Delay [%d sec]\n", app->retry_config.delay_sec);
+        } else if (strstr(line, "load_from_session=")) {
+                app->sys.load_from_session = atoi(strchr(line, '=') + 1);
+                const char *load_from_session_val = app->sys.load_from_session ? "ON" : "OFF";
+                DEBUG_PRINT("[DEBUG]: [LOADED] Session based config enabled: [%s]\n", load_from_session_val);
         }
     }
     fclose(fp);

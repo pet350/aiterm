@@ -14,7 +14,7 @@
 //typedef struct AppContext AppContext;
 
 // Function prototypes
-char* perform_gemini_request(AppContext *app, const char *prompt);
+char* perform_gemini_request(AppContext *app, const char *prompt, const char *terminal_context);
 char* send_to_gemini(AppContext *app, const char *prompt);
 char* gemini_list_models(AppContext *app);
 

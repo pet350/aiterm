@@ -23,12 +23,12 @@ void ratelimit_init(RateLimiter *rl, int rpm) {
 
 bool ratelimit_check(RateLimiter *rl) {
     pthread_mutex_lock(&rl->lock);
-    DEBUG_PRINT("[DEBUG]: RATELIMIT_CHECK: Locked mutex\n");
+    DEBUG_PRINT("[DEBUG]: [RATELIMIT_CHECK]: Locked mutex\n");
 
     // FIXED: Defensive Guard against divide-by-zero crashes
     if (rl->requests_per_minute <= 0) {
         pthread_mutex_unlock(&rl->lock);
-        DEBUG_PRINT("[DEBUG]: RATELIMIT_CHECK: Unlocked mutex (RPM is 0, passing through)\n");
+        DEBUG_PRINT("[DEBUG]: [RATELIMIT_CHECK]: Unlocked mutex (RPM is 0, passing through)\n");
         return true; 
     }
 
@@ -37,7 +37,7 @@ bool ratelimit_check(RateLimiter *rl) {
 
     if (now - rl->last_request_time < interval) {
         pthread_mutex_unlock(&rl->lock);
-        DEBUG_PRINT("[DEBUG]: RATELIMIT_CHECK: Unlocked mutex (Rate limited)\n");
+        DEBUG_PRINT("[DEBUG]: [RATELIMIT_CHECK]: Unlocked mutex (Rate limited)\n");
         return false;
     }
 

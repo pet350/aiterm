@@ -61,7 +61,7 @@ void remove_substring(char *str, const char *sub, gboolean dash) {
     size_t len = strlen(sub);
     if (len == 0) return;
     if (dash) {
-        DEBUG_PRINT("-");
+        fprintf(stderr, "-");
     }
     char *match;
     while ((match = strstr(str, sub)) != NULL) {
@@ -78,11 +78,19 @@ void noise_filter_load_from_db(AppContext *app) {
     pthread_mutex_lock(&app->access.db_mutex);
     DEBUG_PRINT("[DEBUG]: [Noise Filter] Locked DB Mutex\n");
 
+    // GTK model is maintained only for the UI. Background workers use the
+    // thread-safe pattern snapshot below.
     if (!app->noise.filters) {
         app->noise.filters = gtk_list_store_new(1, G_TYPE_STRING);
     } else {
         gtk_list_store_clear(app->noise.filters);
     }
+
+    g_mutex_lock(&app->noise.patterns_mutex);
+    if (!app->noise.patterns)
+        app->noise.patterns = g_ptr_array_new_with_free_func(g_free);
+    else
+        g_ptr_array_set_size(app->noise.patterns, 0);
 
     const char *query = "SELECT pattern FROM noise_filters ORDER BY id ASC";
     DEBUG_PRINT("[DEBUG]: [Noise Filter] Running SQL Query: %s\n", query);
@@ -90,6 +98,7 @@ void noise_filter_load_from_db(AppContext *app) {
     if (mysql_query(app->database.global_db_conn, query) != 0) {
         fprintf(stderr, "[Noise Filter] MySQL query error: %s\n",
                 mysql_error(app->database.global_db_conn));
+        g_mutex_unlock(&app->noise.patterns_mutex);
         pthread_mutex_unlock(&app->access.db_mutex);
         DEBUG_PRINT("[DEBUG]: [Noise Filter] Unlocked DB Mutex\n");
         return;
@@ -105,20 +114,20 @@ void noise_filter_load_from_db(AppContext *app) {
                 GtkTreeIter iter;
                 gtk_list_store_append(app->noise.filters, &iter);
                 gtk_list_store_set(app->noise.filters, &iter, 0, row[0], -1);
+                g_ptr_array_add(app->noise.patterns, g_strdup(row[0]));
             }
         }
         DEBUG_PRINT("[DEBUG]: [Noise Filter] Loaded %ld Filters from database\n", app->noise.count);
         mysql_free_result(result);
     }
 
+    g_mutex_unlock(&app->noise.patterns_mutex);
     pthread_mutex_unlock(&app->access.db_mutex);
     DEBUG_PRINT("[DEBUG]: [Noise Filter] Unlocked DB Mutex\n");
 }
 
-/**
- * Core Application Engine Hook
- * Cleans ANSI escape codes and strips out registered DB noise filter patterns.
- */
+// Core Application Engine Hook
+// Cleans ANSI escape codes and strips out registered DB noise filter patterns.
 char* noise_filter_apply(AppContext *app, const char *raw_input) {
     if (!raw_input) return NULL;
 
@@ -131,25 +140,19 @@ char* noise_filter_apply(AppContext *app, const char *raw_input) {
     char *working_text = strip_ansi_sequences(raw_input);
     if (!working_text) return g_strdup(raw_input);
 
-    // Step 2: Iterate over tree model patterns and remove them in-place
-    if (app->noise.filters) {
-        GtkTreeModel *model = GTK_TREE_MODEL(app->noise.filters);
-        GtkTreeIter iter;
-
-        if (gtk_tree_model_get_iter_first(model, &iter)) {
-            DEBUG_PRINT("[DEBUG]: [Noise Filter] Initiating substring removals: ");
-            do {
-                char *pattern = NULL;
-                gtk_tree_model_get(model, &iter, 0, &pattern, -1);
-
-                if (pattern && strlen(pattern) > 0) {
-                    remove_substring(working_text, pattern, TRUE);
-                    g_free(pattern);
-                }
-            } while (gtk_tree_model_iter_next(model, &iter));
-        DEBUG_PRINT("\n");
+    // Step 2: Iterate over the thread-safe pattern snapshot. Never touch the
+    // GTK ListStore from a worker thread.
+    g_mutex_lock(&app->noise.patterns_mutex);
+    if (app->noise.patterns && app->noise.patterns->len > 0) {
+        DEBUG_PRINT("[DEBUG]: [Noise Filter] Initiating substring removals: ");
+        for (guint i = 0; i < app->noise.patterns->len; i++) {
+            const char *pattern = g_ptr_array_index(app->noise.patterns, i);
+            if (pattern && *pattern)
+                remove_substring(working_text, pattern, TRUE);
         }
+        fprintf(stderr, "\n");
     }
+    g_mutex_unlock(&app->noise.patterns_mutex);
 
     size_t in_len = strlen(raw_input);
     size_t out_len = strlen(working_text);

@@ -27,10 +27,17 @@ gboolean ui_display_list(gpointer data);
 gboolean ui_display_show(gpointer data);
 gboolean execute_command(AppContext *app, const char *input);
 
+void cmd_show_queue_wrapper(AppContext *app, const char *args);
+void cmd_force_snmp_flush(AppContext *app, const char *args);
+void dump_raw_snmp_payload_to_ai_wrapper(AppContext *app, const char *args);
+void cmd_snmp_manager_wrapper(AppContext *app, const char *args);
+void cmd_close_snmp_manager_wrapper(AppContext *app, const char *args);
+void handle_snmp_command(AppContext *app, const char *args);
 void parse_command_line_options(AppContext *app, int argc, char *argv[]);
 void display_dynamic_help(AppContext *app);
 void cmd_show_command_line_help_wrapper(AppContext *app, const char *args);
 void cmd_invalidate_cache(AppContext *app, const char *args);
+void cmd_session_sync(AppContext *app, const char *args);
 void dispatch_command_to_pane(AppContext *app, int target_pane_id, const char *cmd);
 
 // Handle Wrapper Prototypes
@@ -84,7 +91,10 @@ void cmd_close_history_manager_wrapper(AppContext *app, const char *args);
 void cmd_close_session_manager_wrapper(AppContext *app, const char *args);
 void cmd_close_noise_manager_wrapper(AppContext *app, const char *args);
 
-// ============== Toggle ON / OFF Function Prototypes
+// ==== Toggle ON / OFF / STATUS Function Prototypes ====
+void cmd_toggle_snmp_payload(AppContext *app, const char *args);
+void cmd_toggle_snmp_ticker(AppContext *app, const char *args);
+void cmd_toggle_session_config(AppContext *app, const char *args);
 void cmd_toggle_auto_all(AppContext *app, const char *args);
 void cmd_toggle_tee(AppContext *app, const char *args);
 void cmd_toggle_autoexe(AppContext *app, const char *args);

@@ -72,11 +72,23 @@ void display_status(AppContext *app) {
     const char *noise_filter_val = app->sys.noise_filter_enabled ? "ON" : "OFF";
     g_string_append_printf(status_report, "Noise Filter Enabled:\t%s\n", noise_filter_val);
 
+    const char *snmp_enable_gemini_feed_val = app->SnmpContext.enable_gemini_feed ? "ON" : "OFF";
+    g_string_append_printf(status_report, "SNMP Gemini Feed Enabled:\t%s\n", snmp_enable_gemini_feed_val);
+
+    const char *snmp_ticker_enabled_val = app->sys.snmp_ticker_enabled ? "ON" : "OFF";
+    g_string_append_printf(status_report, "SNMP Ticker Enabled:\t%s\n", snmp_ticker_enabled_val);
+
+    const char *SnmpContext_loop_running_val = app->SnmpContext.loop_running ? "Yes" : "No";
+    g_string_append_printf(status_report, "SNMP Loop Running:\t%s\n", SnmpContext_loop_running_val);
+
     const char *debug_mode_val = app->sys.debug_mode ? "ON" : "OFF";
     g_string_append_printf(status_report, "Debug Mode Enabled:\t%s\n", debug_mode_val);
 
     const char *xml_tagging_val = app->xml.tagging_enabled ? "ON" : "OFF";
     g_string_append_printf(status_report, "XML Payload Tagging Enabled:\t%s\n", xml_tagging_val);
+
+    const char *load_from_session_val = app->sys.load_from_session ? "ON" : "OFF";
+    g_string_append_printf(status_report, "Session based config Enabled:\t%s\n", load_from_session_val);
 
     char *rpm_val = g_malloc(8);
     snprintf(rpm_val, 8, "%d", app->limiter.requests_per_minute);
@@ -150,6 +162,21 @@ void display_status(AppContext *app) {
     append_ai_text(app, noise_filter_val, app->sys.noise_filter_enabled ? "ai_tag" : "cmd_tag");
     append_ai_text(app, "\n", "body_tag");
 
+    // SNMP Feed Row
+    append_ai_text(app, "SNMP Feed Enabled:\t", "body_tag");
+    append_ai_text(app, snmp_enable_gemini_feed_val, app->SnmpContext.enable_gemini_feed ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+
+    // SNMP Ticker Enabled Row
+    append_ai_text(app, "SNMP Ticker Enabled:\t", "body_tag");
+    append_ai_text(app, snmp_ticker_enabled_val, app->sys.snmp_ticker_enabled ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+
+    // SNMP Loop Running Row
+    append_ai_text(app, "SNMP Loop Running:\t", "body_tag");
+    append_ai_text(app, SnmpContext_loop_running_val, app->SnmpContext.loop_running ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+
     // Requests Per Minute
     append_ai_text(app, "Requests Per Minute:\t", "body_tag");
     append_ai_text(app, rpm_val, "ai_tag");
@@ -173,6 +200,11 @@ void display_status(AppContext *app) {
     // Noise Filter Row
     append_ai_text(app, "XML Payload Tagging:\t", "body_tag");
     append_ai_text(app, xml_tagging_val, app->xml.tagging_enabled ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+
+    // Session Based Config Row
+    append_ai_text(app, "Session Based Config:\t", "body_tag");
+    append_ai_text(app, load_from_session_val, app->sys.load_from_session ? "ai_tag" : "cmd_tag");
     append_ai_text(app, "\n", "body_tag");
 
     // Database Writting

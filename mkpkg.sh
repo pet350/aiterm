@@ -4,66 +4,82 @@
 ## mkpkg.sh
 ## creates .tar.gz archive of source code
 ## By: Peter Talbott
-## July 2026
+## July-August 2026
 
-# Function gets the project name from the path
-# Path must conform to: /some/location/on/drive/Project/version/
-# it will return: Project
-# I left the remarked out printf lines to ilustrate how function works
-function GET_NAME_FROM_PATH()
-{
-    PREFIX=$(pwd)
-    SECOND=0
-    LAST=0
-    TOTAL=${#PREFIX}
-    COUNT=-1
-    while [ $COUNT -lt $TOTAL ]; do
-      ((COUNT++))
-      #printf "Char %s of %s: " $COUNT $TOTAL
-      TEMP=${PREFIX:$COUNT:1}
-      #printf "%s " $TEMP
-      case $TEMP in
-        '/')
-          #printf "Match"
-          if [ $COUNT -gt $LAST ]; then
-              SECOND=$LAST
-              LAST=$COUNT
-          fi
-          ;;
-      esac
-      #printf "\n"
+set -u
+
+GET_NAME_FROM_PATH() {
+    local prefix second last total count temp len name
+    prefix=$(pwd)
+    second=0
+    last=0
+    total=${#prefix}
+    count=-1
+    while [ $count -lt $total ]; do
+        ((count++))
+        temp=${prefix:$count:1}
+        if [ "$temp" = "/" ] && [ $count -gt $last ]; then
+            second=$last
+            last=$count
+        fi
     done
-    #printf "LAST 2 positions %s and %s, in between those: " $SECOND $LAST
-    LEN=$((LAST-SECOND))
-    NAME=${PREFIX:$((SECOND+1)):$((LEN-1))}
-    echo $NAME
+    len=$((last-second))
+    name=${prefix:$((second+1)):$((len-1))}
+    printf '%s\n' "$name"
 }
 
-function GET_VERSION_FROM_PATH()
-{
-    PREFIX=$(pwd)
-    echo ${PREFIX##*/}
+GET_VERSION_FROM_PATH() {
+    local prefix
+    prefix=$(pwd)
+    printf '%s\n' "${prefix##*/}"
 }
-
 
 PROJECT=$(GET_NAME_FROM_PATH)
 VERSION=$(GET_VERSION_FROM_PATH)
 ARCHIVE="$PROJECT-$VERSION.tar.gz"
-LIST="$(ls -1 *.{c,h}) Makefile* README.md LICENSE *.example aiterm-icon.png *.py *.sh"
 
-if [ -f $ARCHIVE ]; then
-    rm -v $ARCHIVE
-    echo -e "\n"
+# Files required for a functional source package.
+REQUIRED_FILES=(
+    "Makefile"
+    "resources.xml"
+    "resources.c"
+)
+
+for file in "${REQUIRED_FILES[@]}"; do
+    if [ ! -f "$file" ]; then
+        printf 'ERROR: required package file is missing: %s\n' "$file" >&2
+        exit 1
+    fi
+done
+
+# Use null-safe shell globs instead of ls, while keeping the package readable.
+shopt -s nullglob
+FILES=(
+    *.c
+    *.h
+    *.xml
+    Makefile*
+    README.md
+    LICENSE
+    *.example
+    aiterm-icon.png
+    *.py
+    *.sh
+)
+shopt -u nullglob
+
+if [ -f "$ARCHIVE" ]; then
+    rm -f -- "$ARCHIVE"
 fi
 
-echo -e "Creating Archive: $ARCHIVE"
-tar --gzip -cvf $ARCHIVE -C $(pwd) $LIST
+printf 'Creating Archive: %s\n' "$ARCHIVE"
+tar --gzip -cvf "$ARCHIVE" -C "$(pwd)" "${FILES[@]}"
+
 if [ $? -eq 0 ]; then
-    echo -e "Success"
+    printf 'Success\n'
 else
-    echo -e "Failure"
+    printf 'Failure\n'
+    exit 1
 fi
 
-echo -e "Thats all folks!\n\n"
-
-
+printf 'Thats all folks!\n\n'

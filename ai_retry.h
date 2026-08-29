@@ -1,3 +1,11 @@
+// part of the aiterm project
+// ai_retry.h
+// Header file for retry AI payloads
+// By: Peter Talbott
+// Assisted by: Gemini
+// aiterm The terminal emulator with an AI Pane
+// August 2026
+
 #ifndef AI_RETRY_H
 #define AI_RETRY_H
 

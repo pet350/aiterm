@@ -25,8 +25,11 @@ typedef enum {
     TOGGLE_SESSION_READ_GLOBAL,
     TOGGLE_SESSION_WRITE_GLOBAL,
     TOGGLE_SMART_CACHE,
+    TOGGLE_SNMP_PAYLOAD,
+    TOGGLE_SNMP_TICKER,
     TOGGLE_RATELIMIT,
     TOGGLE_TEE,
+    TOGGLE_SESSION_CONFIG,
     TOGGLE_XML
 } ToggleType;
 
@@ -36,5 +39,6 @@ gboolean toggle_function(AppContext *app, ToggleType toggle_type, GtkCheckMenuIt
 void on_menu_item_toggled(GtkCheckMenuItem *menu_item, gpointer user_data);
 void on_menu_toggle_item_toggled(GtkCheckMenuItem *menu_item, gpointer user_data);
 void setup_menu_toggle(GtkWidget *menu_item, AppContext *app, ToggleType type, gboolean initial_state);
+void update_menu_toggles_from_app(AppContext *app);
 
 #endif

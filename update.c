@@ -24,6 +24,7 @@
 #include "policy_dao.h"
 #include "commands.h"
 #include "autoexec.h"
+#include "terminal.h"
 
 // Rate Limiting
 static time_t last_request_time = 0;
@@ -144,7 +145,7 @@ gboolean update_gui_with_response(gpointer data) {
 
     gtk_label_set_text(GTK_LABEL(rd->app->gui.status_label), "Ready");
 
-    rd->app->sys.is_processing = FALSE;
+    g_atomic_int_set(&rd->app->sys.is_processing, 0);
     if (rd->response_text) free(rd->response_text);
     if (rd->original_prompt) free(rd->original_prompt);
     free(rd);
@@ -313,22 +314,36 @@ void on_input_activate(GtkEntry *entry, gpointer data) {
         return;
     }
 
-    execute_ai_command(app, input_text);
     char *cleaned_text = strip_blank_lines(input_text);
-
-
-    // --- NEW: 0.7.5-beta:  Guard against double-processing ---
-    if (app->sys.is_processing) {
-        update_status_label(app, "AI is already busy...");
+    if (!cleaned_text || !*cleaned_text) {
+        g_free(cleaned_text);
         return;
     }
 
     time_t now = time(NULL);
     if (now - last_request_time < 2) {
         write_to_ai_pane(app, "System: ", "Wait 2 seconds...", "cmd_tag", "cmd_tag");
+        g_atomic_int_set(&app->sys.is_processing, 0);
+        g_free(cleaned_text);
         return;
     }
     last_request_time = now;
+
+    // Atomically reserve the single AI worker slot.
+    if (!g_atomic_int_compare_and_exchange(&app->sys.is_processing, 0, 1)) {
+        update_status_label(app, "AI is already busy...");
+        g_free(cleaned_text);
+        return;
+    }
+
+    // Capture VTE state while still on the GTK thread.  The AI worker must
+    // never call vte_terminal_* or otherwise touch GTK objects.
+    char *terminal_context = terminal_capture_context(app);
+
+    /* Do not run command-policy/database work here for ordinary user input.
+     * AI command execution is handled only after an AI response has produced
+     * an explicit <cmd> block.  Keeping this path free of synchronous policy
+     * lookups makes Enter/input processing remain a fast GTK operation. */
 
     gtk_label_set_text(GTK_LABEL(app->gui.status_label), "AI is thinking...");
     write_to_ai_pane(app, "You: ", cleaned_text, "user_tag", NULL);
@@ -336,7 +351,9 @@ void on_input_activate(GtkEntry *entry, gpointer data) {
     AIThreadData *td = g_malloc0(sizeof(AIThreadData));
     td->app = app;
     td->prompt = g_strdup(input_text);
-    g_thread_new("ai_worker", (GThreadFunc)ai_thread_func, td);
+    td->terminal_context = terminal_context;
+    g_thread_unref(g_thread_new("ai_worker", (GThreadFunc)ai_thread_func, td));
+    g_free(cleaned_text);
 
     gtk_entry_set_text(entry, "");
 }
