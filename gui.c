@@ -526,6 +526,14 @@ static gboolean snmp_ticker_draw(GtkWidget *widget, cairo_t *cr, gpointer user_d
     AppContext *app = (AppContext *)user_data;
     if (!app) return FALSE;
 
+    if (!app->sys.snmp_ticker_enabled) {
+        // You could draw with a different color or style
+        GtkStyleContext *context = gtk_widget_get_style_context(widget);
+        gtk_render_background(context, cr, 0, 0, 
+                              gtk_widget_get_allocated_width(widget),
+                              gtk_widget_get_allocated_height(widget));
+    }
+
     GtkAllocation allocation;
     gtk_widget_get_allocation(widget, &allocation);
     if (allocation.width <= 0 || allocation.height <= 0) return FALSE;
@@ -642,6 +650,30 @@ gboolean update_snmp_ticker_scroll(gpointer user_data) {
 
     if (!app || !app->gui.snmp_ticker_label) return FALSE;
 
+    // ADD THIS CHECK HERE:
+    if (!app->sys.snmp_ticker_enabled) {
+        // Set a static "disabled" message
+        const char *disabled_text = "SNMP: Ticker Disabled";
+        
+        // Update payload to show disabled message
+        g_free(app->gui.snmp_ticker_text);
+        app->gui.snmp_ticker_text = g_strdup(disabled_text);
+        
+        // Convert to UCS-4 for drawing
+        g_free(app->gui.snmp_ticker_chars);
+        app->gui.snmp_ticker_chars = g_utf8_to_ucs4_fast(
+            app->gui.snmp_ticker_text, -1, &app->gui.snmp_ticker_len);
+        
+        app->gui.snmp_ticker_offset = 0;
+        app->aiterm_runtime.ticker_completed = TRUE;
+        
+        // Force redraw with disabled message
+        gtk_widget_queue_draw(app->gui.snmp_ticker_label);
+        
+        // Return TRUE to keep timer running, but show disabled state
+        return TRUE;
+    }
+
     const char *text = app->gui.snmp_ticker_text;
     if (!text || !*text) {
         app->gui.snmp_ticker_offset = 0;
@@ -678,6 +710,12 @@ gboolean update_snmp_ticker_scroll(gpointer user_data) {
 
 void update_snmp_ticker_payload(AppContext *app, const char *payload_summary) {
     if (!app) return;
+
+    // Don't update payload if ticker is disabled
+    if (!app->sys.snmp_ticker_enabled) {
+        DEBUG_PRINT("[DEBUG]: [SNMP Ticker] Ignoring payload update - ticker disabled\n");
+        return;
+    }
 
     /* A new payload starts a new complete ticker pass.  The SNMP poller
      * must not replace the payload while the previous one is still scrolling. */

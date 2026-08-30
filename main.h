@@ -19,7 +19,7 @@
 #include "build_id.h"
 
 // Current AITERM version
-const char* AITERM_VERSION      = "0.9.8-tau5";
+const char* AITERM_VERSION      = "0.9.8-zeta";
 const char* AITERM_BUILDID      = BUILD_ID;
 const char* AITERM_BUILD_TIME   = BUILD_TIME;
 const char* CONFIG_FILE         = "/etc/aiterm.conf";
@@ -38,10 +38,10 @@ const char* GENERAL_DIRECTIVES  =
         "     - Inline/Single command: `<command>sudo systemctl restart nginx</command>'\n"
         "- Multi-line block:\n"
         "    <command>\n"
-        "    cd /var/www/html\n"
-        "    git pull origin main\n"
-        "    systemctl reload nginx\n"
-        "    </command>\n"
+        "     cd /var/www/html\n"
+        "     git pull origin main\n"
+        "     systemctl reload nginx\n"
+        "     </command>\n"
         "- **Policy Retention**: All existing safety rules, confirmation checks,\n"
         "   explanation requirements, and system policies remain fully active.\n"
         "   Provide plain text explanations outside the `<command>` tags\n"
