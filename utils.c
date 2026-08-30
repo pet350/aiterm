@@ -270,6 +270,7 @@ void* db_worker_thread(void *arg) {
     DEBUG_PRINT("[MEMDBG]: [WORKER] ENTER arg=%p\n", arg);
     mysql_thread_init();
     DBWorkerData *data = (DBWorkerData *)arg;
+    SET_THREAD_NAME("aiterm-database");
     DEBUG_PRINT("[MEMDBG]: [WORKER] data=%p terminal=%p ai_analysis=%p user=%p ai=%p uuid=%p\n",
                 (void*)data,
                 data ? (void*)data->terminal_output : NULL,

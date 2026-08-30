@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <strings.h>
 #include <pthread.h>
+#include <sys/prctl.h>
 #include <mariadb/mysql.h>
 #include <net-snmp/net-snmp-config.h>
 #include <net-snmp/net-snmp-includes.h>
@@ -273,7 +274,7 @@ gboolean update_ticker_idle_cb(gpointer data) {
 gboolean update_ticker_polling_cb(gpointer data) {
     AppContext *app = (AppContext *)data;
     if (app && app->gui.status_label) {
-        gtk_label_set_text(GTK_LABEL(app->gui.status_label), "SNMP: Polling targets...");
+        gtk_label_set_text(GTK_LABEL(app->gui.status_label), "SNMP: Busy");
     }
     return FALSE;
 }
@@ -421,16 +422,25 @@ char *snmp_format_telemetry_payload(AppContext *app) {
 
 void *snmp_poller_worker(void *data) {
     AppContext *app = (AppContext *)data;
-
     if (!app) return NULL;
-
+    SET_THREAD_NAME("aiterm-snmp");
     while (TRUE) {
+        // 1. Check if we should stop
         pthread_mutex_lock(&app->SnmpContext.lock);
-        gboolean running = app->SnmpContext.loop_running;
+        if (!app->SnmpContext.loop_running) {
+            pthread_mutex_unlock(&app->SnmpContext.lock);
+            break;
+        }
+        
+        // 2. Get poll interval
+        int interval = app->SnmpContext.poll_interval_sec;
+        if (interval <= 0) interval = 10;
         pthread_mutex_unlock(&app->SnmpContext.lock);
-        if (!running) break;
+        
+        // 3. Do polling work (outside the lock)
         snmp_poll_all_targets(app);
       
+        // 4. Database updates
         for (guint i = 0; i < MAX_SNMP_HOSTS; i++) {
             int target_id;
             char last_value[256];
@@ -444,21 +454,18 @@ void *snmp_poller_worker(void *data) {
             snprintf(last_value, sizeof(last_value), "%s", app->SnmpMetric[i].last_value);
             pthread_mutex_unlock(&app->SnmpContext.lock);
 
-            // --- Sync fetched last_value back to MySQL Database ---
+            // Update database if connected
             if (app->database.global_db_conn && target_id > 0) {
                 pthread_mutex_lock(&app->access.db_mutex);
-
                 char query[512];
                 snprintf(query, sizeof(query),
                          "UPDATE snmp_targets SET last_value = '%s' WHERE id = %d;",
                          last_value, target_id);
-
                 mysql_query(app->database.global_db_conn, query);
                 pthread_mutex_unlock(&app->access.db_mutex);
             }
         }
 
-        int interval;
         pthread_mutex_lock(&app->SnmpContext.lock);
         interval = app->SnmpContext.poll_interval_sec;
         pthread_mutex_unlock(&app->SnmpContext.lock);
@@ -487,25 +494,25 @@ void *snmp_poller_worker(void *data) {
             DEBUG_PRINT("[DEBUG]: [SNMP Poller] Forced Flushing payload to Gemini.\n");
             snmp_force_poll(app);
             snmp_flush_to_gemini(app);
-        } else {
-            /* Use the condition variable instead of sleep(), allowing shutdown
-             * to wake the poller immediately rather than waiting a full interval. */
-            struct timespec wake_time;
-            clock_gettime(CLOCK_REALTIME, &wake_time);
-            wake_time.tv_sec += (interval > 0 ? interval : 10);
-
-            pthread_mutex_lock(&app->SnmpContext.lock);
-            while (app->SnmpContext.loop_running) {
-                int rc = pthread_cond_timedwait(&app->SnmpContext.poller_cond,
-                                                &app->SnmpContext.lock,
-                                                &wake_time);
-                if (rc != ETIMEDOUT) break;
-            }
-            pthread_mutex_unlock(&app->SnmpContext.lock);
         }
+
+        // 5. Wait for next poll interval (or shutdown signal)
+        struct timespec wake_time;
+        clock_gettime(CLOCK_REALTIME, &wake_time);
+        wake_time.tv_sec += interval;
+
+        pthread_mutex_lock(&app->SnmpContext.lock);
+        if (app->SnmpContext.loop_running) {
+            pthread_cond_timedwait(&app->SnmpContext.poller_cond,
+                                   &app->SnmpContext.lock,
+                                   &wake_time);
+        }
+        pthread_mutex_unlock(&app->SnmpContext.lock);
     }
+    
     return NULL;
 }
+
 
 void snmp_start_poller(AppContext *app) {
     if (!app || !app->SnmpContext.initialized) return;

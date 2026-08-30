@@ -13,6 +13,7 @@
 #include <pthread.h>
 #include <vte/vte.h>
 #include <json-c/json.h>
+#include <sys/prctl.h>
 #include "gui.h"
 #include "xml_tagging.h"
 
@@ -44,6 +45,8 @@ extern const char* GENERAL_DIRECTIVES;
                     (long)ts.tv_sec, (long)(ts.tv_nsec / 1000), ##__VA_ARGS__); \
         } \
     } while (0)
+
+#define SET_THREAD_NAME(name) prctl(PR_SET_NAME, name, 0, 0, 0)
 
 typedef struct {
     char *user_text;
