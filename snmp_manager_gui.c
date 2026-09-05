@@ -53,6 +53,53 @@ enum {
 // Forward declarations
 void refresh_snmp_target_list(SnmpManagerDialog *dlg);
 
+// Signal handler to update poller interval and label on slider move
+void on_snmp_delay_scale_changed(GtkRange *range, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    if (!app) return;
+
+    int new_delay = (int)gtk_range_get_value(range);
+    if (new_delay < 10) new_delay = 10;
+    if (new_delay > 3600) new_delay = 3600;
+
+    // Update dedicated single-line value label
+    GtkWidget *val_label = GTK_WIDGET(g_object_get_data(G_OBJECT(range), "val_label"));
+    if (val_label) {
+        char buf[32];
+        if (new_delay < 60) {
+            snprintf(buf, sizeof(buf), "%d sec", new_delay);
+        } else if (new_delay < 3600) {
+            int mins = new_delay / 60;
+            int rem = new_delay % 60;
+            if (rem == 0) snprintf(buf, sizeof(buf), "%d min", mins);
+            else snprintf(buf, sizeof(buf), "%dm %ds", mins, rem);
+        } else {
+            snprintf(buf, sizeof(buf), "1 hr");
+        }
+        gtk_label_set_text(GTK_LABEL(val_label), buf);
+    }
+
+    pthread_mutex_lock(&app->SnmpContext.lock);
+    app->SnmpContext.poll_interval_sec = new_delay;
+    pthread_cond_signal(&app->SnmpContext.poller_cond);
+    pthread_mutex_unlock(&app->SnmpContext.lock);
+}
+
+// Formatter to render slider values cleanly (e.g., 10 sec, 5 min, 1 hr)
+gchar *on_snmp_delay_format_value(GtkScale *scale, gdouble value, gpointer user_data) {
+    int secs = (int)value;
+    if (secs < 60) {
+        return g_strdup_printf("%d sec", secs);
+    } else if (secs < 3600) {
+        int mins = secs / 60;
+        int rem = secs % 60;
+        if (rem == 0) return g_strdup_printf("%d min", mins);
+        return g_strdup_printf("%dm %ds", mins, rem);
+    } else {
+        return g_strdup_printf("1 hr");
+    }
+}
+
 // Handler for OID Preset Combo Box selection change
 void on_oid_combo_changed(GtkComboBox *combo, gpointer user_data) {
     GtkWidget *oid_entry = GTK_WIDGET(user_data);
@@ -483,11 +530,54 @@ void open_snmp_manager_window(AppContext *app) {
     gtk_container_add(GTK_CONTAINER(scrolled_window), dlg->tree_view);
     gtk_box_pack_start(GTK_BOX(vbox), scrolled_window, TRUE, TRUE, 0);
 
-    // Button Box Container (Horizontal layout with END alignment matching history_manager_gui)
-    GtkWidget *button_box = gtk_button_box_new(GTK_ORIENTATION_HORIZONTAL);
-    gtk_button_box_set_layout(GTK_BUTTON_BOX(button_box), GTK_BUTTONBOX_END);
-    gtk_box_set_spacing(GTK_BOX(button_box), 6);
-    gtk_box_pack_start(GTK_BOX(vbox), button_box, FALSE, FALSE, 0);
+    // 1. Poller Delay Slider Container
+    GtkWidget *delay_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_margin_bottom(delay_box, 8);
+
+    GtkWidget *delay_label = gtk_label_new("Poller Delay:");
+    
+    int current_delay = 10;
+    pthread_mutex_lock(&app->SnmpContext.lock);
+    current_delay = app->SnmpContext.poll_interval_sec;
+    pthread_mutex_unlock(&app->SnmpContext.lock);
+    if (current_delay < 10) current_delay = 10;
+    if (current_delay > 3600) current_delay = 3600;
+
+    GtkWidget *delay_val_label = gtk_label_new("");
+    gtk_widget_set_size_request(delay_val_label, 70, -1);
+    gtk_label_set_xalign(GTK_LABEL(delay_val_label), 0.0f);
+
+    GtkWidget *delay_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 10.0, 3600.0, 5.0);
+    gtk_scale_set_draw_value(GTK_SCALE(delay_scale), FALSE);
+    g_object_set_data(G_OBJECT(delay_scale), "val_label", delay_val_label);
+
+    char init_buf[32];
+    if (current_delay < 60) {
+        snprintf(init_buf, sizeof(init_buf), "%d sec", current_delay);
+    } else if (current_delay < 3600) {
+        int m = current_delay / 60, r = current_delay % 60;
+        if (r == 0) snprintf(init_buf, sizeof(init_buf), "%d min", m);
+        else snprintf(init_buf, sizeof(init_buf), "%dm %ds", m, r);
+    } else {
+        snprintf(init_buf, sizeof(init_buf), "1 hr");
+    }
+    gtk_label_set_text(GTK_LABEL(delay_val_label), init_buf);
+
+    gtk_range_set_value(GTK_RANGE(delay_scale), (gdouble)current_delay);
+    g_signal_connect(delay_scale, "value-changed", G_CALLBACK(on_snmp_delay_scale_changed), app);
+
+    gtk_box_pack_start(GTK_BOX(delay_box), delay_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(delay_box), delay_scale, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(delay_box), delay_val_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(vbox), delay_box, FALSE, FALSE, 0);
+
+    // 2. Button Grid Container
+    GtkWidget *button_grid = gtk_grid_new();
+    gtk_grid_set_column_homogeneous(GTK_GRID(button_grid), TRUE);
+    gtk_grid_set_row_homogeneous(GTK_GRID(button_grid), TRUE);
+    gtk_grid_set_column_spacing(GTK_GRID(button_grid), 6);
+    gtk_grid_set_row_spacing(GTK_GRID(button_grid), 6);
+    gtk_box_pack_start(GTK_BOX(vbox), button_grid, FALSE, FALSE, 0);
 
     GtkWidget *btn_add     = gtk_button_new_with_label("Add Target");
     GtkWidget *btn_edit    = gtk_button_new_with_label("Edit");
@@ -496,14 +586,17 @@ void open_snmp_manager_window(AppContext *app) {
     GtkWidget *btn_refresh = gtk_button_new_with_label("Refresh");
     GtkWidget *btn_close   = gtk_button_new_with_label("Close");
 
-    gtk_container_add(GTK_CONTAINER(button_box), btn_add);
-    gtk_container_add(GTK_CONTAINER(button_box), btn_edit);
-    gtk_container_add(GTK_CONTAINER(button_box), btn_toggle);
-    gtk_container_add(GTK_CONTAINER(button_box), btn_delete);
-    gtk_container_add(GTK_CONTAINER(button_box), btn_refresh);
-    gtk_container_add(GTK_CONTAINER(button_box), btn_close);
+    // Row 1
+    gtk_grid_attach(GTK_GRID(button_grid), btn_add,     0, 0, 1, 1);
+    gtk_grid_attach(GTK_GRID(button_grid), btn_edit,    1, 0, 1, 1);
+    gtk_grid_attach(GTK_GRID(button_grid), btn_toggle,  2, 0, 1, 1);
 
-    // Signal connections
+    // Row 2
+    gtk_grid_attach(GTK_GRID(button_grid), btn_delete,  0, 1, 1, 1);
+    gtk_grid_attach(GTK_GRID(button_grid), btn_refresh, 1, 1, 1, 1);
+    gtk_grid_attach(GTK_GRID(button_grid), btn_close,   2, 1, 1, 1);
+
+    // Signals
     g_signal_connect(btn_add, "clicked", G_CALLBACK(on_snmp_add_clicked), dlg);
     g_signal_connect(btn_edit, "clicked", G_CALLBACK(on_snmp_edit_clicked), dlg);
     g_signal_connect(btn_toggle, "clicked", G_CALLBACK(on_snmp_toggle_active_clicked), dlg);

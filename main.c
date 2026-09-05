@@ -45,6 +45,9 @@ int main(int argc, char *argv[]) {
     // 2. Parse command line options if any
     parse_command_line_options(app, argc, argv);
 
+    // 2.1 Set Config filename
+    init_config_pointer();
+
     // 3. Initialize GTK
     DEBUG_PRINT("[DEBUG]: [MAIN] Initializing GTK...\n");
     gtk_init(&argc, &argv);

@@ -27,7 +27,7 @@
 #define APP_NAME	"aiterm"
 #define MAX_TABS	32
 #define MAX_DLG 	16
-#define MAX_SNMP_HOSTS	128
+#define MAX_SNMP_HOSTS	1024
 
 #define AITERM_WM_CLASS "aiterm"
 #define AITERM_WM_ROLE  "terminal"

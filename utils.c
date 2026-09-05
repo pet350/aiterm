@@ -16,6 +16,8 @@
 #include <mariadb/mysql.h>
 #include <gtk/gtk.h>
 #include <pthread.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include "utils.h"
 #include "gui.h"
@@ -28,6 +30,43 @@
 #include "noisefilter.h"
 #include "gemini.h"
 #include "snmp_manager.h"
+
+// Checks multiple locations for config file and returns the one it found
+const char* get_config_filename(void) {
+    static char path[512];
+    char *home = getenv("HOME");
+    uid_t uid = getuid();
+    char *env_cfg = getenv("AITERM_CONFIG");
+
+    // 1. Check Environment Variable first
+    if (env_cfg && access(env_cfg, F_OK) == 0) {
+        return env_cfg;
+    }
+
+    // 2. Check /etc/.(UID).aiterm.conf
+    snprintf(path, sizeof(path), "/etc/.%d.aiterm.conf", uid);
+    if (access(path, F_OK) == 0) return path;
+
+    // 3. Check ~/.config/aiterm.conf
+    if (home) {
+        snprintf(path, sizeof(path), "%s/.config/aiterm.conf", home);
+        if (access(path, F_OK) == 0) return path;
+
+        // 4. Check ~/.aiterm.conf
+        snprintf(path, sizeof(path), "%s/.aiterm.conf", home);
+        if (access(path, F_OK) == 0) return path;
+    }
+
+    // 5. Default to /etc/aiterm.conf
+    return "/etc/aiterm.conf";
+}
+
+void init_config_pointer(void) {
+    if (!CONFIG_FILE) {    
+        CONFIG_FILE = get_config_filename();
+        DEBUG_PRINT("[DEBUG]: [Config File] Set config filename: %s\n", CONFIG_FILE);
+    }
+}
 
 // Kept the functions "legacy name"
 // for the most part it all booleans initialized here 

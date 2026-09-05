@@ -55,6 +55,7 @@ void handle_version_wrapper(AppContext *app, const char *args);
 void handle_load_config_wrapper(AppContext *app, const char *args);
 void handle_save_config_wrapper(AppContext *app, const char *args);
 void handle_extended_help(AppContext *app, const char *args);
+void handle_snmp_poller_command(AppContext *app, const char *args);
 
 void cmd_set_rpm(AppContext *app, const char *args);
 void cmd_set_retry_times(AppContext *app, const char *args);

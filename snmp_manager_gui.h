@@ -33,6 +33,9 @@ typedef struct SnmpManagerDialog {
 } SnmpManagerDialog;
 
 // Function prototypes
+gchar *on_snmp_delay_format_value(GtkScale *scale, gdouble value, gpointer user_data);
+
+void on_snmp_delay_scale_changed(GtkRange *range, gpointer user_data);
 void refresh_snmp_target_list(SnmpManagerDialog *dlg);
 void show_add_snmp_dialog(SnmpManagerDialog *dlg);
 void show_edit_snmp_dialog(SnmpManagerDialog *dlg);

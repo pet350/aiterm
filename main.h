@@ -19,10 +19,10 @@
 #include "build_id.h"
 
 // Current AITERM version
-const char* AITERM_VERSION      = "0.9.8-zeta";
+const char* AITERM_VERSION      = "0.9.9-alpha";
 const char* AITERM_BUILDID      = BUILD_ID;
 const char* AITERM_BUILD_TIME   = BUILD_TIME;
-const char* CONFIG_FILE         = "/etc/aiterm.conf";
+const char* CONFIG_FILE         = NULL;
 const char* GENERAL_DIRECTIVES  =
     "<directive>\n"
     "You are an AI assistant integrated into 'aiterm', a Linux terminal emulator.\n"

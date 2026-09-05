@@ -5,6 +5,7 @@
 ## creates .tar.gz archive of source code
 ## By: Peter Talbott
 ## July-August 2026
+## Updated 0.9.9-alpha
 
 set -u
 
@@ -41,8 +42,7 @@ ARCHIVE="$PROJECT-$VERSION.tar.gz"
 # Files required for a functional source package.
 REQUIRED_FILES=(
     "Makefile"
-    "resources.xml"
-    "resources.c"
+    "main.c"
 )
 
 for file in "${REQUIRED_FILES[@]}"; do
@@ -54,7 +54,7 @@ done
 
 # Use null-safe shell globs instead of ls, while keeping the package readable.
 shopt -s nullglob
-FILES=(
+FILES_LIST=(
     *.c
     *.h
     *.xml
@@ -66,14 +66,27 @@ FILES=(
     *.py
     *.sh
 )
+
+function MKLIST()
+{
+    COUNT=0
+    for X in ${FILES_LIST[@]}; do
+       ls -1 $X 2>/dev/null
+       ((COUNT++))
+    done
+    return $COUNT
+}
+
+FILES=$(MKLIST)
+TOTAL=$?
 shopt -u nullglob
 
 if [ -f "$ARCHIVE" ]; then
     rm -f -- "$ARCHIVE"
 fi
-
+printf 'Total files to Archive:  %s\n' "$TOTAL"
 printf 'Creating Archive: %s\n' "$ARCHIVE"
-tar --gzip -cvf "$ARCHIVE" -C "$(pwd)" "${FILES[@]}"
+tar --gzip -cf "$ARCHIVE" -C "$(pwd)" $FILES
 
 if [ $? -eq 0 ]; then
     printf 'Success\n'

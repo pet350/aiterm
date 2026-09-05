@@ -93,6 +93,8 @@ extern const char* CONFIG_FILE;
 size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp);
 int init_remote_db(AppContext *app);
 
+const char* get_config_filename(void);
+
 char* get_uuid_filter(AppContext *app);
 char* build_delta_sync_query(AppContext *app);
 char* extract_ai_text(const char *json);
@@ -106,6 +108,7 @@ char* xml_wrap(AppContext *app, const char *input);
 void* init_db_thread_worker(void *data);
 void* db_worker_thread(void *arg);
 
+void init_config_pointer(void);
 void print_version();
 void init_provider_config(AppContext *app);
 void free_provider_config(ProviderConfig *provider);

@@ -1,5 +1,18 @@
 Markdown
 # aiterm — The AI-Augmented Terminal Emulator
+`aiterm` is an advanced, multi-tabbed terminal emulator written in C, leveraging GTK 3 and the VTE library to inject an interactive, context-aware AI pane directly alongside your shell workflows. Built with defensive engineering principles, it monitors running contexts, handles command telemetry safely, and securely parses terminal and session activities through modern AI models (including Google Gemini and OpenAI) without breaking command-line isolation.
+
+# Version 0.9.9-alpha
+* ** New: Pipe SNMP data directly to AI
+* ** New: SNMP-Manager window, to configure SNMP
+* ** New: Fully functional Auto Execute governed by Policy Manager
+* ** New: Double click the tabs bar to open a new tab
+* ** New: Added to SNMP Manager window a slider to adjust Poll interval time
+* ** New: Per user config files
+* ** Bugfix: memory leaks fixed
+* 
+* ** Looking to add export session and printing support next
+
 # Version 0.9.5-omega
 
 [![C Version](https://img.shields.io/badge/Language-C99-00599C?logo=c&logoColor=white)](https://gcc.gnu.org/)
@@ -7,7 +20,6 @@ Markdown
 [![Security](https://img.shields.io/badge/Encryption-AES--256--CBC-green?logo=openssl&logoColor=white)](https://www.openssl.org/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`aiterm` is an advanced, multi-tabbed terminal emulator written in C, leveraging GTK 3 and the VTE library to inject an interactive, context-aware AI pane directly alongside your shell workflows. Built with defensive engineering principles, it monitors running contexts, handles command telemetry safely, and securely parses terminal and session activities through modern AI models (including Google Gemini and OpenAI) without breaking command-line isolation.
 
 ---
 
