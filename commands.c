@@ -183,6 +183,7 @@ static CommandRegistry registry[] = {
     {"snmp dump", "Dump Raw SNMP data to AI pane", dump_raw_snmp_payload_to_ai_wrapper},
     {"snmp enable", "Toggle send SNMP payload to AI (on/off/status)", cmd_toggle_snmp_payload},
     {"snmp force", "Force flush SNMP payload to AI", cmd_force_snmp_flush}, 
+    {"snmp poller", "SNMP Poller Service: start, stop, restart", handle_snmp_poller_command},
     {"snmp ticker", "Toggles SNMP Ticker (on/off/status)", cmd_toggle_snmp_ticker},
     {"provider", "Display AI provider [OpenAI/Gemini]", handle_provider_wrapper},
     {"ratelimit", "Toggle Raate Limiting (on/off/status)", cmd_toggle_ratelimit},
@@ -210,6 +211,36 @@ gboolean execute_command(AppContext *app, const char *input) {
         }
     }
     return FALSE; // No command found, pass to AI
+}
+
+void handle_snmp_poller_command(AppContext *app, const char *args) {
+    const char *ptr = args;
+    while (ptr && *ptr == ' ') ptr++; // Strip leading spaces
+
+    if (!ptr || strlen(ptr) == 0 ) {
+         write_to_ai_pane(app, "System: ", "Missing required command: (start/restart)\n", "ai_tag", "cmd_tag");
+         return;
+//    Removed due to very glitchy results 8/31/2026
+//    } else if (strcmp(ptr, "stop") ==  0 || strcmp(ptr, "restart") == 0) {
+//         if (app->SnmpContext.loop_running) {
+//             write_to_ai_pane(app, "System: ", "Stopping SNMP Poller.\n", "ai_tag", "cmd_tag");
+//             snmp_stop_poller(app);
+//             sleep(50);
+//         } else {
+//             write_to_ai_pane(app, "System: ", "SNMP Poller not running.\n", "ai_tag", "cmd_tag");
+//             return;
+//         }
+    } else if (strcmp(ptr, "start") == 0  || strcmp(ptr, "restart") == 0) {
+         if (!app->SnmpContext.loop_running) {
+             write_to_ai_pane(app, "System: ", "Starting SNMP Poller.\n", "ai_tag", "cmd_tag");
+             init_snmp_subsystem(app);
+             snmp_load_targets_from_db(app);
+             snmp_start_poller(app);
+         } else {
+             write_to_ai_pane(app, "System: ", "SNMP Poller already running.\n", "ai_tag", "cmd_tag");
+             return;
+         }
+    }
 }
 
 void handle_snmp_command(AppContext *app, const char *args) {

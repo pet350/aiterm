@@ -31,7 +31,7 @@ static const char *CONFIG_FILE_VERSION="1.2";
 void save_config(AppContext *app) {
     FILE *fp = fopen(CONFIG_FILE, "w");
     if (!fp) {
-        DEBUG_PRINT("[DEBUG]: Error opening aiterm.conf for writing\n");
+        DEBUG_PRINT("[DEBUG]: Error opening config file for writing\n");
         return;
     }
 
@@ -78,6 +78,7 @@ void save_config(AppContext *app) {
     fprintf(fp, "debug_mode=%d\n", app->sys.debug_mode);
     fprintf(fp, "send_snmp_payload=%d\n", app->SnmpContext.enable_gemini_feed);
     fprintf(fp, "snmp_ticker_enabled=%d\n", app->sys.snmp_ticker_enabled);
+    fprintf(fp, "snmp_poll_interval=%d\n",app->SnmpContext.poll_interval_sec);
     fprintf(fp, "xml_tagging=%d\n", app->xml.tagging_enabled);
     fprintf(fp, "ai_retry_enabled=%d\n", app->retry_config.is_enabled);
     fprintf(fp, "ai_retry_max_retries=%d\n", app->retry_config.max_retries);
@@ -101,6 +102,7 @@ void load_config(AppContext *app) {
         DEBUG_PRINT("[DEBUG]: Config file %s not found\n", CONFIG_FILE);
         return;
     }
+    DEBUG_PRINT("[DEBUG]: Loading config file: %s\n", CONFIG_FILE);
 
     char line[1024];
     while (fgets(line, sizeof(line), fp)) {
@@ -187,6 +189,9 @@ void load_config(AppContext *app) {
                 app->sys.snmp_ticker_enabled = atoi(strchr(line, '=') + 1);
                 const char *snmp_ticker_enabled_val = app->sys.snmp_ticker_enabled ? "ON" : "OFF";
                 DEBUG_PRINT("[DEBUG]: [LOADED] SNMP Ticker Enabled: [%s]\n", snmp_ticker_enabled_val);
+        } else if (strstr(line, "snmp_poll_interval=")) {
+                app->SnmpContext.poll_interval_sec = atoi(strchr(line, '=') + 1);
+                DEBUG_PRINT("[DEBUG]: [LOADED] SNMP Poll Interval: [%d]\n", app->SnmpContext.poll_interval_sec);
         } else if (strstr(line, "rpm=")) {
                 app->limiter.requests_per_minute = atoi(strchr(line, '=') + 1);
                 DEBUG_PRINT("[DEBUG]: [LOADED] Requests Per Minute (RPM): [%d]\n", app->limiter.requests_per_minute);

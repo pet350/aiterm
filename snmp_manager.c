@@ -28,13 +28,14 @@ void init_snmp_subsystem(AppContext *app) {
     // 1. Initialize Master Context
     pthread_mutex_init(&app->SnmpContext.lock, NULL);
     pthread_cond_init(&app->SnmpContext.poller_cond, NULL);
-    app->SnmpContext.initialized = TRUE;
+
     DEBUG_PRINT("[DEBUG]: [SNMP Initialize] pthread mutex/condition initialized\n");
+
+    app->SnmpContext.initialized = TRUE;
     app->SnmpContext.metrics = NULL;
     app->SnmpContext.poller_thread = 0;
     app->SnmpContext.loop_running = FALSE;
     app->SnmpContext.force_gemini_feed = FALSE;
-    app->SnmpContext.poll_interval_sec = 10;
     app->SnmpContext.total_targets = 0;
     app->SnmpContext.active_alerts = 0;
     app->SnmpContext.payload = NULL;
@@ -42,6 +43,11 @@ void init_snmp_subsystem(AppContext *app) {
     // IF not enabled or initialized specify it as FALSE
     if (!app->SnmpContext.enable_gemini_feed) {
         app->SnmpContext.enable_gemini_feed = FALSE;
+    }
+
+    // IF not set. initialize it to 10 seconds
+    if (!app->SnmpContext.poll_interval_sec) {
+        app->SnmpContext.poll_interval_sec = 10;
     }
 
     // 2. Initialize Static Host Array
@@ -62,9 +68,10 @@ gboolean snmp_load_targets_from_db(AppContext *app) {
 
     pthread_mutex_lock(&app->access.db_mutex);
 
-    // Added 'id' to query
-    const char *query = "SELECT id, label, ip_address, community, oid_str, is_active "
-                        "FROM snmp_targets LIMIT 128;";
+    char query[256];
+    snprintf(query, sizeof(query),
+         "SELECT id, label, ip_address, community, oid_str, is_active "
+         "FROM snmp_targets LIMIT %d;", MAX_SNMP_HOSTS);
     
     if (mysql_query(app->database.global_db_conn, query)) {
         DEBUG_PRINT("[DEBUG]: [SNMP] DB query failed: %s\n", mysql_error(app->database.global_db_conn));
