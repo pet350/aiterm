@@ -28,6 +28,8 @@
 #include "noise_filter_manager_gui.h"
 #include "policy_manager_gui.h"
 #include "session_manager_gui.h"
+#include "print.h"
+#include "export.h"
 
 // Memory clean up helper for signal hooks
 void free_menu_data(gpointer data, GClosure *closure) {
@@ -73,6 +75,16 @@ char* prompt_for_argument(GtkWindow *parent, char *action_title, char *placehold
 }
 
 // --- Menu Callbacks ---
+
+void on_print_activate(GtkMenuItem *item, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    print_session(app);
+}
+
+void on_export_activate(GtkMenuItem *item, gpointer user_data) {
+    AppContext *app = (AppContext *)user_data;
+    export_session(app);
+}
 
 void on_menu_history_manager_activate(GtkMenuItem *menuitem, gpointer user_data) {
     AppContext *app = (AppContext *)user_data;
@@ -649,6 +661,8 @@ GtkWidget* create_menu_bar(AppContext *app) {
     GtkWidget *file_item = gtk_menu_item_new_with_label("File");
     GtkWidget *status_item = gtk_menu_item_new_with_label("System Status");
     GtkWidget *clear_item = gtk_menu_item_new_with_label("Clear AI History");
+    GtkWidget *print_item  = gtk_menu_item_new_with_label("Print…");
+    GtkWidget *export_item = gtk_menu_item_new_with_label("Export Session…");
     GtkWidget *exit_item = gtk_menu_item_new_with_label("Exit");
 
     // Edit Menu
@@ -826,6 +840,8 @@ GtkWidget* create_menu_bar(AppContext *app) {
     // Signals Binding
     g_signal_connect(status_item, "activate", G_CALLBACK(on_show_status_activate), app);
     g_signal_connect(clear_item, "activate", G_CALLBACK(on_clear), app);
+    g_signal_connect(print_item, "activate", G_CALLBACK(on_print_activate), app);
+    g_signal_connect(export_item, "activate", G_CALLBACK(on_export_activate), app);
     g_signal_connect(exit_item, "activate", G_CALLBACK(on_menu_exit), app);
     g_signal_connect(copy_item, "activate", G_CALLBACK(on_copy), app);
     g_signal_connect(paste_item, "activate", G_CALLBACK(on_paste), app);
@@ -851,6 +867,8 @@ GtkWidget* create_menu_bar(AppContext *app) {
     gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), status_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), gtk_separator_menu_item_new());
     gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), clear_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), print_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), export_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), exit_item);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(edit_menu), copy_item);

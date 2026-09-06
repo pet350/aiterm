@@ -364,29 +364,38 @@ void on_snmp_refresh_clicked(GtkWidget *button, gpointer user_data) {
     refresh_snmp_target_list(dlg);
 }
 
-// Handler for toggling target active state
+// Handler for toggling target active state (multi-select aware)
 void on_snmp_toggle_active_clicked(GtkWidget *button, gpointer user_data) {
     SnmpManagerDialog *dlg = (SnmpManagerDialog *)user_data;
     GtkTreeSelection *selection = gtk_tree_view_get_selection(GTK_TREE_VIEW(dlg->tree_view));
-    GtkTreeModel *model;
-    GtkTreeIter iter;
+    GtkTreeModel *model = GTK_TREE_MODEL(dlg->list_store);
+    GList *selected_rows = gtk_tree_selection_get_selected_rows(selection, &model);
 
-    if (gtk_tree_selection_get_selected(selection, &model, &iter)) {
+    for (GList *l = selected_rows; l != NULL; l = l->next) {
+        GtkTreePath *path = (GtkTreePath *)l->data;
+        GtkTreeIter iter;
+        gtk_tree_model_get_iter(model, &iter, path);
+
         int id;
         gtk_tree_model_get(model, &iter, COL_ID, &id, -1);
 
         pthread_mutex_lock(&dlg->app->access.db_mutex);
         if (dlg->app->database.global_db_conn) {
-            char *query = g_strdup_printf("UPDATE snmp_targets SET is_active = NOT is_active WHERE id = %d", id);
+            char *query = g_strdup_printf(
+                "UPDATE snmp_targets SET is_active = NOT is_active WHERE id = %d", id);
             if (mysql_query(dlg->app->database.global_db_conn, query) != 0) {
-                g_printerr("[ERROR]: Failed to toggle SNMP target: %s\n", mysql_error(dlg->app->database.global_db_conn));
+                g_printerr("[ERROR]: Failed to toggle SNMP target: %s\n",
+                           mysql_error(dlg->app->database.global_db_conn));
             }
             g_free(query);
         }
         pthread_mutex_unlock(&dlg->app->access.db_mutex);
-
-        refresh_snmp_target_list(dlg);
     }
+
+    g_list_free_full(selected_rows, (GDestroyNotify) gtk_tree_path_free);
+
+    // Refresh the list once after all toggles
+    refresh_snmp_target_list(dlg);
 }
 
 // Handler for deleting target
@@ -478,35 +487,44 @@ void open_snmp_manager_window(AppContext *app) {
     g_object_unref(dlg->list_store);
     gtk_tree_view_set_headers_visible(GTK_TREE_VIEW(dlg->tree_view), TRUE);
 
+    // Enable multiple row selection
+    GtkTreeSelection *selection = gtk_tree_view_get_selection(GTK_TREE_VIEW(dlg->tree_view));
+    gtk_tree_selection_set_mode(selection, GTK_SELECTION_MULTIPLE);
+
     GtkCellRenderer *renderer = gtk_cell_renderer_text_new();
     GtkTreeViewColumn *column;
 
     // ID Column
     column = gtk_tree_view_column_new_with_attributes("ID", renderer, "text", COL_ID, NULL);
+    gtk_tree_view_column_set_sort_column_id(column, COL_ID);
     gtk_tree_view_column_set_sizing(column, GTK_TREE_VIEW_COLUMN_FIXED);
     gtk_tree_view_column_set_fixed_width(column, 40);
     gtk_tree_view_append_column(GTK_TREE_VIEW(dlg->tree_view), column);
 
     // Label Column
     column = gtk_tree_view_column_new_with_attributes("Label", renderer, "text", COL_LABEL, NULL);
+    gtk_tree_view_column_set_sort_column_id(column, COL_LABEL);
     gtk_tree_view_column_set_sizing(column, GTK_TREE_VIEW_COLUMN_FIXED);
     gtk_tree_view_column_set_fixed_width(column, 160);
     gtk_tree_view_append_column(GTK_TREE_VIEW(dlg->tree_view), column);
 
     // IP Address Column
     column = gtk_tree_view_column_new_with_attributes("IP Address", renderer, "text", COL_IP, NULL);
+    gtk_tree_view_column_set_sort_column_id(column, COL_IP);
     gtk_tree_view_column_set_sizing(column, GTK_TREE_VIEW_COLUMN_FIXED);
     gtk_tree_view_column_set_fixed_width(column, 110);
     gtk_tree_view_append_column(GTK_TREE_VIEW(dlg->tree_view), column);
 
     // Community Column
     column = gtk_tree_view_column_new_with_attributes("Community", renderer, "text", COL_COMMUNITY, NULL);
+    gtk_tree_view_column_set_sort_column_id(column, COL_COMMUNITY);
     gtk_tree_view_column_set_sizing(column, GTK_TREE_VIEW_COLUMN_FIXED);
     gtk_tree_view_column_set_fixed_width(column, 90);
     gtk_tree_view_append_column(GTK_TREE_VIEW(dlg->tree_view), column);
 
     // OID String Column
     column = gtk_tree_view_column_new_with_attributes("OID String", renderer, "text", COL_OID, NULL);
+    gtk_tree_view_column_set_sort_column_id(column, COL_OID);
     gtk_tree_view_column_set_sizing(column, GTK_TREE_VIEW_COLUMN_FIXED);
     gtk_tree_view_column_set_fixed_width(column, 180);
     g_object_set(renderer, "ellipsize", PANGO_ELLIPSIZE_END, NULL);
@@ -514,12 +532,14 @@ void open_snmp_manager_window(AppContext *app) {
 
     // Last Value Column
     column = gtk_tree_view_column_new_with_attributes("Last Value", renderer, "text", COL_VALUE, NULL);
+    gtk_tree_view_column_set_sort_column_id(column, COL_VALUE);
     gtk_tree_view_column_set_sizing(column, GTK_TREE_VIEW_COLUMN_FIXED);
     gtk_tree_view_column_set_fixed_width(column, 120);
     gtk_tree_view_append_column(GTK_TREE_VIEW(dlg->tree_view), column);
 
     // Active Status Column
     column = gtk_tree_view_column_new_with_attributes("Active", renderer, "text", COL_ACTIVE, NULL);
+    gtk_tree_view_column_set_sort_column_id(column, COL_ACTIVE);
     gtk_tree_view_column_set_sizing(column, GTK_TREE_VIEW_COLUMN_FIXED);
     gtk_tree_view_column_set_fixed_width(column, 60);
     gtk_tree_view_append_column(GTK_TREE_VIEW(dlg->tree_view), column);
@@ -586,6 +606,9 @@ void open_snmp_manager_window(AppContext *app) {
     GtkWidget *btn_refresh = gtk_button_new_with_label("Refresh");
     GtkWidget *btn_close   = gtk_button_new_with_label("Close");
 
+    // Prevent toggle button from grabbing focus (avoids raising window)
+    gtk_widget_set_focus_on_click(btn_toggle, FALSE);
+
     // Row 1
     gtk_grid_attach(GTK_GRID(button_grid), btn_add,     0, 0, 1, 1);
     gtk_grid_attach(GTK_GRID(button_grid), btn_edit,    1, 0, 1, 1);
@@ -620,4 +643,3 @@ void close_snmp_manager(AppContext *app) {
         write_to_ai_pane(app, "System: ", "Closed SNMP Target Manager window.", "ai_tag", "cmd_tag");
     }
 }
-

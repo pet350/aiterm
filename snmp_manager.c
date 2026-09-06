@@ -237,7 +237,7 @@ gboolean append_raw_payload_idle(gpointer data) {
     char *text = (char *)data;
     // Assuming 'app' is accessible globally or passed in a custom struct
     // Ensure you target the correct pane if you have multiple
-    append_ai_text(global_app, text, "LOG_DUMP");
+    append_ai_text(global_app, text, "body_tag");
     g_free(text);
     return FALSE;
 }

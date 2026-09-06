@@ -1005,9 +1005,9 @@ char* strip_blank_lines(const char *input_text) {
 }
 
 void print_version() {
-    printf("aiterm version %-16s\n", AITERM_VERSION);
-    printf("Build ID: %s\n", AITERM_BUILDID);
-    printf("Build Time: %s\n", AITERM_BUILD_TIME);
+    printf("aiterm version:\t%s%-16s%s\n", ANSI_CYAN, AITERM_VERSION, ANSI_RESET);
+    printf("Build ID:\t%s%s%s\n", ANSI_CYAN, AITERM_BUILDID, ANSI_RESET);
+    printf("Build Time:\t%s%s%s\n", ANSI_CYAN, AITERM_BUILD_TIME, ANSI_RESET);
 }
 
 

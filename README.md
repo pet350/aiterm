@@ -2,15 +2,22 @@ Markdown
 # aiterm — The AI-Augmented Terminal Emulator
 `aiterm` is an advanced, multi-tabbed terminal emulator written in C, leveraging GTK 3 and the VTE library to inject an interactive, context-aware AI pane directly alongside your shell workflows. Built with defensive engineering principles, it monitors running contexts, handles command telemetry safely, and securely parses terminal and session activities through modern AI models (including Google Gemini and OpenAI) without breaking command-line isolation.
 
+# Version 0.9.9-beta
+* ** New: Export session as plain text, json, html or xml
+* ** New: Printing support
+* ** Bugfix: memory leaks fixed
+* ** Bugfix: snmp dump was using a undefined css tag resulting in the dump 
+* ** ******  being plain white and throwing a GTK error
+* 
 # Version 0.9.9-alpha
 * ** New: Pipe SNMP data directly to AI
 * ** New: SNMP-Manager window, to configure SNMP
+* ** New: Able to select mutiple items in SNMP Manager window at once
+* ** New: Able to sort by column by clicking on column header
 * ** New: Fully functional Auto Execute governed by Policy Manager
 * ** New: Double click the tabs bar to open a new tab
 * ** New: Added to SNMP Manager window a slider to adjust Poll interval time
 * ** New: Per user config files
-* ** Bugfix: memory leaks fixed
-* 
 * ** Looking to add export session and printing support next
 
 # Version 0.9.5-omega
