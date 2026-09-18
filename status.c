@@ -29,22 +29,22 @@ void display_status(AppContext *app) {
     mysql_thread_init();
 
     pthread_mutex_lock(&app->access.db_mutex);
-    DEBUG_PRINT("[DEBUG]: [STATUS] Locked DB Mutex.\n");
+    DEBUG_PRINT("[ DEBUG ]: [STATUS] Locked DB Mutex.\n");
 
     gboolean is_connected = FALSE;
     int ping_res = -1;
 
-    DEBUG_PRINT("[DEBUG]: [STATUS] Checking database connection status...\n");
-    DEBUG_PRINT("[DEBUG]: [STATUS] app->database.global_db_conn pointer value: %p\n", (void*)app->database.global_db_conn);
+    DEBUG_PRINT("[ DEBUG ]: [STATUS] Checking database connection status...\n");
+    DEBUG_PRINT("[ DEBUG ]: [STATUS] app->database.global_db_conn pointer value: %p\n", (void*)app->database.global_db_conn);
 
     if (app->database.global_db_conn != NULL) {
         // mysql_ping returns 0 if the connection is alive
         ping_res = mysql_ping(app->database.global_db_conn);
-        DEBUG_PRINT("[DEBUG]: [STATUS] mysql_ping returned: %d\n", ping_res);
+        DEBUG_PRINT("[ DEBUG ]: [STATUS] mysql_ping returned: %d\n", ping_res);
         if (ping_res == 0) {
             is_connected = TRUE;
         } else {
-            DEBUG_PRINT("[DEBUG]: [STATUS] mysql_ping failed error: %s\n", mysql_error(app->database.global_db_conn));
+            DEBUG_PRINT("[ DEBUG ]: [STATUS] mysql_ping failed error: %s\n", mysql_error(app->database.global_db_conn));
         }
     }
 
@@ -80,6 +80,10 @@ void display_status(AppContext *app) {
 
     const char *SnmpContext_loop_running_val = app->SnmpContext.loop_running ? "Yes" : "No";
     g_string_append_printf(status_report, "SNMP Loop Running:\t%s\n", SnmpContext_loop_running_val);
+    
+    char *snmp_poll_interval_val =  g_malloc(8);
+    snprintf(snmp_poll_interval_val, 8, "%d", app->SnmpContext.poll_interval_sec);
+    g_string_append_printf(status_report, "SNMP Poll Interval:\t%s\n", snmp_poll_interval_val);
 
     const char *debug_mode_val = app->sys.debug_mode ? "ON" : "OFF";
     g_string_append_printf(status_report, "Debug Mode Enabled:\t%s\n", debug_mode_val);
@@ -121,7 +125,7 @@ void display_status(AppContext *app) {
     g_string_append(status_report, "---------------------");
 
     pthread_mutex_unlock(&app->access.db_mutex);
-    DEBUG_PRINT("[DEBUG]: [STATUS] Unlocked DB Mutex.\n");
+    DEBUG_PRINT("[ DEBUG ]: [STATUS] Unlocked DB Mutex.\n");
 
     // 2. Display to the User in the AI Pane with granular coloring
     append_ai_text(app, "[ Local Status ]\n", "cmd_tag");
@@ -175,6 +179,11 @@ void display_status(AppContext *app) {
     // SNMP Loop Running Row
     append_ai_text(app, "SNMP Loop Running:\t", "body_tag");
     append_ai_text(app, SnmpContext_loop_running_val, app->SnmpContext.loop_running ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+    
+    // SNMP Poll Interval Row
+    append_ai_text(app, "SNMP Poll Interval:\t", "body_tag");
+    append_ai_text(app, snmp_poll_interval_val, "ai_tag");
     append_ai_text(app, "\n", "body_tag");
 
     // Requests Per Minute

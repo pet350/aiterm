@@ -29,7 +29,9 @@ void init_snmp_subsystem(AppContext *app) {
     pthread_mutex_init(&app->SnmpContext.lock, NULL);
     pthread_cond_init(&app->SnmpContext.poller_cond, NULL);
 
-    DEBUG_PRINT("[DEBUG]: [SNMP Initialize] pthread mutex/condition initialized\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sSNMP Initialize%s] %spthread mutex/condition initialized%s\n",
+	app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal,
+	app->ansi.lt_green, app->ansi.normal);
 
     app->SnmpContext.initialized = TRUE;
     app->SnmpContext.metrics = NULL;
@@ -60,7 +62,9 @@ void init_snmp_subsystem(AppContext *app) {
         // Default fallback community string
         snprintf(app->SnmpMetric[i].community, sizeof(app->SnmpMetric[i].community), "public");
     }
-    DEBUG_PRINT("[DEBUG]: [SNMP Initialize] Completed\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sSNMP Initialize%s] %sCompleted%s\n",
+	app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal,
+	app->ansi.lt_green, app->ansi.normal);
 }
 
 gboolean snmp_load_targets_from_db(AppContext *app) {
@@ -74,7 +78,10 @@ gboolean snmp_load_targets_from_db(AppContext *app) {
          "FROM snmp_targets LIMIT %d;", MAX_SNMP_HOSTS);
     
     if (mysql_query(app->database.global_db_conn, query)) {
-        DEBUG_PRINT("[DEBUG]: [SNMP] DB query failed: %s\n", mysql_error(app->database.global_db_conn));
+        DEBUG_PRINT("[%s DEBUG %s]: [%sSNMP%s] %sDB query failed: %s%s%s\n", 
+	    app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal,
+            app->ansi.lt_green, app->ansi.lt_red, 
+	    mysql_error(app->database.global_db_conn), app->ansi.normal);
         pthread_mutex_unlock(&app->access.db_mutex);
         return FALSE;
     }
@@ -105,7 +112,9 @@ gboolean snmp_load_targets_from_db(AppContext *app) {
     mysql_free_result(res);
     pthread_mutex_unlock(&app->access.db_mutex);
 
-    DEBUG_PRINT("[DEBUG]: [SNMP] Loaded %d target(s) from database.\n", count);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sSNMP%s] %sLoaded %s%d%s target(s) from database.%s\n",
+	app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal,
+	app->ansi.lt_green, app->ansi.yellow, count, app->ansi.lt_green, app->ansi.normal);
     return TRUE;
 }
 
@@ -120,7 +129,9 @@ gboolean update_snmp_ticker_payload_wrapper(gpointer data) {
      * completed flag acts as a simple hand-off between the poller and the
      * scrolling display. */
     if (!app->aiterm_runtime.ticker_completed) {
-        DEBUG_PRINT("[DEBUG]: [SNMP Ticker] Current payload still scrolling; deferring poll update.\n");
+        DEBUG_PRINT("[%s DEBUG %s]: [%sSNMP Ticker%s] %sCurrent payload still scrolling; %sdeferring poll update%s.\n",
+	    app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal,
+	    app->ansi.lt_green, app->ansi.lt_red, app->ansi.normal);
         return FALSE;
     }
 
@@ -205,7 +216,9 @@ gboolean update_snmp_ticker_payload_wrapper(gpointer data) {
     app->SnmpContext.payload = g_strdup(summary->str);
     pthread_mutex_unlock(&app->SnmpContext.lock);
 
-    DEBUG_PRINT("[DEBUG]: [SNMP Ticker] Updated complete array: %s\n", summary->str);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sSNMP Ticker%s] %sUpdated complete array: %s%s%s\n", 
+	app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal,
+	app->ansi.lt_green, app->ansi.cyan, summary->str, app->ansi.normal);
     g_string_free(summary, TRUE);
 
     return FALSE;
@@ -222,10 +235,14 @@ void dump_raw_snmp_payload_to_ai(AppContext *app) {
     pthread_mutex_unlock(&app->SnmpContext.lock);
 
     if (!payload_copy) {
-        DEBUG_PRINT("[DEBUG]: [Dump SNMP] No Payload to dump!\n");
+        DEBUG_PRINT("[%s DEBUG %s]: [%sDump SNMP%s] %sNo Payload to dump!%s\n",
+	    app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal,
+            app->ansi.lt_green, app->ansi.normal );
         return;
     }
-    DEBUG_PRINT("[DEBUG]: [Dump SNMP] Raw Payload: %s\n", payload_copy);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sDump SNMP%s] %sRaw Payload: %s%s%s\n", 
+	app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal,
+	app->ansi.lt_green, app->ansi.cyan, payload_copy, app->ansi.normal);
 
     // Dispatch the insertion to the main GUI thread
     // Assuming 'append_ai_text' is the primary way to inject into the gemini_view
@@ -340,7 +357,10 @@ void snmp_poll_all_targets(AppContext *app) {
         session.timeout = 1500000L;  // 1.5 seconds
         session.retries = 1;
 
-        DEBUG_PRINT("[DEBUG]: [SNMP] Polling target %u %s OID=%s\n", i + 1, ip_address, oid_str);
+        DEBUG_PRINT("[%s DEBUG %s]: [%sSNMP%s] %sPolling target %s%u %s%s%s OID=%s%s%s\n",
+	    app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal,
+            app->ansi.lt_green, app->ansi.lt_red,  i + 1, app->ansi.yellow, ip_address,
+	    app->ansi.lt_green, app->ansi.cyan,  oid_str, app->ansi.normal);
 
         ss = snmp_open(&session);
         if (!ss) {
@@ -486,7 +506,9 @@ void *snmp_poller_worker(void *data) {
 
         if (app->SnmpContext.enable_gemini_feed && (now - last_gemini_flush >= gemini_flush_interval)) {
             last_gemini_flush = now;
-            DEBUG_PRINT("[DEBUG]: [SNMP Poller] Flushing payload to Gemini.\n");
+            DEBUG_PRINT("[%s DEBUG %s]: [%sSNMP Poller%s] %sFlushing payload to Gemini.%s\n",
+	        app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal,
+                app->ansi.lt_green, app->ansi.normal);
             snmp_flush_to_gemini(app);
         }
 
@@ -498,7 +520,9 @@ void *snmp_poller_worker(void *data) {
 
         if (force_feed) {
             last_gemini_flush = now;
-            DEBUG_PRINT("[DEBUG]: [SNMP Poller] Forced Flushing payload to Gemini.\n");
+            DEBUG_PRINT("[%s DEBUG %s]: [%sSNMP Poller%s] %sForced Flushing payload to Gemini.%s\n",
+	        app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal,
+                app->ansi.lt_green, app->ansi.normal);
             snmp_force_poll(app);
             snmp_flush_to_gemini(app);
         }
@@ -540,7 +564,9 @@ void snmp_start_poller(AppContext *app) {
         DEBUG_PRINT("[ERROR]: [SNMP] Failed to spawn poller thread.\n");
         return;
     }
-    DEBUG_PRINT("[DEBUG]: [SNMP] Poller thread spawned successfully.\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sSNMP%s] %sPoller thread spawned successfully.%s\n",
+	app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal,
+        app->ansi.lt_green, app->ansi.normal);
 }
 
 void snmp_stop_poller(AppContext *app) {
@@ -555,7 +581,9 @@ void snmp_stop_poller(AppContext *app) {
     pthread_mutex_unlock(&app->SnmpContext.lock);
 
     if (was_running && thread != 0) {
-        DEBUG_PRINT("[DEBUG]: [SNMP] Joining poller thread.\n");
+        DEBUG_PRINT("[%s DEBUG %s]: [%sSNMP%s] %sJoining poller thread.%s\n",
+	    app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal,
+            app->ansi.lt_green, app->ansi.normal);
         pthread_join(thread, NULL);
     }
 

@@ -32,11 +32,21 @@
 #include "menu.h"
 #include "snmp_manager.h"
 #include "snmp_manager_gui.h"
+#include "provider_manager_gui.h"
 #include "autoexec.h"
 #include "terminal.h"
 
 extern const char* HIGHLIGHT_STRING;
 extern const char* GENERAL_DIRECTIVES;
+
+void cmd_close_provider_manager_wrapper(AppContext *app, const char *args) {
+    if (app->manager.provider != NULL) {
+        write_to_ai_pane(app, "System: ", "Closing AI Provider Manager window", "ai_tag", "cmd_tag");
+        close_provider_manager(app);
+    } else {
+        write_to_ai_pane(app, "System: ", "AI Provider Manager window is not open", "ai_tag", "cmd_tag");
+    }
+}
 
 // Parse command line options and handle early-exit CLI queries
 void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
@@ -48,15 +58,19 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--debug") == 0) {
-            print_version();
+            print_version(app);
             app->sys.debug_mode = TRUE;
             app->sys.debug_mode_override = TRUE;
         } else if (strcmp(argv[i], "--version") == 0) {
-            print_version();
+            print_version(app);
             exit(0);
+        } else if (strcmp(argv[i], "--color") == 0) {
+	    app->sys.debug_color = TRUE;
+        } else if (strcmp(argv[i], "--bw") == 0) {
+	    app->sys.debug_color = FALSE;
         } else if (strcmp(argv[i], "--list-models") == 0) {
             load_config(app);
-            print_version();
+            print_version(app);
             if (!app->security.master_key) {
                 printf("Error: no master key found!\n");
                 exit(1);
@@ -74,26 +88,35 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
             exit(0);
         } else if (strcmp(argv[i], "--provider") == 0) {
             load_config(app);
-            print_version();
-            char info[512];
-            snprintf(info, sizeof(info), "Provider: %s\nModel: %s", app->provider_config.provider, app->aiterm_runtime.model);
+            init_provider_config(app);
+            print_version(app);
+            char info[1024];
+            snprintf(info, sizeof(info),
+                     "Provider: %s\nModel: %s\nProtocol: %s\nBase URL: %s\nEndpoint: %s",
+                     app->provider_config.provider ? app->provider_config.provider : "(none)",
+                     app->provider_config.model ? app->provider_config.model : "(none)",
+                     app->provider_config.kind == PROVIDER_KIND_GEMINI_GENERATE ?
+                         "Gemini generateContent" : "OpenAI Chat Completions compatible",
+                     app->provider_config.base_url ? app->provider_config.base_url : "(none)",
+                     app->provider_config.endpoint ? app->provider_config.endpoint : "(none)");
             printf("%s\n", info);
+            free_provider_config(&app->provider_config);
             exit(0);
         } else if (strcmp(argv[i], "--directives") == 0) {
             load_config(app);
-            print_version();
+            print_version(app);
             printf("\n%s\n", GENERAL_DIRECTIVES);
             exit(0);
         } else if (strcmp(argv[i], "--highlights") == 0) {
             load_config(app);
-            print_version();
+            print_version(app);
             printf("\n%s\n", HIGHLIGHT_STRING);
             exit(0);
         } else if (strcmp(argv[i], "--features") == 0) {
             printf("%s\n", get_features_text());
             exit(0);
         } else if (strcmp(argv[i], "--help") == 0) {
-            print_version();
+            print_version(app);
             printf("%s\n%s\n", get_cmd_help(), HIGHLIGHT_STRING);
             exit(0);
         // Added decrypt functionality 0.9.6-omega
@@ -102,7 +125,7 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
                 fprintf(stderr, "Error: You must provide a master key (via --master or AITERM_MASTER_KEY) before encrypting.\n");
                 exit(1);
             }
-            print_version();
+            print_version(app);
             load_config(app);            
             printf("Decrypted AI Key:\t%s\n", app->security.api_key);
             printf("Decrypted DB Password:\t%s\n", app->database.db_pass);
@@ -116,7 +139,7 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
     	    }
             char *plaintext = argv[i] + 11;
             char *encrypted = crypt_to_hex(plaintext, app->security.master_key);
-            print_version();
+            print_version(app);
             if (encrypted) {
         	printf("Encrypted string: %s\n", encrypted);
         	free(encrypted);
@@ -140,9 +163,11 @@ static CommandRegistry registry[] = {
     {"clear", "Clear the contents of the AI pane", handle_clear_wrapper},
     {"close history manager", "Closes the history manager window", cmd_close_history_manager_wrapper},
     {"close noise manager", "Closes the noise filter manager window", cmd_close_noise_manager_wrapper},
+    {"close provider manager", "Closes the AI provider manager window", cmd_close_provider_manager_wrapper},
     {"close policy manager", "Closes the policy manager window", cmd_close_policy_manager_wrapper},
     {"close session manager", "Closes the session manager window", cmd_close_session_manager_wrapper},
     {"close snmp manager", "Closes the snmp manager window", cmd_close_snmp_manager_wrapper},
+    {"color", "Toggle colorized debug output text (on/off/status)", cmd_toggle_debug_color},
     {"command line help", "display all command line options", cmd_show_command_line_help_wrapper},
     {"debug", "Toggle debug mode out stderr (on/off/status)", cmd_toggle_debug},
     {"directives", "Display AI Directives", handle_directive_wrapper},
@@ -161,6 +186,7 @@ static CommandRegistry registry[] = {
     {"noise reload", "Reload noise filters from database", cmd_noisefilter_reload_wrapper},
     {"open history manager", "Open History Manager window", cmd_history_manager_wrapper},
     {"open noise manager", "Opens Noise Filter Manager window", cmd_noisefilter_manager_wrapper},
+    {"open provider manager", "Opens AI Provider Manager window", cmd_provider_manager_wrapper},
     {"open policy manager", "Open Policy Manager window", cmd_policy_manager_wrapper},
     {"open snmp manager", "Opens SNMP Target Manager window", cmd_snmp_manager_wrapper},
     {"open session manager", "Opens the session manager window", cmd_session_manager_wrapper},
@@ -383,7 +409,8 @@ void display_dynamic_help(AppContext *app) {
     GString *help = g_string_new("--- Available Commands ---\n");
     for (int i = 0; registry[i].name != NULL; i++) {
         current_len = strlen(registry[i].name);
-        g_string_append_printf(help, registry[i].name);
+	char *temp_name = g_strdup( (char *)registry[i].name);
+        g_string_append_printf(help, "%s", temp_name);
        while(current_len < max_len+2) {
            current_len++;
            g_string_append_printf(help, ".");
@@ -586,11 +613,11 @@ void handle_reset_state_wrapper(AppContext *app, const char *args) {
     write_to_ai_pane(app, "AI State:", "Reset processing state", "system_tag", "ai_tag");
     if (g_atomic_int_get(&app->sys.is_processing)) {
         g_atomic_int_set(&app->sys.is_processing, 0);
-        DEBUG_PRINT("[DEBUG]: RESET_STATE: cleared is_processing flag\n");
+        DEBUG_PRINT("[ DEBUG ]: RESET_STATE: cleared is_processing flag\n");
     }
     if (g_atomic_int_get(&app->sys.ai_busy)) {
         g_atomic_int_set(&app->sys.ai_busy, 0);
-        DEBUG_PRINT("[DEBUG]: RESET_STATE: cleared ai_busy flag\n");
+        DEBUG_PRINT("[ DEBUG ]: RESET_STATE: cleared ai_busy flag\n");
     }
     gemini_cache_invalidate(app);
 }
@@ -750,26 +777,32 @@ void cmd_session_no_default(AppContext *app, const char *args) {
 }
 
 void cmd_session_manager_wrapper(AppContext *app, const char *args) {
-    DEBUG_PRINT("[DEBUG]: [Commands]: Opening Session Manager Window\n");
+    DEBUG_PRINT("[ DEBUG ]: [Commands]: Opening Session Manager Window\n");
     write_to_ai_pane(app, "System: ", "Opening session manager window", "ai_tag", "cmd_tag");
     open_session_manager_window(app);
 }
 
 void cmd_history_manager_wrapper(AppContext *app, const char *args) {
-    DEBUG_PRINT("[DEBUG]: [Commands]: Opening History Manager Window\n");
+    DEBUG_PRINT("[ DEBUG ]: [Commands]: Opening History Manager Window\n");
     write_to_ai_pane(app, "System: ", "Opening history manager window", "ai_tag", "cmd_tag");
     open_history_manager_window(app);
 }
 
 void cmd_noisefilter_manager_wrapper(AppContext *app, const char *args) {
-    DEBUG_PRINT("[DEBUG]: [Commands]: Opening Noise Filter Manager Window\n");
+    DEBUG_PRINT("[ DEBUG ]: [Commands]: Opening Noise Filter Manager Window\n");
     noise_filter_load_from_db(app);
     write_to_ai_pane(app, "System: ", "Opening noise filter manager window", "ai_tag", "cmd_tag");
     open_noise_filter_manager_window(app);
 }
 
+void cmd_provider_manager_wrapper(AppContext *app, const char *args) {
+    DEBUG_PRINT("[ DEBUG ]: [Commands]: Opening AI Provider Manager Window\n");
+    write_to_ai_pane(app, "System: ", "Opening AI Provider Manager window", "ai_tag", "cmd_tag");
+    open_provider_manager_window(app);
+}
+
 void cmd_policy_manager_wrapper(AppContext *app, const char *args) {
-    DEBUG_PRINT("[DEBUG]: [Commands]: Opening Policy Manager Window\n");
+    DEBUG_PRINT("[ DEBUG ]: [Commands]: Opening Policy Manager Window\n");
     write_to_ai_pane(app, "System: ", "Opening policy manager window", "ai_tag", "cmd_tag");
     open_policy_manager_window(app);
 }
@@ -803,7 +836,7 @@ void cmd_set_rpm(AppContext *app, const char *args) {
 
     // 5. Safely convert the sanitized string to an integer
     app->limiter.requests_per_minute = atoi(ptr);
-    DEBUG_PRINT("[DEBUG]: Ratelimit: Requests Per Minute set to %d (Parsed from raw input)\n", 
+    DEBUG_PRINT("[ DEBUG ]: Ratelimit: Requests Per Minute set to %d (Parsed from raw input)\n", 
                 app->limiter.requests_per_minute);
 
     // Re-initialize the rate limiter state with the newly validated RPM
@@ -844,7 +877,7 @@ void cmd_set_retry_times(AppContext *app, const char *args) {
 
     // 5. Safely convert the sanitized string to an integer
     app->retry_config.max_retries = atoi(ptr);
-    DEBUG_PRINT("[DEBUG]: [AutoRetry] Maximum retries set to %d (Parsed from raw input)\n", 
+    DEBUG_PRINT("[ DEBUG ]: [AutoRetry] Maximum retries set to %d (Parsed from raw input)\n", 
                 app->retry_config.max_retries);
 
     GString *status_report = g_string_new(": Maximum retries is set to");
@@ -884,7 +917,7 @@ void cmd_set_retry_delay(AppContext *app, const char *args) {
 
     // 5. Safely convert the sanitized string to an integer
     app->retry_config.delay_sec = atoi(ptr);
-    DEBUG_PRINT("[DEBUG]: [AutoRetry] Delay set to %d seconds (Parsed from raw input)\n",
+    DEBUG_PRINT("[ DEBUG ]: [AutoRetry] Delay set to %d seconds (Parsed from raw input)\n",
                 app->retry_config.delay_sec);
 
     GString *status_report = g_string_new(": AutoReply delay is set to");
@@ -1418,6 +1451,41 @@ void cmd_toggle_xml_tagging(AppContext *app, const char *args) {
     write_to_ai_pane_wrapper(app, state ? ": XML Payload Tagging Enabled." : ": XML Payload Tagging Disabled.");
     sync_toggle_ui_elements(app);
     noise_filter_load_from_db(app);
+}
+
+void cmd_toggle_debug_color(AppContext *app, const char *args) {
+    const char *ptr = args;
+    gboolean state = FALSE;
+
+    if (ptr && *ptr == ' ') {
+        ptr++;
+    }
+
+    if (!ptr || strlen(ptr) == 0) {
+        write_to_ai_pane_wrapper(app,": Required parameter missing: ON, OFF, or STATUS");
+        return;
+    }
+
+    if (strcmp(ptr, "on") == 0) {
+        state = TRUE;
+    } else if (strcmp(ptr, "off") == 0) {
+        state = FALSE;
+    } else if (strcmp(ptr, "status") == 0) {
+        state = app->sys.debug_color;
+        write_to_ai_pane_wrapper(app, state ? ": Colorized debug text Enabled." : ": Colorized debug text Disabled.");
+        sync_toggle_ui_elements(app);
+        return;
+    } else {
+        GString *msg = g_string_new(": Unknown parameter parsed: ");
+        g_string_append_printf(msg, "%s ", ptr);
+        write_to_ai_pane_wrapper(app, msg->str);
+        return;
+    }
+
+    app->sys.debug_color = state;
+    write_to_ai_pane_wrapper(app, state ? ": Colorized debug text Enabled." : ": Colorized debug text Disabled.");
+    init_colors(app);
+    sync_toggle_ui_elements(app);
 }
 
 // ================= End of Toggle ON / OFF functions  ======================

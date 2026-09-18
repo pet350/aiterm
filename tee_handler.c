@@ -11,6 +11,7 @@
 #include "update.h"
 #include "gemini.h"
 #include "openai.h"
+#include "ai_provider.h"
 #include "utils.h"
 #include "session_manager.h"
 #include "noisefilter.h"
@@ -34,9 +35,25 @@ static gboolean snmp_status_idle(gpointer data) {
 
 void tee_handler_init(AppContext *app) {
     if (!app) return;
+
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     app->aiterm_runtime.tee_accumulator = g_string_new("");
     g_mutex_init(&app->access.buffer_mutex);
-    DEBUG_PRINT("[DEBUG]: [Tee Handler] initialized.\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTee Handler%s] %sinitialized.%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 // ATOMIC SNAPSHOT (The 0.8.2 fix):
@@ -46,14 +63,30 @@ char* tee_extract_for_ai(AppContext *app) {
     if (!app || !app->aiterm_runtime.tee_accumulator) return NULL;
     char *snapshot = NULL;
 
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     g_mutex_lock(&app->access.buffer_mutex);
-    DEBUG_PRINT("[DEBUG]: [TEE_EXTRACT_FOR_AI]: Locked buffer mutex\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_EXTRACT_FOR_AI%s]: %sLocked buffer mutex%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
     if (app->aiterm_runtime.tee_accumulator->len > 5) {
         snapshot = g_strdup(app->aiterm_runtime.tee_accumulator->str);
         g_string_assign(app->aiterm_runtime.tee_accumulator, "");
     }
     g_mutex_unlock(&app->access.buffer_mutex);
-    DEBUG_PRINT("[DEBUG]: [TEE_EXTRACT_FOR_AI]: Unlocked buffer mutex\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_EXTRACT_FOR_AI%s]: %sUnlocked buffer mutex%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     return strip_blank_lines(snapshot);
 }
 
@@ -65,6 +98,13 @@ void tee_flush_timed(AppContext *app) {
     if (!g_atomic_int_compare_and_exchange(&app->sys.is_processing, 0, 1))
         return;
 
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     // Grab the text snapshot safely
     char *local_out = tee_extract_for_ai(app);
     if (!local_out) {
@@ -72,7 +112,9 @@ void tee_flush_timed(AppContext *app) {
         return;
     }
 
-    DEBUG_PRINT("[DEBUG]: [Timed Tee Flush] Processing Payload\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTimed Tee Flush%s] %sProcessing Payload%s\n",
+	lt_pl, nml, cy, nml, yl, nml);
+
     update_status_label(app, "AI is analyzing (Background)...");
 
     // Package data for the background thread
@@ -84,6 +126,13 @@ void tee_flush_timed(AppContext *app) {
 
     // START BACKGROUND THREAD: This is what stops the terminal from hanging!
     g_thread_unref(g_thread_new("tee_background_worker", (GThreadFunc)tee_ai_thread_func, trd));
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 // BACKGROUND WORKER:
@@ -104,12 +153,7 @@ static gpointer tee_ai_thread_func(gpointer data) {
     wrapped_prompt = xml_wrap_with_type(app, clean_prompt, TAG_LOG_DUMP);
     g_free(clean_prompt);
 
-    char *response = NULL;
-    if (app->provider_config.kind == PROVIDER_KIND_GEMINI_GENERATE) {
-        response = send_to_gemini(app, wrapped_prompt);
-    } else {
-        response = send_to_openai(app, wrapped_prompt);
-    }
+    char *response = ai_provider_send(app, wrapped_prompt);
 
     if (response) {
         trd->response_text = strip_blank_lines(response);
@@ -130,25 +174,35 @@ static gpointer tee_ai_thread_func(gpointer data) {
 // GUI UPDATE CALLBACK:
 // Safely runs on the Main UI Thread to update GTK widgets.
 static gboolean update_tee_ui(gpointer data) {
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     TeeResponseData *trd = (TeeResponseData *)data;
     if (!trd || !trd->app) return FALSE;
 
-    DEBUG_PRINT("[MEMDBG]: [TEE_UI] trd=%p terminal=%p response=%p\n",
-                (void*)trd, (void*)trd->terminal_output, (void*)trd->response_text);
+    DEBUG_PRINT("[%sMEMDBG%s ]: [%sTEE_UI%s] %strd=[%s%p%s] terminal=[%s%p%s] response=[%s%p%s]%s\n",
+	lt_pl, nml, cy, nml, yl,
+        red, (void*)trd, yl,
+        red, (void*)trd->terminal_output, yl,
+	red, (void*)trd->response_text, yl, nml);
     char *ai_text = extract_ai_text(trd->response_text);
-    DEBUG_PRINT("[MEMDBG]: [TEE_UI] extract_ai_text -> %p\n", (void*)ai_text);
+    DEBUG_PRINT("[MEMDBG ]: [TEE_UI] extract_ai_text -> %p\n", (void*)ai_text);
 
     if (ai_text) {
         // Display in AI Pane
         write_to_ai_pane(trd->app, "AI (Auto-Reply): ", ai_text, "user_tag", "ai_tag");
 
         // SAVE TO DATABASE: Ensure automated insights are in the 100-msg history
-        DEBUG_PRINT("[MEMDBG]: [TEE_UI] BEFORE save_tee_to_history terminal=%p ai=%p\n",
+        DEBUG_PRINT("[MEMDBG ]: [TEE_UI] BEFORE save_tee_to_history terminal=%p ai=%p\n",
                     (void*)trd->terminal_output, (void*)ai_text);
         save_tee_to_history(trd->terminal_output, ai_text);
-        DEBUG_PRINT("[MEMDBG]: [TEE_UI] AFTER save_tee_to_history ai=%p\n", (void*)ai_text);
+        DEBUG_PRINT("[MEMDBG ]: [TEE_UI] AFTER save_tee_to_history ai=%p\n", (void*)ai_text);
 
-        DEBUG_PRINT("[MEMDBG]: [TEE_UI] FREE ai_text=%p\n", (void*)ai_text);
+        DEBUG_PRINT("[MEMDBG ]: [TEE_UI] FREE ai_text=%p\n", (void*)ai_text);
         g_free(ai_text);
     } else {
         write_to_ai_pane(trd->app, "System: ", "Tee Analysis failed to return text.", "cmd_tag", "cmd_tag");
@@ -159,12 +213,18 @@ static gboolean update_tee_ui(gpointer data) {
     g_atomic_int_set(&trd->app->sys.is_processing, 0);
 
     // Final memory cleanup
-    DEBUG_PRINT("[MEMDBG]: [TEE_UI] FREE response_text=%p\n", (void*)trd->response_text);
+    DEBUG_PRINT("[MEMDBG ]: [TEE_UI] FREE response_text=%p\n", (void*)trd->response_text);
     if (trd->response_text) g_free(trd->response_text);
-    DEBUG_PRINT("[MEMDBG]: [TEE_UI] FREE terminal_output=%p\n", (void*)trd->terminal_output);
+    DEBUG_PRINT("[MEMDBG ]: [TEE_UI] FREE terminal_output=%p\n", (void*)trd->terminal_output);
     if (trd->terminal_output) g_free(trd->terminal_output);
-    DEBUG_PRINT("[MEMDBG]: [TEE_UI] FREE trd=%p\n", (void*)trd);
+    DEBUG_PRINT("[MEMDBG ]: [TEE_UI] FREE trd=%p\n", (void*)trd);
     g_free(trd);
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
 
     return FALSE;
 }
@@ -172,12 +232,12 @@ static gboolean update_tee_ui(gpointer data) {
 void tee_handle_input(AppContext *app, const char *text) {
     if (!text || !app->aiterm_runtime.tee_accumulator) return;
     char *clean_text = strip_blank_lines(text);
-    DEBUG_PRINT("[DEBUG]: TEE_HANDLE_INPUT: Locked buffer mutex\n");
+    DEBUG_PRINT("[ DEBUG ]: TEE_HANDLE_INPUT: Locked buffer mutex\n");
     g_mutex_lock(&app->access.buffer_mutex);
     g_string_append(app->aiterm_runtime.tee_accumulator, clean_text);
     g_mutex_unlock(&app->access.buffer_mutex);
     g_free(clean_text);
-    DEBUG_PRINT("[DEBUG]: TEE_HANDLE_INPUT: Unlocked buffer mutex\n");
+    DEBUG_PRINT("[ DEBUG ]: TEE_HANDLE_INPUT: Unlocked buffer mutex\n");
 }
 
 void tee_handle_output(AppContext *app, const char *text_in) {
@@ -188,16 +248,16 @@ void tee_handle_output(AppContext *app, const char *text_in) {
     g_free(blank_clean);
     if (!text) return;
 
-    DEBUG_PRINT("[DEBUG]: [Tee Handler] %s\n", text);
+    DEBUG_PRINT("[ DEBUG ]: [Tee Handler] %s\n", text);
 
     g_mutex_lock(&app->access.buffer_mutex);
-    DEBUG_PRINT("[DEBUG]: TEE_HANDLE_OUTPUT: Locked buffer mutex\n");
+    DEBUG_PRINT("[ DEBUG ]: TEE_HANDLE_OUTPUT: Locked buffer mutex\n");
     // Delta Upgrade: If AI is already busy, ignore heavy stream chatter
     // to protect context integrity and memory.
     if (g_atomic_int_get(&app->sys.is_processing) && app->aiterm_runtime.tee_accumulator->len > 51200) {
         g_mutex_unlock(&app->access.buffer_mutex);
         g_free(text);
-	DEBUG_PRINT("[DEBUG]: TEE_HANDLE_OUTPUT: Unlocked buffer mutex\n");
+	DEBUG_PRINT("[ DEBUG ]: TEE_HANDLE_OUTPUT: Unlocked buffer mutex\n");
         return;
     }
     char *clean_text = strip_blank_lines(text);
@@ -217,7 +277,7 @@ void tee_handle_output(AppContext *app, const char *text_in) {
     g_mutex_unlock(&app->access.buffer_mutex);
     g_free(clean_text);
     g_free(text);
-    DEBUG_PRINT("[DEBUG]: TEE_HANDLE_OUTPUT: Unlocked buffer mutex\n");
+    DEBUG_PRINT("[ DEBUG ]: TEE_HANDLE_OUTPUT: Unlocked buffer mutex\n");
 }
 
 // Process C-level SNMP poller data and send to Gemini/OpenAI off the main UI thread
@@ -226,7 +286,7 @@ void pipe_snmp_to_gemini(AppContext *app, const char *raw_snmp_data) {
 
     // Don't stack requests if the AI API is already processing an active prompt
     if (g_atomic_int_get(&app->sys.is_processing)) {
-        DEBUG_PRINT("[DEBUG]: [SNMP Pipe] AI is busy, skipping SNMP tick.\n");
+        DEBUG_PRINT("[ DEBUG ]: [SNMP Pipe] AI is busy, skipping SNMP tick.\n");
         return;
     }
 
@@ -234,7 +294,7 @@ void pipe_snmp_to_gemini(AppContext *app, const char *raw_snmp_data) {
     char *clean_snmp = strip_blank_lines(raw_snmp_data);
     if (!clean_snmp || strlen(clean_snmp) == 0) return;
 
-    DEBUG_PRINT("[DEBUG]: [SNMP Pipe] Packaging SNMP data for AI analysis...\n");
+    DEBUG_PRINT("[ DEBUG ]: [SNMP Pipe] Packaging SNMP data for AI analysis...\n");
 
     // Format an explicit system prompt directing the AI to analyze network metrics
     char *formatted_prompt = g_strdup_printf(
@@ -253,7 +313,7 @@ void pipe_snmp_to_gemini(AppContext *app, const char *raw_snmp_data) {
 
     // Set non-blocking UI status
     if (!g_atomic_int_compare_and_exchange(&app->sys.is_processing, 0, 1)) {
-        DEBUG_PRINT("[DEBUG]: [SNMP Pipe] AI became busy before reservation; dropping tick.\n");
+        DEBUG_PRINT("[ DEBUG ]: [SNMP Pipe] AI became busy before reservation; dropping tick.\n");
         g_free(trd->terminal_output);
         g_free(trd);
         return;
@@ -280,12 +340,7 @@ static gpointer snmp_ai_thread_func(gpointer data) {
     char *wrapped_prompt = xml_wrap_with_type(app, clean_prompt, TAG_LOG_DUMP);
     g_free(clean_prompt);
 
-    char *response = NULL;
-    if (app->provider_config.kind == PROVIDER_KIND_GEMINI_GENERATE) {
-        response = send_to_gemini(app, wrapped_prompt);
-    } else {
-        response = send_to_openai(app, wrapped_prompt);
-    }
+    char *response = ai_provider_send(app, wrapped_prompt);
 
     if (response) {
         trd->response_text = strip_blank_lines(response);
@@ -314,7 +369,7 @@ void snmp_flush_to_gemini(AppContext *app) {
     }
 
     if (!g_atomic_int_compare_and_exchange(&app->sys.is_processing, 0, 1)) {
-        DEBUG_PRINT("[DEBUG]: [SNMP Flush] AI became busy before reservation; deferring.\n");
+        DEBUG_PRINT("[ DEBUG ]: [SNMP Flush] AI became busy before reservation; deferring.\n");
         g_free(telemetry_xml);
         return;
     }

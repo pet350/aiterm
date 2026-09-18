@@ -27,19 +27,50 @@
 
 // Initialize local command cache
 void init_local_cmd_history(AppContext *app) {
-    DEBUG_PRINT("[DEBUG]: [Local Command Cache] Initializing\n");
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sLocal Command Cache%s]%s Initializing%s\n",
+	lt_pl, nml, cy, nml, yl, nml);
     app->local.cmd_history = g_ptr_array_new_with_free_func(g_free);
     app->local.history_index = 0;
     app->local.history_temp_entry = NULL;
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 // Initialize token metric tracker variables
 void init_token_tracker(AppContext *app) {
-    DEBUG_PRINT("[DEBUG]: [Token Tracker] Initializing baseline metrics\n");
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sToken Tracker%s] %sInitializing baseline metrics%s\n",
+	lt_pl, nml, cy, nml, yl, nml);
     app->tokens.bar = NULL;     // Safe pointer tracking before widget creation
     app->tokens.current = 0;    // Start session at 0 tokens
     app->tokens.max = 1000000;   // Default 1M token budget (e.g., Gemini 1.5 Pro)
     app->tokens.last = 0;       // No transactions processed yet
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 gboolean on_entry_key_press(GtkWidget *widget, GdkEventKey *event, gpointer user_data) {
@@ -260,19 +291,38 @@ void apply_custom_theme() {
 static gboolean on_window_key_press(GtkWidget *widget, GdkEventKey *event, gpointer data) {
     AppContext *app = (AppContext *)data;
 
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     if ((event->state & GDK_CONTROL_MASK) && event->keyval == GDK_KEY_Tab) {
         if (gtk_widget_has_focus(app->gui.entry)) {
             if (app->gui.terminal_view) gtk_widget_grab_focus(app->gui.terminal_view);
-            DEBUG_PRINT("[DEBUG]: Focus: Active Terminal Tab\n");
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sFocus%s]: %sActive Terminal Tab%s\n",
+		lt_pl, nml, cy, nml, gr, nml);
+
         } else if (app->gui.terminal_view && gtk_widget_has_focus(app->gui.terminal_view)) {
             gtk_widget_grab_focus(app->gui.gemini_view);
-            DEBUG_PRINT("[DEBUG]: Focus: AI View\n");
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sFocus%s]: %s View%s\n",
+		lt_pl, nml, cy, nml, gr, nml);
+
         } else {
             gtk_widget_grab_focus(app->gui.entry);
-            DEBUG_PRINT("[DEBUG]: Focus: Input\n");
+            DEBUG_PRINT("[ %sDEBUG%s ]: [;%sFocus%s]: %sInput%s\n",
+		lt_pl, nml, cy, nml, gr, nml);
         }
         return TRUE;
     }
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     return FALSE;
 }
 
@@ -280,6 +330,13 @@ static gboolean on_window_key_press(GtkWidget *widget, GdkEventKey *event, gpoin
 // Updated 0.9.4
 void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_num, gpointer data) {
     AppContext *app = (AppContext *)data;
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
 
     // The page added inside our scroll windows is the scrolled window container.
     // We dig out its child to grab the pure active VteTerminal instance.
@@ -289,17 +346,33 @@ void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_num, gpoi
     if (VTE_IS_TERMINAL(terminal)) {
         app->gui.terminal_view = terminal;
         app->ui.vterm = terminal; // 0.9.4 addition
-        DEBUG_PRINT("[DEBUG]: [TAB_CHANGED]: Focused tab shifted to Page #%d (Widget: %p)\n", page_num, (void*)terminal);
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTAB_CHANGED%s]: %sFocused tab shifted to Page %s#%d%s (Widget: %s%p%s)%s\n",
+		lt_pl, nml, cy, nml, gr,
+		red, page_num, gr,
+		red, (void*)terminal, gr, nml);
 
         // Push current fonts and transparency settings dynamically down to the new pane
         apply_visual_settings(app);
     }
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 // Total rework on 0.9.6
 // NEW: Modular spawner adding fully functional isolated terminals into the notebook array
 void add_terminal_tab(AppContext *app) {
     static int tab_counter = 0;
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
 
     // Safety check against exceeding MAX_TABS threshold
     gint current_count = gtk_notebook_get_n_pages(GTK_NOTEBOOK(app->gui.notebook));
@@ -309,7 +382,9 @@ void add_terminal_tab(AppContext *app) {
     }
 
     tab_counter++;
-    DEBUG_PRINT("[DEBUG]: [Tabs] Opening new tab instance #%d\n", tab_counter);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTabs%s] %sOpening new tab instance [%s#%d%s]%s\n",
+	lt_pl, nml, cy, nml, yl, 
+	red, tab_counter, yl, nml);
 
     // 1. Build infrastructure terminal elements
     GtkWidget *term_scroll = gtk_scrolled_window_new(NULL, NULL);
@@ -360,6 +435,12 @@ void add_terminal_tab(AppContext *app) {
     // 6. Jump focus directly to our newly allocated workspace
     gtk_notebook_set_current_page(GTK_NOTEBOOK(app->gui.notebook), index);
     gtk_widget_grab_focus(new_terminal);
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
 }
 
 // Added 0.9.6
@@ -377,7 +458,7 @@ void on_tab_close_clicked(GtkButton *button, gpointer user_data) {
     if (page_num != -1) {
         gint total_pages = gtk_notebook_get_n_pages(GTK_NOTEBOOK(app->gui.notebook));
 
-        DEBUG_PRINT("[DEBUG]: [Tabs] Closing GTK page index #%d (Total open: %d)\n", page_num, total_pages);
+        DEBUG_PRINT("[ DEBUG ]: [Tabs] Closing GTK page index #%d (Total open: %d)\n", page_num, total_pages);
 
         // 1. Remove the page from the GTK Notebook container
         gtk_notebook_remove_page(GTK_NOTEBOOK(app->gui.notebook), page_num);
@@ -484,7 +565,7 @@ void set_icon(AppContext *app) {
     if (icon) {
         gtk_window_set_icon(GTK_WINDOW(app->gui.window), icon);
         g_object_unref(icon);
-        DEBUG_PRINT("[DEBUG]: [Embedded icon]: loaded from GResource successfully.\n");
+        DEBUG_PRINT("[ DEBUG ]: [Embedded icon]: loaded from GResource successfully.\n");
     } else {
         g_warning("Could not load embedded icon: %s", icon_error->message);
         if (icon_error) g_error_free(icon_error);
@@ -702,7 +783,7 @@ gboolean update_snmp_ticker_scroll(gpointer user_data) {
     if ((glong)app->gui.snmp_ticker_offset >= len) {
         app->gui.snmp_ticker_offset = 0;
         app->aiterm_runtime.ticker_completed = TRUE;
-        DEBUG_PRINT("[DEBUG]: [SNMP Ticker] Full payload completed one pass. Ready for next poll.\n");
+        DEBUG_PRINT("[ DEBUG ]: [SNMP Ticker] Full payload completed one pass. Ready for next poll.\n");
     }
 
     return TRUE;
@@ -711,9 +792,17 @@ gboolean update_snmp_ticker_scroll(gpointer user_data) {
 void update_snmp_ticker_payload(AppContext *app, const char *payload_summary) {
     if (!app) return;
 
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     // Don't update payload if ticker is disabled
     if (!app->sys.snmp_ticker_enabled) {
-        DEBUG_PRINT("[DEBUG]: [SNMP Ticker] Ignoring payload update - ticker disabled\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSNMP Ticker%s] %sIgnoring payload update - ticker disabled%s\n",
+		lt_pl, nml, cy, nml, red, nml);
         return;
     }
 
@@ -750,9 +839,18 @@ void update_snmp_ticker_payload(AppContext *app, const char *payload_summary) {
     if (app->gui.snmp_ticker_label)
         gtk_widget_queue_draw(app->gui.snmp_ticker_label);
 
-    DEBUG_PRINT("[DEBUG]: [SNMP Ticker] Payload length=%zu chars=%zu\n",
-                strlen(app->gui.snmp_ticker_text),
-                (size_t)g_utf8_strlen(app->gui.snmp_ticker_text, -1));
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSNMP Ticker%s] %sPayload length=%s%zu%s chars=%s%zu%s\n",
+                lt_pl, nml, cy, nml, yl, 
+		red, strlen(app->gui.snmp_ticker_text), yl,
+                red, (size_t)g_utf8_strlen(app->gui.snmp_ticker_text, -1), nml);
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
+
 }
 
 // Self explainatory!! Totally Revised 0.9.4
@@ -762,7 +860,21 @@ void setup_gui(AppContext *app) {
     // 1. Create Window Base Framework
     app->gui.window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     app->ui.window = app->gui.window;
-    g_signal_connect_after(app->gui.window, "key-press-event", G_CALLBACK(on_window_key_press), app);
+
+    /* Idle detection watches real user input at the top-level window.
+     * Background SNMP polling, terminal output, and AI responses do not
+     * count as activity, so an unattended instance can actually go idle. */
+    gtk_widget_add_events(app->gui.window,
+        GDK_KEY_PRESS_MASK |
+        GDK_BUTTON_PRESS_MASK |
+        GDK_POINTER_MOTION_MASK |
+        GDK_SCROLL_MASK |
+        GDK_TOUCH_MASK |
+        GDK_FOCUS_CHANGE_MASK);
+    g_signal_connect_after(app->gui.window, "event-after",
+                           G_CALLBACK(idle_event_after), app);
+    g_signal_connect_after(app->gui.window, "key-press-event",
+                           G_CALLBACK(on_window_key_press), app);
     set_icon(app);
 
     GdkScreen *screen = gtk_window_get_screen(GTK_WINDOW(app->gui.window));
@@ -776,7 +888,7 @@ void setup_gui(AppContext *app) {
     gtk_window_set_title(GTK_WINDOW(app->gui.window), "AI-Term C/GTK Edition");
     gtk_window_set_role(GTK_WINDOW(app->gui.window), AITERM_WM_ROLE);
     gtk_window_set_wmclass(GTK_WINDOW(app->gui.window), AITERM_WM_CLASS, "Aiterm");
-    DEBUG_PRINT("[DEBUG]: [Setup Gui] Set Window Title, Role and wmclass\n");
+    DEBUG_PRINT("[ DEBUG ]: [Setup Gui] Set Window Title, Role and wmclass\n");
 
     gtk_window_set_default_size(GTK_WINDOW(app->gui.window), 1000, 600);
     g_signal_connect(app->gui.window, "destroy", G_CALLBACK(gtk_main_quit), NULL);

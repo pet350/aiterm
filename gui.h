@@ -22,6 +22,7 @@
 #include <openssl/evp.h>
 #include <time.h>
 #include "ratelimit.h"
+#include "idle.h"
 
 // define some static variables
 #define APP_NAME	"aiterm"
@@ -31,6 +32,24 @@
 
 #define AITERM_WM_CLASS "aiterm"
 #define AITERM_WM_ROLE  "terminal"
+
+// Added 0.9.9-beta
+// Structure for ansi colors to be used 
+// for the debug output to a console TTY
+typedef struct {
+    char *red;
+    char *yellow;
+    char *green;
+    char *blue;
+    char *purple;
+    char *orange;
+    char *cyan;
+    char *lt_red;
+    char *lt_green;
+    char *lt_blue;
+    char *lt_purple;
+    char *normal;
+} ANSI_Color;
 
 // Added 0.9.7-Delta
 // this is where we start ai snmp monitoring!!
@@ -137,6 +156,8 @@ typedef struct {
 
 // enum of supported AI APIs
 typedef enum {
+    /* OpenAI Chat Completions compatible APIs: OpenAI, Groq, OpenRouter,
+     * Mistral, Ollama and other compatible endpoints. */
     PROVIDER_KIND_OPENAI_CHAT,
     PROVIDER_KIND_GEMINI_GENERATE
 } ProviderKind;
@@ -233,6 +254,7 @@ typedef struct {
     GtkWidget *noise;
     GtkWidget *history;
     GtkWidget *snmp;
+    GtkWidget *provider;
 } ManagerWindows;
 
 // Structure containing Local Command History
@@ -307,6 +329,10 @@ typedef struct {
     gboolean session_read_global;         // Added 0.9.7-alpha
     gboolean load_from_session; 	  // Added 0.9.7-alpha
     gboolean snmp_ticker_enabled;	  // Added 0.9.8-tau-5
+    gboolean is_network_available;	  // Added 0.9.9-beta
+    gboolean offline_override;		  // Added 0.9.9-beta
+    gboolean debug_color;		  // Added 0.9.9-beta
+    gboolean debug_tty;			  // Added 0.9.9-beta
 } SystemBooleans;
 
 // All main GUI related variable structure
@@ -396,7 +422,8 @@ typedef struct {
 // Constantly being updated
 // Completely modularized AppContext: 0.9.5-omega
 // Gemini stated: `AppContext` root now exclusively acts as a "Table of Contents" for your sub-systems.
-typedef struct {
+typedef struct AppContext {
+    ANSI_Color		ansi;				// colorize the debug messages
     ResourceControl	access;				// Control over multi-threaded DB resources
     RunTimeVariables	aiterm_runtime;			// Misc runtime buffers and command queues
     SQL_DataBase	database;			// MySQL database connection and counters
@@ -406,7 +433,7 @@ typedef struct {
     SysWidgets		gui;				// Core system GUI widgets and theme providers
     RateLimiter		limiter;			// API rate-limiting structures
     LocalCommand	local;				// Shell command history cache
-    ManagerWindows	manager;			// Handles for policy, session, noise, and history windows
+    ManagerWindows	manager;			// Handles for policy, session, noise, history, SNMP, and provider windows
     NetworkConfig	net;				// System interface network configuration
     NoiseFilter		noise;				// Active noise filter rules loaded from DB
     PrintConfig		print_opts;			// GTK printer configurations
@@ -422,6 +449,7 @@ typedef struct {
     TokenTracker	tokens;				// Active token consumption progress tracker
     UIComponents	ui;				// GTK menu item pointers and system toggles
     TagPayload		xml;				// XML tag wrapper configurations for AI feeds
+    IdleState		idle;			// Idle detection / automatic toggle suspension
 } AppContext;
 
 // AIThreadData threaded sending data backbone

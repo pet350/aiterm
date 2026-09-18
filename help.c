@@ -278,6 +278,7 @@ const char* get_cmd_help() {
         "  --help\t\t\tShow this help menu\n"
         "  --version\t\t\tDisplay current version\n"
         "  --debug\t\t\tEnable verbose debug logging to stderr\n"
+        "  --color\t\t\tEnable colorized debug text provided out is to a TTY\n"
         "  --features\t\t\tShow details on features supported by current version\n"
         "  --highlights\t\t\tShow appliction highlights\n"
         "  --master=<key>\t\tProvide the master password directly to decrypt saved config options\n"

@@ -77,7 +77,7 @@ char* send_to_openai(AppContext *app, const char *prompt) {
 
         res = curl_easy_perform(curl_handle);
         if (res != CURLE_OK) {
-            DEBUG_PRINT("[DEBUG]: CURL OpenAI Error: %s\n", curl_easy_strerror(res));
+            DEBUG_PRINT("[ DEBUG ]: CURL OpenAI Error: %s\n", curl_easy_strerror(res));
         }
 
         curl_easy_cleanup(curl_handle);
