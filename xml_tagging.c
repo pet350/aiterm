@@ -5,6 +5,10 @@
 // Assisted by: Gemini
 // August 2026
 
+// Modified 0.9.9-beta 
+// Added ANSI Colors to debug messages
+// Makes Logs easier to follow
+
 #include <stdlib.h>
 #include <glib.h>
 #include <string.h>
@@ -34,15 +38,16 @@ char* xml_wrap_with_type(AppContext *app, const char *input, TagType type) {
     time_t now = time(NULL);
     char time_str[20];
     strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&now));
+    char DEBUG_PREFIX[256];
+    snprintf(DEBUG_PREFIX, 256, "[%s DEBUG %s]: [%sXML WRAP%s] %sXML type is %s",
+	app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal, app->ansi.lt_green, app->ansi.lt_red);
     switch(type) {
         case TAG_NONE:
-            // xml buffer was already initialized so we're just going to append input to it
-            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is none, not wrapping\n");
+            DEBUG_PRINT("%s NONE%s, not wrapping%s\n", DEBUG_PREFIX, app->ansi.lt_green, app->ansi.normal);
             g_string_append(xml_buffer, input);
             break;
         case TAG_HISTORY:
-            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is history, wrapping with <context>\n");
-            // Being a history payload we don't want to send the current timestamp
+            DEBUG_PRINT("%s HISTORY, %swrapping with %s<context>%s\n", DEBUG_PREFIX, app->ansi.lt_green, app->ansi.lt_red, app->ansi.normal);
             g_string_append(xml_buffer, "<context");
             if (app->session.session_uuid) {
                 g_string_append_printf(xml_buffer, " session=\"%s\"", app->session.session_uuid);
@@ -50,9 +55,7 @@ char* xml_wrap_with_type(AppContext *app, const char *input, TagType type) {
             g_string_append_printf(xml_buffer, ">%s</context>\n", input);
             break;
         case TAG_MEMORY:
-            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is memory, wrapping with <memory>\n");
-            // Here this would be user data loaded from database,
-            //if the timestamp from the database is available we'll use it
+            DEBUG_PRINT("%s MEMORY, %swrapping with %s<memory>%s \n", DEBUG_PREFIX, app->ansi.lt_green, app->ansi.lt_red, app->ansi.normal);
             g_string_printf(xml_buffer, "<memory");
             if (app->xml.database_timestamp) {
                 g_string_append_printf(xml_buffer, " timestamp=\"%s\"", app->xml.database_timestamp);
@@ -63,9 +66,7 @@ char* xml_wrap_with_type(AppContext *app, const char *input, TagType type) {
             g_string_append_printf(xml_buffer, ">%s</memory>\n", input);
             break;
         case TAG_LOG_DUMP: // Was ** TAG_TEE: **
-            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is log_dump, wrapping with <log_dump>\n");
-            // Tee is live data payload, we will timestamp it
-            // A Wise AI assistant suggested log_dump as the tag instead of Tee
+            DEBUG_PRINT("%s LOG_DUMP, %swrapping with %s<log_dump>%s\n", DEBUG_PREFIX, app->ansi.lt_green, app->ansi.lt_red, app->ansi.normal);
             g_string_printf(xml_buffer, "<log_dump timestamp=\"%s\"", time_str);
             if (app->session.session_uuid) {
                 g_string_append_printf(xml_buffer, " session=\"%s\"", app->session.session_uuid);
@@ -73,8 +74,7 @@ char* xml_wrap_with_type(AppContext *app, const char *input, TagType type) {
             g_string_append_printf(xml_buffer, ">%s</log_dump>\n", input);
             break;
         case TAG_SYSTEM:
-            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is system, wrapping with <system>\n");
-            // System is live data payload, we will timestamp it
+            DEBUG_PRINT("%s SYSTEM, %swrapping with %s<system>%s\n", DEBUG_PREFIX, app->ansi.lt_green, app->ansi.lt_red, app->ansi.normal);
             g_string_printf(xml_buffer, "<system timestamp=\"%s\"", time_str);
             if (app->session.session_uuid) {
                 g_string_append_printf(xml_buffer, " session=\"%s\"", app->session.session_uuid);
@@ -82,7 +82,7 @@ char* xml_wrap_with_type(AppContext *app, const char *input, TagType type) {
             g_string_append_printf(xml_buffer, ">%s</system>\n", input);
             break;
         case TAG_STATUS:
-            DEBUG_PRINT("[DEBUG]: [XML_WRAP] xml.type is status, wrapping with <status>\n");
+            DEBUG_PRINT("%s STATUS, %swrapping with %s<status>%s\n", DEBUG_PREFIX, app->ansi.lt_green, app->ansi.lt_red, app->ansi.normal);
             // System is live data payload, we will timestamp it
             g_string_printf(xml_buffer, "<status timestamp=\"%s\"", time_str);
             if (app->session.session_uuid) {

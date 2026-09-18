@@ -8,6 +8,7 @@
 
 #ifndef UTILS_H
 #define UTILS_H
+
 #include <stdio.h>
 #include <time.h>
 #include <pthread.h>
@@ -20,6 +21,22 @@
 // ANSI Codes for VTE coloring
 #define ANSI_CYAN  "\033[1;36m"
 #define ANSI_RESET "\033[0m"
+#define ANSI_NORMAL "\033[0m"
+#define ANSI_BLACK "\033[0;30m"
+#define ANSI_RED "\033[0;31m"
+#define ANSI_GREEN "\033[0;32m"
+#define ANSI_ORANGE "\033[0;33m"
+#define ANSI_BLUE "\033[0;34m"
+#define ANSI_PURPLE "\033[0;35m"
+#define ANSI_LT_GRAY "\033[0;37m"
+#define ANSI_DK_GRAY "\033[1;30m"
+#define ANSI_LT_RED "\033[1;31m"
+#define ANSI_LT_GREEN "\033[1;32m"
+#define ANSI_YELLOW "\033[1;33m"
+#define ANSI_LT_BLUE "\033[1;34m"
+#define ANSI_LT_PURPLE "\033[1;35m"
+#define ANSI_LT_CYAN "\033[1;36m"
+#define ANSI_WHITE "\033[1;37m"
 
 // Global Seesion UUID
 #define GLOBAL_SESSION_UUID "00000000-0000-0000-0000-000000000000"
@@ -41,8 +58,8 @@ extern const char* GENERAL_DIRECTIVES;
         if (global_app && global_app->sys.debug_mode) { \
             struct timespec ts; \
             clock_gettime(CLOCK_MONOTONIC, &ts); \
-            fprintf(stderr, "[%5ld.%06ld] " fmt, \
-                    (long)ts.tv_sec, (long)(ts.tv_nsec / 1000), ##__VA_ARGS__); \
+            fprintf(stderr, "[%s%5ld.%06ld%s] " fmt, \
+               ANSI_YELLOW, (long)ts.tv_sec, (long)(ts.tv_nsec / 1000), ANSI_NORMAL, ##__VA_ARGS__); \
         } \
     } while (0)
 
@@ -92,6 +109,7 @@ extern const char* CONFIG_FILE;
 
 size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp);
 int init_remote_db(AppContext *app);
+int execute_sql_file(MYSQL *conn, const char *filepath);
 
 const char* get_config_filename(void);
 
@@ -108,8 +126,8 @@ char* xml_wrap(AppContext *app, const char *input);
 void* init_db_thread_worker(void *data);
 void* db_worker_thread(void *arg);
 
-void init_config_pointer(void);
-void print_version();
+void init_config_pointer(AppContext *app);
+void print_version(AppContext *app);
 void init_provider_config(AppContext *app);
 void free_provider_config(ProviderConfig *provider);
 void initialize_booleans(AppContext *app);
@@ -124,7 +142,11 @@ void tee_flush_timed(AppContext *app);
 void feed_terminal_header(VteTerminal *terminal, const char *msg);
 void on_initialization_complete(AppContext *app);
 void init_runtime_queues(AppContext *app);
+void check_debug_tty(AppContext *app);
+void init_colors(AppContext *app);
+void cleanup_colors(AppContext *app);
 
+gboolean check_network_availability(AppContext *app);
 gboolean is_ai_command(const char *text);
 gboolean on_app_startup_prime(gpointer user_data);
 

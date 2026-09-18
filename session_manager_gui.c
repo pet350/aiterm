@@ -20,16 +20,16 @@ enum { COLUMN_CURRENT, COLUMN_UUID, COLUMN_DESC, COLUMN_COUNT, NUM_COLS };
 
 void refresh_session_list(AppContext *app, GtkListStore *store) {
     if (store == NULL || !GTK_IS_LIST_STORE(store)) {
-        DEBUG_PRINT("[DEBUG]: REFRESH_SESSION_LIST: ERROR: Invalid list store provided to refresh_session_list!\n");
+        DEBUG_PRINT("[ DEBUG ]: REFRESH_SESSION_LIST: ERROR: Invalid list store provided to refresh_session_list!\n");
         return;
     }
 
     gtk_list_store_clear(store);
     pthread_mutex_lock(&app->access.db_mutex);
-    DEBUG_PRINT("[DEBUG]: REFRESH_SESSION_LIST: Locked DB mutex\n");
+    DEBUG_PRINT("[ DEBUG ]: REFRESH_SESSION_LIST: Locked DB mutex\n");
 
     char *query = "SELECT uuid, description, (SELECT COUNT(*) FROM aiterm_history WHERE session_uuid = s.uuid) FROM sessions s";
-    DEBUG_PRINT("[DEBUG]: REFRESH_SESSION_LIST: Running Query %s\n", query);
+    DEBUG_PRINT("[ DEBUG ]: REFRESH_SESSION_LIST: Running Query %s\n", query);
 
     if (mysql_query(app->database.global_db_conn, query) == 0) {
         MYSQL_RES *res = mysql_store_result(app->database.global_db_conn);
@@ -60,18 +60,18 @@ void refresh_session_list(AppContext *app, GtkListStore *store) {
         g_print("Error fetching sessions: %s\n", mysql_error(app->database.global_db_conn));
     }
     pthread_mutex_unlock(&app->access.db_mutex);
-    DEBUG_PRINT("[DEBUG]: REFRESH_SESSION_LIST: Unlocked DB mutex\n");
+    DEBUG_PRINT("[ DEBUG ]: REFRESH_SESSION_LIST: Unlocked DB mutex\n");
 }
 
 gboolean refresh_list_callback(gpointer data) {
     AppContext *app = (AppContext *)data;
     if (app && app->session.session_list_store) {
-        DEBUG_PRINT("[DEBUG]: Refresh list callback: storing list\n");
+        DEBUG_PRINT("[ DEBUG ]: Refresh list callback: storing list\n");
         gtk_list_store_clear(app->session.session_list_store);
         refresh_session_list(app, app->session.session_list_store);
     }
     else {
-        DEBUG_PRINT("[DEBUG]: Refresh list callback: Nothing to store!\n");
+        DEBUG_PRINT("[ DEBUG ]: Refresh list callback: Nothing to store!\n");
     }
     return FALSE;
 }
@@ -80,12 +80,12 @@ gboolean timed_refresh_list_callback(gpointer data) {
     AppContext *app = (AppContext *)data;
     gboolean RV = TRUE;
     if (app && app->session.session_list_store) {
-        DEBUG_PRINT("[DEBUG]: Timed Refresh list callback: storing list\n");
+        DEBUG_PRINT("[ DEBUG ]: Timed Refresh list callback: storing list\n");
         gtk_list_store_clear(app->session.session_list_store);
         refresh_session_list(app, app->session.session_list_store);
     }
     else {
-        DEBUG_PRINT("[DEBUG]: Timed Refresh list callback: Nothing to store!\n");
+        DEBUG_PRINT("[ DEBUG ]: Timed Refresh list callback: Nothing to store!\n");
         RV = FALSE;
     }
     return RV;
@@ -93,14 +93,14 @@ gboolean timed_refresh_list_callback(gpointer data) {
 
 void on_menu_session_manager(GtkMenuItem *item, gpointer data) {
     AppContext *app = (AppContext *)data;
-    DEBUG_PRINT("[DEBUG]: Session Manager menu item clicked!\n");
+    DEBUG_PRINT("[ DEBUG ]: Session Manager menu item clicked!\n");
     open_session_manager_window(app);
 }
 
 /* FIX #1: Extract the tree model from user_data and trigger an immediate refresh */
 void on_add_clicked(GtkButton *btn, gpointer user_data) {
     if (user_data == NULL) {
-        DEBUG_PRINT("[DEBUG]: on_add_clicked: user_data is NULL!\n");
+        DEBUG_PRINT("[ DEBUG ]: on_add_clicked: user_data is NULL!\n");
         return;
     }
     if (global_app->database.global_db_conn == NULL) {
@@ -108,7 +108,7 @@ void on_add_clicked(GtkButton *btn, gpointer user_data) {
         return;
     }
 
-    DEBUG_PRINT("[DEBUG]: UI: Triggering CMD_SESSION_NEW\n");
+    DEBUG_PRINT("[ DEBUG ]: UI: Triggering CMD_SESSION_NEW\n");
     cmd_session_new(global_app, "New Session");
 
     // Re-fetch model from the incoming TreeView widget argument safely
@@ -128,10 +128,10 @@ void on_load_clicked(GtkButton *btn, gpointer user_data) {
     if (gtk_tree_selection_get_selected(sel, &model, &iter)) {
         char *uuid;
         gtk_tree_model_get(model, &iter, COLUMN_UUID, &uuid, -1);
-        DEBUG_PRINT("[DEBUG]: SESSION_MANAGER: Extracted UUID is: '%s'\n", uuid ? uuid : "NULL");
+        DEBUG_PRINT("[ DEBUG ]: SESSION_MANAGER: Extracted UUID is: '%s'\n", uuid ? uuid : "NULL");
         cmd_session_load(global_app, uuid);
 
-        DEBUG_PRINT("[DEBUG]: Loading session: %s\n", uuid);
+        DEBUG_PRINT("[ DEBUG ]: Loading session: %s\n", uuid);
         g_free(uuid);
         // Instant visual update when selection changes
         refresh_session_list(global_app, GTK_LIST_STORE(model));
@@ -147,7 +147,7 @@ void on_default_clicked(GtkButton *btn, gpointer user_data) {
     if (gtk_tree_selection_get_selected(sel, &model, &iter)) {
         char *uuid;
         gtk_tree_model_get(model, &iter, COLUMN_UUID, &uuid, -1);
-        DEBUG_PRINT("[DEBUG]: SESSION_MANAGER: Extracted UUID is: '%s'\n", uuid ? uuid : "NULL");
+        DEBUG_PRINT("[ DEBUG ]: SESSION_MANAGER: Extracted UUID is: '%s'\n", uuid ? uuid : "NULL");
         cmd_session_default(global_app, uuid);
         g_free(uuid);
 
@@ -165,7 +165,7 @@ void on_delete_clicked(GtkButton *btn, gpointer user_data) {
     if (gtk_tree_selection_get_selected(sel, &model, &iter)) {
         char *uuid;
         gtk_tree_model_get(model, &iter, COLUMN_UUID, &uuid, -1);
-        DEBUG_PRINT("[DEBUG]: SESSION_MANAGER: Extracted UUID is: '%s'\n", uuid ? uuid : "NULL");
+        DEBUG_PRINT("[ DEBUG ]: SESSION_MANAGER: Extracted UUID is: '%s'\n", uuid ? uuid : "NULL");
         cmd_session_delete(global_app, uuid);
         g_free(uuid);
         refresh_session_list(global_app, GTK_LIST_STORE(model));
@@ -176,7 +176,7 @@ void on_refresh_clicked(GtkButton *btn, gpointer user_data) {
     GtkTreeView *tree = GTK_TREE_VIEW(user_data);
     GtkTreeModel *model = gtk_tree_view_get_model(tree);
     if (model && GTK_IS_LIST_STORE(model)) {
-        DEBUG_PRINT("[DEBUG]: UI: User forced a manual list store refresh\n");
+        DEBUG_PRINT("[ DEBUG ]: UI: User forced a manual list store refresh\n");
         refresh_session_list(global_app, GTK_LIST_STORE(model));
     }
 }
@@ -229,7 +229,7 @@ void on_rename_clicked(GtkButton *btn, gpointer user_data) {
                 snprintf(query, sizeof(query), "UPDATE sessions SET description = '%s' WHERE uuid = '%s'", escaped_desc, uuid);
                 free(escaped_desc);
 
-                DEBUG_PRINT("[DEBUG]: Executing Rename Query: %s\n", query);
+                DEBUG_PRINT("[ DEBUG ]: Executing Rename Query: %s\n", query);
                 if (mysql_query(global_app->database.global_db_conn, query) != 0) {
                     g_print("Error executing database rename: %s\n", mysql_error(global_app->database.global_db_conn));
                 }

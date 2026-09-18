@@ -78,6 +78,7 @@ void cmd_session_write_to_global_toggle(AppContext *app, const char *args);
 void cmd_session_manager_wrapper(AppContext *app, const char *args);
 void cmd_history_manager_wrapper(AppContext *app, const char *args);
 void cmd_noisefilter_manager_wrapper(AppContext *app, const char *args);
+void cmd_provider_manager_wrapper(AppContext *app, const char *args);
 void cmd_policy_manager_wrapper(AppContext *app, const char *args);
 
 // CMD Noise Prototypes
@@ -91,6 +92,7 @@ void cmd_close_policy_manager_wrapper(AppContext *app, const char *args);
 void cmd_close_history_manager_wrapper(AppContext *app, const char *args);
 void cmd_close_session_manager_wrapper(AppContext *app, const char *args);
 void cmd_close_noise_manager_wrapper(AppContext *app, const char *args);
+void cmd_close_provider_manager_wrapper(AppContext *app, const char *args);
 
 // ==== Toggle ON / OFF / STATUS Function Prototypes ====
 void cmd_toggle_snmp_payload(AppContext *app, const char *args);
@@ -106,6 +108,7 @@ void cmd_toggle_noise_filter(AppContext *app, const char *args);
 void cmd_toggle_smart_cache(AppContext *app, const char *args);
 void cmd_toggle_ratelimit(AppContext *app, const char *args);
 void cmd_toggle_xml_tagging(AppContext *app, const char *args);
+void cmd_toggle_debug_color(AppContext *app, const char *args);
 
 #endif
 

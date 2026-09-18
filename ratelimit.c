@@ -23,12 +23,16 @@ void ratelimit_init(RateLimiter *rl, int rpm) {
 
 bool ratelimit_check(RateLimiter *rl) {
     pthread_mutex_lock(&rl->lock);
-    DEBUG_PRINT("[DEBUG]: [RATELIMIT_CHECK]: Locked mutex\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sRATELIMIT CHECK%s]: %sLocked mutex%s\n",
+	global_app->ansi.lt_purple, global_app->ansi.normal, global_app->ansi.cyan, global_app->ansi.normal,
+        global_app->ansi.lt_green, global_app->ansi.normal);
 
     // FIXED: Defensive Guard against divide-by-zero crashes
     if (rl->requests_per_minute <= 0) {
         pthread_mutex_unlock(&rl->lock);
-        DEBUG_PRINT("[DEBUG]: [RATELIMIT_CHECK]: Unlocked mutex (RPM is 0, passing through)\n");
+        DEBUG_PRINT("[%s DEBUG %s]: [%sRATELIMIT CHECK%s]: %sUnlocked mutex (RPM is 0, passing through)%s\n",
+	    global_app->ansi.lt_purple, global_app->ansi.normal, global_app->ansi.cyan, global_app->ansi.normal,
+            global_app->ansi.lt_green, global_app->ansi.normal);
         return true; 
     }
 
@@ -37,13 +41,17 @@ bool ratelimit_check(RateLimiter *rl) {
 
     if (now - rl->last_request_time < interval) {
         pthread_mutex_unlock(&rl->lock);
-        DEBUG_PRINT("[DEBUG]: [RATELIMIT_CHECK]: Unlocked mutex (Rate limited)\n");
+        DEBUG_PRINT("[%s DEBUG %s]: [%sRATELIMIT CHECK%s]: %sUnlocked mutex (Rate limited)%s\n",
+	    global_app->ansi.lt_purple, global_app->ansi.normal, global_app->ansi.cyan, global_app->ansi.normal,
+            global_app->ansi.lt_green, global_app->ansi.normal);
         return false;
     }
 
     rl->last_request_time = now;
     pthread_mutex_unlock(&rl->lock);
-    DEBUG_PRINT("[DEBUG]: [RATELIMIT_CHECK]: Unlocked mutex (Success)\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sRATELIMIT CHECK%s]: %sUnlocked mutex (Success)%s\n",
+	global_app->ansi.lt_purple, global_app->ansi.normal, global_app->ansi.cyan, global_app->ansi.normal,
+        global_app->ansi.lt_green, global_app->ansi.normal);
     return true;
 }
 

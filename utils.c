@@ -3,7 +3,7 @@
 // Various utilities used in this project
 // By: Peter Talbott
 // Assisted by: Gemini
-// April 2026 - August 2026
+// April 2026 - September 2026
 
 #include <stdlib.h>
 #include <glib.h>
@@ -18,6 +18,8 @@
 #include <pthread.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <ifaddrs.h>
+#include <sys/socket.h>
 
 #include "utils.h"
 #include "gui.h"
@@ -29,7 +31,134 @@
 #include "commands.h"
 #include "noisefilter.h"
 #include "gemini.h"
+#include "ai_provider.h"
 #include "snmp_manager.h"
+
+// Added 0.9.9-beta
+// Helper function to read and execute a single .sql file
+int execute_sql_file(MYSQL *conn, const char *filepath) {
+    FILE *f = fopen(filepath, "rb");
+    if (!f) {
+        DEBUG_PRINT("[ DEBUG ]: [DB] Failed to open SQL file: %s\n", filepath);
+        return 0;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long length = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (length <= 0) {
+        fclose(f);
+        return 1; // Empty file is non-fatal
+    }
+
+    char *buffer = malloc(length + 1);
+    if (!buffer) {
+        fclose(f);
+        DEBUG_PRINT("[ DEBUG ]: [DB] Memory allocation error reading %s\n", filepath);
+        return 0;
+    }
+
+    size_t read_bytes = fread(buffer, 1, length, f);
+    buffer[read_bytes] = '\0';
+    fclose(f);
+
+    DEBUG_PRINT("[ DEBUG ]: [DB] Executing SQL script: %s\n", filepath);
+
+    // Run query
+    if (mysql_query(conn, buffer) != 0) {
+        DEBUG_PRINT("[ DEBUG ]: [DB] Error executing %s: %s\n", filepath, mysql_error(conn));
+        free(buffer);
+        return 0;
+    }
+
+    // Process any residual result sets if the script generates them
+    MYSQL_RES *res = NULL;
+    do {
+        res = mysql_store_result(conn);
+        if (res) {
+            mysql_free_result(res);
+        }
+    } while (mysql_next_result(conn) == 0);
+
+    free(buffer);
+    return 1;
+}
+
+// Added 0.9.9-beta
+void init_colors(AppContext *app) {
+    check_debug_tty(app);
+    if (app->sys.debug_color && app->sys.debug_tty) {
+        app->ansi.red		= g_strdup(ANSI_RED);
+        app->ansi.yellow	= g_strdup(ANSI_YELLOW);
+        app->ansi.green		= g_strdup(ANSI_GREEN);
+        app->ansi.blue		= g_strdup(ANSI_BLUE);
+        app->ansi.purple	= g_strdup(ANSI_PURPLE);
+        app->ansi.orange	= g_strdup(ANSI_ORANGE);
+        app->ansi.cyan		= g_strdup(ANSI_CYAN);
+        app->ansi.lt_red	= g_strdup(ANSI_LT_RED);
+        app->ansi.lt_green	= g_strdup(ANSI_LT_GREEN);
+        app->ansi.lt_blue	= g_strdup(ANSI_LT_BLUE);
+        app->ansi.lt_purple	= g_strdup(ANSI_LT_PURPLE);
+        app->ansi.normal	= g_strdup(ANSI_NORMAL);
+    } else {
+        // Initialize with empty strings
+        app->ansi.red           = g_strdup("");
+        app->ansi.yellow        = g_strdup("");
+        app->ansi.green         = g_strdup("");
+        app->ansi.blue          = g_strdup("");
+        app->ansi.purple        = g_strdup("");
+        app->ansi.orange        = g_strdup("");
+        app->ansi.cyan          = g_strdup("");
+        app->ansi.lt_red        = g_strdup("");
+        app->ansi.lt_green      = g_strdup("");
+        app->ansi.lt_blue       = g_strdup("");
+        app->ansi.lt_purple     = g_strdup("");
+        app->ansi.normal        = g_strdup("");
+    }
+}
+
+// Added 0.9.9-beta
+void cleanup_colors(AppContext *app) {
+    g_free(app->ansi.red);
+    g_free(app->ansi.yellow);
+    g_free(app->ansi.green);
+    g_free(app->ansi.blue);
+    g_free(app->ansi.purple);
+    g_free(app->ansi.orange);
+    g_free(app->ansi.cyan);
+    g_free(app->ansi.lt_red);
+    g_free(app->ansi.lt_green);
+    g_free(app->ansi.lt_blue);
+    g_free(app->ansi.lt_purple);
+    g_free(app->ansi.normal);
+}
+
+// Added 0.9.9-beta
+// returns TRUE if the network is up
+gboolean check_network_availability(AppContext *app) {
+    gboolean found = FALSE;
+    if (getifaddrs(&app->net.ifaddr) == -1) return FALSE;
+
+    for (app->net.ifa = app->net.ifaddr; app->net.ifa != NULL; app->net.ifa = app->net.ifa->ifa_next) {
+        if (app->net.ifa->ifa_addr && app->net.ifa->ifa_addr->sa_family == AF_INET) {
+            // Check for a non-loopback interface
+            if (strcmp(app->net.ifa->ifa_name, "lo") != 0) {
+                found = TRUE;
+                break;
+            }
+        }
+    }
+    freeifaddrs(app->net.ifaddr);
+    char YES_VAL[32];
+    char NO_VAL[30];
+    snprintf(YES_VAL, 32, "%sYes%s", app->ansi.green, app->ansi.normal);
+    snprintf(NO_VAL,  32, "%sNo%s", app->ansi.red, app->ansi.normal);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sNetwork%s] %sIs Network Online%s [%s]\n", 
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal, 
+        app->ansi.lt_purple, app->ansi.normal, found ? YES_VAL : NO_VAL);
+    return found;
+}
 
 // Checks multiple locations for config file and returns the one it found
 const char* get_config_filename(void) {
@@ -61,10 +190,12 @@ const char* get_config_filename(void) {
     return "/etc/aiterm.conf";
 }
 
-void init_config_pointer(void) {
+void init_config_pointer(AppContext *app) {
     if (!CONFIG_FILE) {    
         CONFIG_FILE = get_config_filename();
-        DEBUG_PRINT("[DEBUG]: [Config File] Set config filename: %s\n", CONFIG_FILE);
+        DEBUG_PRINT("[%s DEBUG %s]: [%sConfig File%s] %sSet config filename: %s%s%s\n",
+	    app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+	    app->ansi.lt_purple, app->ansi.green, CONFIG_FILE, app->ansi.normal);
     }
 }
 
@@ -72,34 +203,49 @@ void init_config_pointer(void) {
 // for the most part it all booleans initialized here 
 void initialize_booleans(AppContext *app) {
     // 1. Set initial variables to their needed defaults
-    app->sys.db_initialized = FALSE;
-    app->sys.autoreply_enabled = FALSE;
-    app->sys.tee_enabled = FALSE;
-    app->sys.auto_execute_enabled = FALSE;
+
+    // Booleans set to FALSE on startup
+    app->sys.debug_tty = FALSE;
     app->sys.debug_mode = FALSE;
-    app->sys.debug_mode_override = FALSE;
-    g_atomic_int_set(&app->sys.is_processing, 0);
-    app->sys.ratelimit_enabled = FALSE;
     app->sys.mysql_busy = FALSE;
-    g_atomic_int_set(&app->sys.ai_busy, 0);
-    app->sys.smart_cache_enabled = FALSE;
+    app->sys.tee_enabled = FALSE;
+    app->sys.db_initialized = FALSE;
+    app->xml.tagging_enabled = FALSE;
+    app->sys.offline_override = FALSE;
+    app->sys.autoreply_enabled = FALSE;
+    app->sys.ratelimit_enabled = FALSE;
     app->sys.load_from_session = FALSE;
-    app->sys.snmp_ticker_enabled = TRUE;
+    app->sys.smart_cache_enabled = FALSE;
+    app->sys.debug_mode_override = FALSE;
+    app->sys.is_network_available = FALSE;
+    app->sys.auto_execute_enabled = FALSE;
+    app->SnmpContext.enable_gemini_feed = FALSE;
     app->session.cfg_loaded_write_to_global = FALSE;
     app->session.cfg_loaded_read_from_global = FALSE;
-    app->xml.tagging_enabled = FALSE;
-    app->SnmpContext.enable_gemini_feed = FALSE;
 
-    // Noise-filter patterns are copied into a non-GTK cache so background
-    // workers never access the GTK ListStore.
-    g_mutex_init(&app->noise.patterns_mutex);
-    app->noise.patterns = g_ptr_array_new_with_free_func(g_free);
+     // Specify FALSE if not initialized,
+     // leave it alone if set by environment
+    if (!app->sys.debug_color) {
+        app->sys.debug_color = FALSE;
+    }
+
+    // Booleans set TRUE at startup
+    app->sys.is_initializing = TRUE;
+    app->sys.snmp_ticker_enabled = TRUE;
 
     // NON-Boolean initializer
     // [ I know the function's name is 
     //   initialize_booleans and these 
     //   are not boolean, but it is the 
     //   perfect place to initialize. lol ]
+    g_atomic_int_set(&app->sys.is_processing, 0);
+    g_atomic_int_set(&app->sys.ai_busy, 0);
+
+    // Noise-filter patterns are copied into a non-GTK cache so background
+    // workers never access the GTK ListStore.
+    g_mutex_init(&app->noise.patterns_mutex);
+    app->noise.patterns = g_ptr_array_new_with_free_func(g_free);
+
     for (int i = 0; i < MAX_TABS; i++) {
         memset(&app->tabs[i], 0, sizeof(TabSettings));
         app->tabs[i].tab_label_box = NULL;
@@ -111,19 +257,27 @@ void initialize_booleans(AppContext *app) {
     }
     app->database.sequence_id = 0;
     app->limiter.requests_per_minute=20;
+}
 
-    // the ONLY app->sys.xxxxx boolen that is TRUE on startup
-    app->sys.is_initializing = TRUE;
+// Added 0.9.9-beta
+void check_debug_tty(AppContext *app) {
+    if (isatty(fileno(stderr))) {
+        app->sys.debug_tty = 1;
+    } else {
+        app->sys.debug_tty = 0;
+    }
 }
 
 // Added 0.9.8-alpha
 void init_runtime_queues(AppContext *app) {
     if (!app) return;
-    DEBUG_PRINT("[DEBUG]: [Runtime Queues] Initializing... ");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sRuntime Queues%s]%s Initializing... ",
+	app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan,
+	app->ansi.normal, app->ansi.yellow);
     app->aiterm_runtime.pending_autoexec_queue = g_queue_new();
     app->aiterm_runtime.is_command_running = FALSE;
     app->aiterm_runtime.ticker_completed = TRUE;
-    fprintf(stderr,"Done!\n");
+    fprintf(stderr,"%sDone!%s\n", app->ansi.green, app->ansi.normal);
 }
 
 static void provider_replace_string(char **field, const char *value) {
@@ -141,6 +295,7 @@ void free_provider_config(ProviderConfig *provider) {
     free(provider->auth_header);
     free(provider->auth_scheme);
     free(provider->query_key_name);
+    free(provider->provider);
     memset(provider, 0, sizeof(ProviderConfig));
 }
 
@@ -148,10 +303,23 @@ void init_provider_config(AppContext *app) {
     if (!app) return;
 
     ProviderConfig *provider = &app->provider_config;
-    const char *name = app->provider_config.provider ? app->provider_config.provider : "openai";
-    const char *model = app->aiterm_runtime.model ? app->aiterm_runtime.model : NULL;
+    const char *env_provider = getenv("AITERM_PROVIDER");
+    const char *env_model = getenv("AITERM_MODEL");
+    char *name = g_strdup((env_provider && *env_provider) ? env_provider :
+                          (provider->provider ? provider->provider : "openai"));
+    const char *model = (env_model && *env_model) ? env_model :
+                        (app->aiterm_runtime.model ? app->aiterm_runtime.model : NULL);
+    char *saved_base_url = g_strdup(provider->base_url);
+    char *saved_endpoint = g_strdup(provider->endpoint);
+    char *saved_auth_header = g_strdup(provider->auth_header);
+    char *saved_auth_scheme = g_strdup(provider->auth_scheme);
+    char *saved_query_key = g_strdup(provider->query_key_name);
+    gboolean saved_key_in_query = provider->api_key_in_query;
 
+    /* ProviderConfig owns all of its strings.  Preserve the configured provider
+     * name before clearing the old structure. */
     free_provider_config(provider);
+    provider_replace_string(&provider->provider, name);
     provider_replace_string(&provider->name, name);
     provider_replace_string(&provider->api_key, app->security.api_key);
 
@@ -165,11 +333,36 @@ void init_provider_config(AppContext *app) {
     } else {
         provider->kind = PROVIDER_KIND_OPENAI_CHAT;
         provider->api_key_in_query = FALSE;
-        provider_replace_string(&provider->model, model ? model : OPENAI_MODEL);
-        provider_replace_string(&provider->base_url, "https://api.openai.com/v1");
+
+        /* These providers use the OpenAI Chat Completions wire format. */
+        if (strcasecmp(name, "groq") == 0) {
+            provider_replace_string(&provider->model, model ? model : "llama-3.3-70b-versatile");
+            provider_replace_string(&provider->base_url, "https://api.groq.com/openai/v1");
+        } else if (strcasecmp(name, "openrouter") == 0) {
+            provider_replace_string(&provider->model, model ? model : "openai/gpt-oss-20b:free");
+            provider_replace_string(&provider->base_url, "https://openrouter.ai/api/v1");
+        } else if (strcasecmp(name, "mistral") == 0) {
+            provider_replace_string(&provider->model, model ? model : "mistral-small-latest");
+            provider_replace_string(&provider->base_url, "https://api.mistral.ai/v1");
+        } else if (strcasecmp(name, "ollama") == 0) {
+            provider_replace_string(&provider->model, model ? model : "llama3.2");
+            provider_replace_string(&provider->base_url, "http://127.0.0.1:11434/v1");
+        } else {
+            provider_replace_string(&provider->model, model ? model : OPENAI_MODEL);
+            provider_replace_string(&provider->base_url, "https://api.openai.com/v1");
+        }
+
         provider_replace_string(&provider->endpoint, "chat/completions");
         provider_replace_string(&provider->auth_header, "Authorization");
         provider_replace_string(&provider->auth_scheme, "Bearer");
+
+        /* Ollama does not require an API key. */
+        if (strcasecmp(name, "ollama") == 0) {
+            g_free(provider->auth_header);
+            provider->auth_header = NULL;
+            g_free(provider->auth_scheme);
+            provider->auth_scheme = NULL;
+        }
     }
 
     const char *env_base_url = getenv("AITERM_PROVIDER_BASE_URL");
@@ -178,14 +371,45 @@ void init_provider_config(AppContext *app) {
     const char *env_auth_scheme = getenv("AITERM_PROVIDER_AUTH_SCHEME");
     const char *env_query_key = getenv("AITERM_PROVIDER_QUERY_KEY");
 
+    /* Values saved by the Provider Manager override built-in defaults. */
+    if (saved_base_url && *saved_base_url) provider_replace_string(&provider->base_url, saved_base_url);
+    if (saved_endpoint && *saved_endpoint) provider_replace_string(&provider->endpoint, saved_endpoint);
+    if (saved_auth_header) provider_replace_string(&provider->auth_header, saved_auth_header);
+    if (saved_auth_scheme) provider_replace_string(&provider->auth_scheme, saved_auth_scheme);
+    if (saved_query_key) provider_replace_string(&provider->query_key_name, saved_query_key);
+    if (saved_key_in_query) provider->api_key_in_query = TRUE;
+
+    char *lt_pl = g_strdup(app->ansi.lt_purple);
+    char *cy = g_strdup(app->ansi.cyan);
+    char *yl = g_strdup(app->ansi.yellow);
+    char *gr = g_strdup(app->ansi.green);
+    char *red = g_strdup(app->ansi.red);
+    char *nml = g_strdup(app->ansi.normal);
+
     if (env_base_url && *env_base_url) provider_replace_string(&provider->base_url, env_base_url);
     if (env_endpoint && *env_endpoint) provider_replace_string(&provider->endpoint, env_endpoint);
     if (env_auth_header && *env_auth_header) provider_replace_string(&provider->auth_header, env_auth_header);
     if (env_auth_scheme) provider_replace_string(&provider->auth_scheme, *env_auth_scheme ? env_auth_scheme : NULL);
     if (env_query_key && *env_query_key) provider_replace_string(&provider->query_key_name, env_query_key);
-    DEBUG_PRINT("[DEBUG]: [Provider_Init]: Base URL: %s\n", provider->base_url);
-}
 
+    DEBUG_PRINT("[%s DEBUG %s]: [%sProvider_Init%s]:%s Provider: %s%s%s | Protocol: %s | Base URL: %s%s%s\n",
+                lt_pl, nml, cy, nml, yl, gr, name, nml,
+                provider->kind == PROVIDER_KIND_GEMINI_GENERATE ? "gemini-generateContent" : "openai-chat-completions",
+                gr, provider->base_url ? provider->base_url : "(none)", nml);
+
+    g_free(name);
+    g_free(saved_base_url);
+    g_free(saved_endpoint);
+    g_free(saved_auth_header);
+    g_free(saved_auth_scheme);
+    g_free(saved_query_key);
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+}
 // This is the actual definition where the memory is allocated
 HistoryEntry history[5];
 int history_count = 0;
@@ -204,29 +428,46 @@ char* get_uuid_filter(AppContext *app) {
 void* init_db_thread_worker(void *data) {
     AppContext *app = (AppContext*)data;
 
+     char *lt_pl   = g_strdup(app->ansi.lt_purple);
+     char *cy      = g_strdup(app->ansi.cyan);
+     char *yl      = g_strdup(app->ansi.yellow);
+     char *gr      = g_strdup(app->ansi.green);
+     char *red      = g_strdup(app->ansi.red);
+     char *nml      = g_strdup(app->ansi.normal);
+
     // CRITICAL: Initialize thread-specific MySQL memory
     mysql_thread_init();
 
-    DEBUG_PRINT("[DEBUG]: [DB_THREAD] Invoking init_remote_db...\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sDB_THREAD%s]%s Invoking init_remote_db...%s\n",
+	lt_pl, nml, cy, nml, yl, nml);
     if (init_remote_db(app)) {
-        DEBUG_PRINT("[DEBUG]: Database setup and persistent connection ready.\n");
+        DEBUG_PRINT("[%s DEBUG %s]: [%sDatabase%s]%s setup and persistent connection ready.%s\n",
+	lt_pl, nml, cy, nml, yl, nml);
     } else {
-        DEBUG_PRINT("[DEBUG]: Database offline. History will not be saved.\n");
+        DEBUG_PRINT("[%s DEBUG %s]: [%sDatabase%s]%s offline. History will not be saved.%s\n",
+	lt_pl, nml, cy, nml, yl, nml);
     }
     pthread_mutex_lock(&app->access.db_init_mutex);
-    DEBUG_PRINT("[DEBUG]: INIT_DB_THREAD_WORKER: Locked DB init Mutex\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sINIT_DB_THREAD_WORKER%s]%s Locked DB init Mutex%s\n",
+	lt_pl, nml, cy, nml, yl, nml);
     app->sys.db_initialized = TRUE;
     pthread_cond_signal(&app->access.db_init_cond); // Wake up waiting threads
     pthread_mutex_unlock(&app->access.db_init_mutex);
-    DEBUG_PRINT("[DEBUG]: INIT_DB_THREAD_WORKER: Unlocked DB init Mutex\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sINIT_DB_THREAD_WORKER%s]%s Unlocked DB init Mutex%s\n",
+	lt_pl, nml, cy, nml, yl, nml);
     // CRITICAL: Clean up thread-specific MySQL memory
     mysql_thread_end();
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
     return NULL;
 }
 
 void feed_terminal_header(VteTerminal *terminal, const char *msg) {
     char buf[1024];
-    snprintf(buf, sizeof(buf), "\r%s[AI Executing]: %s%s\n", ANSI_CYAN, msg, ANSI_RESET);
+    snprintf(buf, sizeof(buf), "\r%s[AI Executing]: %s%s\n", global_app->ansi.cyan, msg, global_app->ansi.normal);
     vte_terminal_feed(terminal, buf, -1);
 }
 
@@ -249,7 +490,7 @@ void display_all_history(AppContext *app) {
 
     // LOCK: Ensure only one thread uses the database pipe at a time
     pthread_mutex_lock(&global_app->access.db_mutex);
-    DEBUG_PRINT("[DEBUG]: DISPLAY_ALL_HISTORY: Locked DB Mutex\n");
+    DEBUG_PRINT("[ DEBUG ]: DISPLAY_ALL_HISTORY: Locked DB Mutex\n");
     if (!app->database.global_db_conn) {
         write_to_ai_pane(app, "System: ", "Database connection is not active.", "cmd_tag", "cmd_tag");
         goto cleanup;
@@ -266,7 +507,7 @@ void display_all_history(AppContext *app) {
         write_to_ai_pane(app, "System: ", "Error fetching history from database.", "cmd_tag", "cmd_tag");
         goto cleanup;
     }
-    DEBUG_PRINT("[DEBUG]: DISPLAY_ALL_HISTORY: Query %s\n", query);
+    DEBUG_PRINT("[ DEBUG ]: DISPLAY_ALL_HISTORY: Query %s\n", query);
     res = mysql_store_result(app->database.global_db_conn);
     if (!res) goto cleanup;
 
@@ -297,7 +538,7 @@ void display_all_history(AppContext *app) {
     }
 
     pthread_mutex_unlock(&global_app->access.db_mutex);
-    DEBUG_PRINT("[DEBUG]: DISPLAY_ALL_HISTORY: Unlocked DB Mutex\n");
+    DEBUG_PRINT("[ DEBUG ]: DISPLAY_ALL_HISTORY: Unlocked DB Mutex\n");
     mysql_thread_end();
     return;
 }
@@ -306,26 +547,37 @@ void display_all_history(AppContext *app) {
 // Rewritten 0.8.4-delta
 // Modified 0.8.5-gamma for target uuid
 void* db_worker_thread(void *arg) {
-    DEBUG_PRINT("[MEMDBG]: [WORKER] ENTER arg=%p\n", arg);
+     char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+     char *cy      = g_strdup(global_app->ansi.cyan);
+     char *yl      = g_strdup(global_app->ansi.yellow);
+     char *gr      = g_strdup(global_app->ansi.green);
+     char *red      = g_strdup(global_app->ansi.red);
+     char *nml      = g_strdup(global_app->ansi.normal);
+
+    DEBUG_PRINT("[%sMEMDBG %s]: [%sWORKER%s]%s ENTER arg%s=%s%p%s\n",
+	lt_pl, nml, cy, nml, yl, nml, gr, arg, nml);
     mysql_thread_init();
     DBWorkerData *data = (DBWorkerData *)arg;
-    SET_THREAD_NAME("aiterm-database");
-    DEBUG_PRINT("[MEMDBG]: [WORKER] data=%p terminal=%p ai_analysis=%p user=%p ai=%p uuid=%p\n",
-                (void*)data,
-                data ? (void*)data->terminal_output : NULL,
-                data ? (void*)data->ai_analysis : NULL,
-                data ? (void*)data->user_text : NULL,
-                data ? (void*)data->ai_text : NULL,
-                data ? (void*)data->session_uuid : NULL);
+    SET_THREAD_NAME("aiterm-db");
+    DEBUG_PRINT("[%sMEMDBG %s]: [%sWORKER%s]%s data=%s%p%s terminal=%s%p%s ai_analysis=%s%p%s user=%s%p%s ai=%s%p%s uuid=%s%p%s\n",
+                lt_pl, nml, cy, nml, yl, 
+		red, (void*)data,yl,
+                red, data ? (void*)data->terminal_output : NULL, yl,
+                red, data ? (void*)data->ai_analysis : NULL, yl,
+                red, data ? (void*)data->user_text : NULL, yl, 
+                red, data ? (void*)data->ai_text : NULL, yl,
+                red, data ? (void*)data->session_uuid : NULL, nml);
     if (!data) {
-        DEBUG_PRINT("[DEBUG]: [WORKER] Received NULL data pointer!\n");
+        DEBUG_PRINT("[%s DEBUG %s]: [%sWORKER%s]%s Received %sNULL%s data pointer!%s\n",
+		lt_pl, nml, cy, nml, yl, red, yl, nml);
         mysql_thread_end();
         return NULL;
     }
 
     extern AppContext *global_app;
     if (!global_app || !global_app->database.global_db_conn) {
-        DEBUG_PRINT("[MEMDBG]: [WORKER] No global app/DB connection, jumping to cleanup data=%p\n", (void*)data);
+        DEBUG_PRINT("[%sMEMDBG %s]: [%sWORKER%s]%s No global app/DB connection, jumping to cleanup data=%s%p%s\n",
+		lt_pl, nml, cy, nml, yl, red, (void*)data, nml);
         goto cleanup;
     }
 
@@ -334,24 +586,39 @@ void* db_worker_thread(void *arg) {
                               : global_app->session.session_uuid;
 
     pthread_mutex_lock(&global_app->access.db_mutex);
-    DEBUG_PRINT("[DEBUG]: [WORKER] Locked DB Mutex\n");
-    DEBUG_PRINT("[DEBUG]: [WORKER] Starting job for seq %d, is_tee=%d\n",
-                data->sequence_id, data->is_tee);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sWORKER%s]%s Locked DB Mutex%s\n",
+	lt_pl, nml, cy, nml, yl, nml);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sWORKER%s]%s Starting job for seq %s%d%s, is_tee=%s%d%s\n",
+        lt_pl, nml, cy, nml, yl, red, data->sequence_id, yl, red, data->is_tee, nml);
 
     if (data->is_tee) {
-        DEBUG_PRINT("[MEMDBG]: [WORKER] TEE pointers before strlen: data=%p terminal=%p ai=%p uuid=%p\n",
-                    (void*)data, (void*)data->terminal_output, (void*)data->ai_analysis, (void*)data->session_uuid);
+        DEBUG_PRINT("[%sMEMDBG %s]: [%sWORKER%s]%s TEE pointers before strlen: data=%s%p%s terminal=%s%p%s ai=%s%p%s uuid=%s%p%s\n",
+                lt_pl, nml, cy, nml, yl, 
+		gr, (void*)data, yl,
+		gr, (void*)data->terminal_output, yl,
+		gr, (void*)data->ai_analysis, yl,
+		gr, (void*)data->session_uuid, nml);
+
         size_t out_len = data->terminal_output ? strlen(data->terminal_output) : 0;
         size_t ai_len  = data->ai_analysis ? strlen(data->ai_analysis) : 0;
         size_t uuid_len = data->session_uuid ? strlen(data->session_uuid) : 0;
 
-        DEBUG_PRINT("[MEMDBG]: [WORKER] TEE lengths out=%zu ai=%zu uuid=%zu\n", out_len, ai_len, uuid_len);
+        DEBUG_PRINT("[%sMEMDBG %s]: [%sWORKER%s]%s TEE lengths out=%s%zu%s ai=%s%zu%s uuid=%s%zu%s\n",
+		lt_pl, nml, cy, nml, yl,
+		gr, out_len, yl,
+		gr, ai_len, yl,
+		gr, uuid_len, nml);
+
         char *esc_out = malloc(out_len * 2 + 1);
         char *esc_ai  = malloc(ai_len * 2 + 1);
         char *esc_uuid = malloc(uuid_len * 2 + 1);
 
-        DEBUG_PRINT("[MEMDBG]: [WORKER] escaped allocations out=%p ai=%p uuid=%p\n",
-                    (void*)esc_out, (void*)esc_ai, (void*)esc_uuid);
+        DEBUG_PRINT("[%sMEMDBG %s]: [%sWORKER%s]%s escaped allocations out=%s%p%s ai=%s%p%s uuid=%s%p%s\n",
+                lt_pl, nml, cy, nml, yl,
+                red, (void*)esc_out, yl,
+		red, (void*)esc_ai, yl,
+		red, (void*)esc_uuid, nml);
+
         if (esc_out && esc_ai && esc_uuid) {
             mysql_real_escape_string(global_app->database.global_db_conn,
                                      esc_out, data->terminal_output ? data->terminal_output : "", out_len);
@@ -363,7 +630,11 @@ void* db_worker_thread(void *arg) {
             size_t query_len = strlen(esc_out) + strlen(esc_ai) + strlen(esc_uuid) +
                                strlen(target_uuid ? target_uuid : "") + 512;
             char *query = malloc(query_len);
-            DEBUG_PRINT("[MEMDBG]: [WORKER] query alloc=%p size=%zu\n", (void*)query, query_len);
+            DEBUG_PRINT("[%sMEMDBG %s]: [%sWORKER%s]%s query alloc=%s%p%s size=%s%zu%s\n",
+                lt_pl, nml, cy, nml, yl,
+		red, (void*)query, yl,
+		red, query_len, yl);
+
             if (query) {
                 snprintf(query, query_len,
                          "INSERT INTO aiterm_history (role, content, is_tee, session_uuid, sequence_id) VALUES "
@@ -371,17 +642,25 @@ void* db_worker_thread(void *arg) {
                          esc_out, target_uuid ? target_uuid : "", data->sequence_id,
                          esc_ai, esc_uuid, data->sequence_id);
                 int qrc = mysql_query(global_app->database.global_db_conn, query);
-                DEBUG_PRINT("[MEMDBG]: [WORKER] mysql_query rc=%d query=%p\n", qrc, (void*)query);
-                DEBUG_PRINT("[MEMDBG]: [WORKER] FREE query=%p\n", (void*)query);
+
+                DEBUG_PRINT("[%sMEMDBG %s]: [%sWORKER%s]%s mysql_query rc=%s%d%s query=%s%p%s\n",
+			lt_pl, nml, cy, nml, yl,
+			red, qrc, yl,
+			red, (void*)query, nml);
+
+                DEBUG_PRINT("[%sMEMDBG %s]: [%sWORKER%s]%s FREE query=%s%p%s\n",
+	                lt_pl, nml, cy, nml, yl,
+ 			gr, (void*)query, nml);
+
                 free(query);
             }
         }
 
-        DEBUG_PRINT("[MEMDBG]: [WORKER] FREE esc_out=%p\n", (void*)esc_out);
+        DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE esc_out=%p\n", (void*)esc_out);
         free(esc_out);
-        DEBUG_PRINT("[MEMDBG]: [WORKER] FREE esc_ai=%p\n", (void*)esc_ai);
+        DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE esc_ai=%p\n", (void*)esc_ai);
         free(esc_ai);
-        DEBUG_PRINT("[MEMDBG]: [WORKER] FREE esc_uuid=%p\n", (void*)esc_uuid);
+        DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE esc_uuid=%p\n", (void*)esc_uuid);
         free(esc_uuid);
     } else {
         size_t user_len = data->user_text ? strlen(data->user_text) : 0;
@@ -403,7 +682,7 @@ void* db_worker_thread(void *arg) {
             size_t query_len = strlen(esc_user) + strlen(esc_ai) + strlen(esc_uuid) +
                                strlen(target_uuid ? target_uuid : "") + 512;
             char *query = malloc(query_len);
-            DEBUG_PRINT("[MEMDBG]: [WORKER] nonTEE query alloc=%p size=%zu\n", (void*)query, query_len);
+            DEBUG_PRINT("[MEMDBG ]: [WORKER] nonTEE query alloc=%p size=%zu\n", (void*)query, query_len);
             if (query) {
                 snprintf(query, query_len,
                          "INSERT INTO aiterm_history (role, content, is_tee, session_uuid, sequence_id) "
@@ -411,47 +690,53 @@ void* db_worker_thread(void *arg) {
                          esc_user, target_uuid ? target_uuid : "", data->sequence_id,
                          esc_ai, esc_uuid, data->sequence_id);
                 int qrc = mysql_query(global_app->database.global_db_conn, query);
-                DEBUG_PRINT("[MEMDBG]: [WORKER] nonTEE mysql_query rc=%d query=%p\n", qrc, (void*)query);
-                DEBUG_PRINT("[MEMDBG]: [WORKER] FREE nonTEE query=%p\n", (void*)query);
+                DEBUG_PRINT("[MEMDBG ]: [WORKER] nonTEE mysql_query rc=%d query=%p\n", qrc, (void*)query);
+                DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE nonTEE query=%p\n", (void*)query);
                 free(query);
             }
         }
 
-        DEBUG_PRINT("[MEMDBG]: [WORKER] FREE esc_user=%p\n", (void*)esc_user);
+        DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE esc_user=%p\n", (void*)esc_user);
         free(esc_user);
-        DEBUG_PRINT("[MEMDBG]: [WORKER] FREE nonTEE esc_ai=%p\n", (void*)esc_ai);
+        DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE nonTEE esc_ai=%p\n", (void*)esc_ai);
         free(esc_ai);
-        DEBUG_PRINT("[MEMDBG]: [WORKER] FREE nonTEE esc_uuid=%p\n", (void*)esc_uuid);
+        DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE nonTEE esc_uuid=%p\n", (void*)esc_uuid);
         free(esc_uuid);
     }
 
     pthread_mutex_unlock(&global_app->access.db_mutex);
-    DEBUG_PRINT("[DEBUG]: [WORKER] Unlocked DB Mutex\n");
+    DEBUG_PRINT("[ DEBUG ]: [WORKER] Unlocked DB Mutex\n");
 
-cleanup:
+    cleanup:
     /* DBWorkerData owns these copies exclusively.  The caller never frees them
      * after successful pthread_create(). */
-    DEBUG_PRINT("[MEMDBG]: [WORKER] CLEANUP data=%p\n", (void*)data);
-    DEBUG_PRINT("[MEMDBG]: [WORKER] FREE terminal_output=%p\n", (void*)data->terminal_output);
+    DEBUG_PRINT("[MEMDBG ]: [WORKER] CLEANUP data=%p\n", (void*)data);
+    DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE terminal_output=%p\n", (void*)data->terminal_output);
     g_free(data->terminal_output);
-    DEBUG_PRINT("[MEMDBG]: [WORKER] FREE ai_analysis=%p\n", (void*)data->ai_analysis);
+    DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE ai_analysis=%p\n", (void*)data->ai_analysis);
     g_free(data->ai_analysis);
-    DEBUG_PRINT("[MEMDBG]: [WORKER] FREE user_text=%p\n", (void*)data->user_text);
+    DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE user_text=%p\n", (void*)data->user_text);
     g_free(data->user_text);
-    DEBUG_PRINT("[MEMDBG]: [WORKER] FREE ai_text=%p\n", (void*)data->ai_text);
+    DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE ai_text=%p\n", (void*)data->ai_text);
     g_free(data->ai_text);
-    DEBUG_PRINT("[MEMDBG]: [WORKER] FREE session_uuid=%p\n", (void*)data->session_uuid); 
+    DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE session_uuid=%p\n", (void*)data->session_uuid); 
     g_free(data->session_uuid);
     /* Save scalar debug information before releasing the owning structure.
      * Do not evaluate the freed pointer in a DEBUG_PRINT after free(). */
     int completed_sequence_id = data->sequence_id;
-    DEBUG_PRINT("[DEBUG]: [WORKER] Job completed for seq %d\n",
+    DEBUG_PRINT("[ DEBUG ]: [WORKER] Job completed for seq %d\n",
                 completed_sequence_id);
-    DEBUG_PRINT("[MEMDBG]: [WORKER] FREE DBWorkerData=%p\n", (void*)data);
+    DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE DBWorkerData=%p\n", (void*)data);
     free(data);
-    DEBUG_PRINT("[MEMDBG]: [WORKER] DBWorkerData released for seq %d\n",
+    DEBUG_PRINT("[MEMDBG ]: [WORKER] DBWorkerData released for seq %d\n",
                 completed_sequence_id);
     mysql_thread_end();
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
     return NULL;
 }
 
@@ -479,6 +764,13 @@ int init_remote_db(AppContext *app) {
     app->database.global_db_conn = mysql_init(NULL);
     if (app->database.global_db_conn == NULL) return 0;
 
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     // === NEW: Set a 3-second connection timeout ===
     unsigned int timeout = 3; // 3 seconds
     mysql_options(app->database.global_db_conn, MYSQL_OPT_CONNECT_TIMEOUT, (const char *)&timeout);
@@ -490,28 +782,29 @@ int init_remote_db(AppContext *app) {
     // mysql_options(app->database.global_db_conn, MYSQL_OPT_READ_TIMEOUT, (const char *)&timeout);
     // mysql_options(app->database.global_db_conn, MYSQL_OPT_WRITE_TIMEOUT, (const char *)&timeout);
 
-    DEBUG_PRINT("[DEBUG]: [DB] Connecting to %s (timeout: %us)...\n", app->database.db_host, timeout);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sDB%s]%s Connecting to %s%s%s (%stimeout: %us%s)...%s\n", 
+	lt_pl, nml, cy,nml, yl, red, app->database.db_host, yl, red, timeout, yl, nml);
     // 2. Connect to the server (No DB selected yet)
     if (mysql_real_connect(app->database.global_db_conn, app->database.db_host, app->database.db_user, app->database.db_pass, NULL, 0, NULL, 0) == NULL) {
-        DEBUG_PRINT("[DEBUG]: DB Connection Error: %s\n", mysql_error(app->database.global_db_conn));
+        DEBUG_PRINT("[ DEBUG ]: DB Connection Error: %s\n", mysql_error(app->database.global_db_conn));
         mysql_close(app->database.global_db_conn);
         app->database.global_db_conn = NULL;
         return 0;
     }
-    DEBUG_PRINT("[DEBUG]: [DB] Successfully connected to database host.\n");
+    DEBUG_PRINT("[ DEBUG ]: [DB] Successfully connected to database host.\n");
 
     // 3. Create and Select Database
     char db_query[256];
     snprintf(db_query, sizeof(db_query), "CREATE DATABASE IF NOT EXISTS %s", app->database.db_name);
 
-    DEBUG_PRINT("[DEBUG]: [DB] Executing: %s\n", db_query);
+    DEBUG_PRINT("[ DEBUG ]: [DB] Executing: %s\n", db_query);
     mysql_query(app->database.global_db_conn, db_query);
 
-    DEBUG_PRINT("[DEBUG]: [DB] Selecting database: %s\n", app->database.db_name);
+    DEBUG_PRINT("[ DEBUG ]: [DB] Selecting database: %s\n", app->database.db_name);
     mysql_select_db(app->database.global_db_conn, app->database.db_name);
 
     // 4. Create History Table
-    DEBUG_PRINT("[DEBUG]: [DB] Executing: CREATE TABLE IF NOT EXISTS aiterm_history\n");
+    DEBUG_PRINT("[ DEBUG ]: [DB] Executing: CREATE TABLE IF NOT EXISTS aiterm_history\n");
     mysql_query(app->database.global_db_conn, "CREATE TABLE IF NOT EXISTS aiterm_history (id INT AUTO_INCREMENT PRIMARY KEY)");
 
     // 5. Run Migrations
@@ -525,7 +818,7 @@ int init_remote_db(AppContext *app) {
     };
 
     for (int i = 0; i < sizeof(migrations)/sizeof(char*); i++) {
-        DEBUG_PRINT("[DEBUG]: [DB] query [%d]: %s\n", i, migrations[i]);
+        DEBUG_PRINT("[ DEBUG ]: [DB] query [%d]: %s\n", i, migrations[i]);
         mysql_query(app->database.global_db_conn, migrations[i]);
     }
 
@@ -536,7 +829,7 @@ int init_remote_db(AppContext *app) {
         "keyword VARCHAR(50) UNIQUE, "
         "hit_count INT DEFAULT 1, "
         "last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON DUPLICATE KEY UPDATE last_used=CURRENT_TIMESTAMP)";
-    DEBUG_PRINT("[DEBUG]: [DB] Executing: CREATE TABLE IF NOT EXISTS relevance_triggers\n");
+    DEBUG_PRINT("[ DEBUG ]: [DB] Executing: CREATE TABLE IF NOT EXISTS relevance_triggers\n");
     mysql_query(app->database.global_db_conn, trigger_table_query);
 
     const char *command_policy_table =
@@ -546,7 +839,7 @@ int init_remote_db(AppContext *app) {
 	"risk_level VARCHAR(32) NOT NULL, "
 	"updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON DUPLICATE KEY UPDATE updated_at=CURRENT_TIMESTAMP"
 	")";
-    DEBUG_PRINT("[DEBUG]: [DB] Executing: CREATE TABLE IF NOT EXISTS command_policies\n");
+    DEBUG_PRINT("[ DEBUG ]: [DB] Executing: CREATE TABLE IF NOT EXISTS command_policies\n");
     mysql_query(app->database.global_db_conn, command_policy_table);
 
     // Run Migrations for Sessions Table
@@ -565,10 +858,17 @@ int init_remote_db(AppContext *app) {
     };
 
     for (int i = 0; i < sizeof(session_migrations)/sizeof(char*); i++) {
-        DEBUG_PRINT("[DEBUG]: [DB] query [%d]: %s\n", i, session_migrations[i]);
+        DEBUG_PRINT("[ DEBUG ]: [DB] query [%d]: %s\n", i, session_migrations[i]);
         mysql_query(app->database.global_db_conn, session_migrations[i]);
     }
-    DEBUG_PRINT("[DEBUG]: [DB] init_remote_db sequence fully complete!\n");
+    DEBUG_PRINT("[ DEBUG ]: [DB] init_remote_db sequence fully complete!\n");
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     return 1;
 }
 
@@ -610,17 +910,26 @@ void load_history_to_gemini(AppContext *app, struct json_object *contents_array,
     if (!app->database.global_db_conn) return;
     int count=0;
     mysql_thread_init();
-    pthread_mutex_lock(&app->access.db_mutex);
-    DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_GEMINI: Locked DB Mutex\n");
-    char *uuid_filter = get_uuid_filter(global_app);
 
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
+    pthread_mutex_lock(&app->access.db_mutex);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sLOAD_HISTORY_TO_GEMINI%s]:%s Locked DB Mutex%s\n",
+	lt_pl, nml, cy, nml, yl, nml);
+    char *uuid_filter = get_uuid_filter(global_app);
 
     const char *query = g_strdup_printf(
         "  SELECT role, content FROM aiterm_history "
         "  WHERE session_uuid %s"
         "  ORDER BY created_at DESC LIMIT 100", uuid_filter);
 
-    DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_GEMINI: Query %s\n", query);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sLOAD_HISTORY_TO_GEMINI%s]: %sQuery %s%s%s\n",
+	lt_pl, nml, cy,nml, yl, gr, query, nml);
     if (mysql_query(app->database.global_db_conn, query) == 0) {
         MYSQL_RES *res = mysql_store_result(app->database.global_db_conn);
         MYSQL_ROW row;
@@ -660,9 +969,19 @@ void load_history_to_gemini(AppContext *app, struct json_object *contents_array,
         }
         mysql_free_result(res);
     }
-    DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_GEMINI: Sent %d rows to AI\n", count);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sLOAD_HISTORY_TO_GEMINI%s]:%s Sent [%s%d%s] rows to AI%s\n",
+	lt_pl, nml, cy, nml, yl, red, count, yl, nml);
     pthread_mutex_unlock(&app->access.db_mutex);
-    DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_GEMINI: Unlocked DB Mutex\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sLOAD_HISTORY_TO_GEMINI%s]:%s Unlocked DB Mutex%s\n",
+	lt_pl, nml, cy, nml, yl, nml);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     mysql_thread_end();
 }
 
@@ -746,7 +1065,24 @@ char* extract_ai_text(const char *json_str) {
         }
     }
 
-    // 2. Try OpenAI/Internal Format (output array)
+    // 2. Try OpenAI Chat Completions format (choices -> message -> content)
+    struct json_object *choices = NULL;
+    if (json_object_object_get_ex(root, "choices", &choices) &&
+        json_object_get_type(choices) == json_type_array &&
+        json_object_array_length(choices) > 0) {
+        struct json_object *choice = json_object_array_get_idx(choices, 0);
+        struct json_object *message = NULL;
+        struct json_object *content_obj = NULL;
+        if (choice && json_object_object_get_ex(choice, "message", &message) &&
+            json_object_object_get_ex(message, "content", &content_obj) &&
+            json_object_get_type(content_obj) == json_type_string) {
+            char *result = g_strdup(json_object_get_string(content_obj));
+            json_object_put(root);
+            return result;
+        }
+    }
+
+    // 3. Try OpenAI/Internal Responses format (output array)
     struct json_object *output_array;
     if (json_object_object_get_ex(root, "output", &output_array)) {
         // Ensure it is actually an array before getting length
@@ -775,7 +1111,7 @@ char* extract_ai_text(const char *json_str) {
         }
     }
 
-    // 3. Cleanup if no matches found
+    // 4. Cleanup if no matches found
     json_object_put(root);
     return NULL;
 }
@@ -798,7 +1134,7 @@ void save_to_history(const char *user_text, const char *ai_text) {
      * until after extract_and_save_keywords() returns. */
     pthread_t thread_id;
     if (pthread_create(&thread_id, NULL, db_worker_thread, data) != 0) {
-        DEBUG_PRINT("[DEBUG]: [WORKER] pthread_create failed for history save\n");
+        DEBUG_PRINT("[ DEBUG ]: [WORKER] pthread_create failed for history save\n");
         g_free(data->user_text);
         g_free(data->ai_text);
         g_free(data->session_uuid);
@@ -816,8 +1152,16 @@ void save_to_history(const char *user_text, const char *ai_text) {
 void save_tee_to_history(const char *terminal_text, const char *ai_analysis) {
     extern AppContext *global_app;
 
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     if (!global_app || !terminal_text || !ai_analysis || !global_app->session.session_uuid) {
-        DEBUG_PRINT("[DEBUG]: [TEE_SAVE] WARNING: Invalid inputs detected. Aborting.\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_SAVE%s]%s WARNING: %sInvalid inputs detected. Aborting.%s\n",
+		lt_pl, nml, cy, nml, red, yl, nml);
         return;
     }
 
@@ -826,20 +1170,28 @@ void save_tee_to_history(const char *terminal_text, const char *ai_analysis) {
     char *terminal_output = noise_filter_apply(global_app, terminal_text);
     if (!terminal_output) terminal_output = g_strdup("");
 
-    DEBUG_PRINT("[MEMDBG]: [TEE_SAVE] after noise_filter terminal_output=%p\n", (void*)terminal_output);
+    DEBUG_PRINT("[%sMEMDBG%s ]: [%sTEE_SAVE%s] %safter noise_filter terminal_output=%s%p%s\n", 
+	lt_pl, nml, cy, nml, yl, red, (void*)terminal_output, nml);
+
     char *cleaned_terminal_output = strip_blank_lines(terminal_output);
     char *cleaned_ai_analysis = strip_blank_lines(ai_analysis);
-    DEBUG_PRINT("[MEMDBG]: [TEE_SAVE] cleaned terminal=%p ai=%p\n", (void*)cleaned_terminal_output, (void*)cleaned_ai_analysis);
+
+    DEBUG_PRINT("[%sMEMDBG%s ]: [%sTEE_SAVE%s] %scleaned terminal=%s%p%s ai=%s%p%s\n",
+	lt_pl, nml, cy, nml, yl,
+	red, (void*)cleaned_terminal_output, yl,
+	red, (void*)cleaned_ai_analysis, nml);
+
     g_free(terminal_output);
 
     if (!cleaned_terminal_output) cleaned_terminal_output = g_strdup("");
     if (!cleaned_ai_analysis) cleaned_ai_analysis = g_strdup("");
 
-    DEBUG_PRINT("[DEBUG]: [TEE_SAVE] Data cleaned. Allocating DBWorkerData.\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_SAVE%s]%s Data cleaned. Allocating DBWorkerData.%s\n",
+	lt_pl, nml, cy, nml, yl, nml);
 
     DBWorkerData *data = calloc(1, sizeof(*data));
     if (!data) {
-        DEBUG_PRINT("[DEBUG]: [TEE_SAVE] FATAL: Malloc failed for DBWorkerData\n");
+        DEBUG_PRINT("[ DEBUG ]: [TEE_SAVE] FATAL: Malloc failed for DBWorkerData\n");
         g_free(cleaned_terminal_output);
         g_free(cleaned_ai_analysis);
         return;
@@ -849,23 +1201,34 @@ void save_tee_to_history(const char *terminal_text, const char *ai_analysis) {
     data->ai_analysis = cleaned_ai_analysis;
     data->session_uuid = g_strdup(global_app->session.session_uuid);
     data->sequence_id = global_app->database.sequence_id++;
-    DEBUG_PRINT("[MEMDBG]: [TEE_SAVE] DBWorkerData=%p terminal=%p ai=%p uuid=%p seq=%d\n",
-                (void*)data, (void*)data->terminal_output, (void*)data->ai_analysis,
-                (void*)data->session_uuid, data->sequence_id);
+    DEBUG_PRINT("[%sMEMDBG%s ]: [%sTEE_SAVE%s]%s DBWorkerData=%s%p%s terminal=%s%p%s ai=%s%p%s uuid=%s%p%s seq=%s%d%s\n",
+		lt_pl, nml, cy, nml, yl,
+                red, (void*)data, yl,
+		red, (void*)data->terminal_output, yl,
+		red, (void*)data->ai_analysis, yl,
+                red, (void*)data->session_uuid, yl,
+		red, data->sequence_id, nml);
     data->is_tee = 1;
 
-    DEBUG_PRINT("[DEBUG]: [TEE_SAVE] Launching thread for sequence_id: %d\n",
-                data->sequence_id);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_SAVE%s] %sLaunching thread for sequence_id: %s%d%s\n",
+		lt_pl, nml, cy, nml, yl,
+                red, data->sequence_id, nml);
 
     pthread_t thread_id;
     if (pthread_create(&thread_id, NULL, db_worker_thread, data) != 0) {
-        DEBUG_PRINT("[DEBUG]: [TEE_SAVE] FATAL: pthread_create failed!\n");
+        DEBUG_PRINT("[ DEBUG ]: [TEE_SAVE] FATAL: pthread_create failed!\n");
         g_free(data->terminal_output);
         g_free(data->ai_analysis);
         g_free(data->session_uuid);
         free(data);
         return;
     }
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
 
     pthread_detach(thread_id);
 }
@@ -879,7 +1242,7 @@ void load_history_to_api(struct json_object *messages_array) {
     mysql_thread_init();
     pthread_mutex_lock(&global_app->access.db_mutex);
 
-    DEBUG_PRINT("[DEBUG] LOAD_HISTORY_TO_API: Locked DB Mutex\n");
+    DEBUG_PRINT("[ DEBUG ] LOAD_HISTORY_TO_API: Locked DB Mutex\n");
     char *uuid_filter = get_uuid_filter(global_app);
     const char *query = g_strdup_printf(
         "SELECT role, content FROM ("
@@ -888,7 +1251,7 @@ void load_history_to_api(struct json_object *messages_array) {
         "  ORDER BY sequence_id DESC LIMIT 100"
         ") AS sub ORDER BY created_at ASC", uuid_filter, global_app->session.last_sent_db_id);
 
-    DEBUG_PRINT("[DEBUG]: LOAD_HISTORY_TO_API: Query %s\n", query);
+    DEBUG_PRINT("[ DEBUG ]: LOAD_HISTORY_TO_API: Query %s\n", query);
 
     if (mysql_query(global_app->database.global_db_conn, query) == 0) {
         MYSQL_RES *res = mysql_store_result(global_app->database.global_db_conn);
@@ -904,7 +1267,7 @@ void load_history_to_api(struct json_object *messages_array) {
     }
 
     pthread_mutex_unlock(&global_app->access.db_mutex);
-    DEBUG_PRINT("[DEBUG] LOAD_HISTORY_TO_API: Unlocked DB Mutex\n");
+    DEBUG_PRINT("[ DEBUG ] LOAD_HISTORY_TO_API: Unlocked DB Mutex\n");
     mysql_thread_end();
 }
 
@@ -968,13 +1331,26 @@ char* strip_blank_lines(const char *input_text) {
     if (input_text[0] == '\0') {
         return g_strdup("");
     }
+
+     char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+     char *cy      = g_strdup(global_app->ansi.cyan);
+     char *yl      = g_strdup(global_app->ansi.yellow);
+     char *gr      = g_strdup(global_app->ansi.green);
+     char *red     = g_strdup(global_app->ansi.red);
+     char *nml     = g_strdup(global_app->ansi.normal);
+
     long in_len = strlen(input_text);
     char *noise_result = noise_filter_apply(global_app, input_text);
-    DEBUG_PRINT("[MEMDBG]: [BLANK_LINES] noise_result=%p len=%zu input=%p\n",
-                (void*)noise_result, noise_result ? strlen(noise_result) : 0, (void*)input_text);
+    DEBUG_PRINT("[%sMEMDBG %s]: [%sBLANK_LINES%s]%s noise_result=%s%p%s len=%s%zu%s input=%s%p%s\n",
+                lt_pl, nml, cy, nml, yl, gr, (void*)noise_result,
+		yl, gr, noise_result ? strlen(noise_result) : 0,
+		yl, gr, (void*)input_text, nml);
+
     char *input_string = g_strdup(noise_result ? noise_result : "");
-    DEBUG_PRINT("[MEMDBG]: [BLANK_LINES] input_string copy=%p\n", (void*)input_string);
-    DEBUG_PRINT("[MEMDBG]: [BLANK_LINES] FREE noise_result=%p\n", (void*)noise_result);
+    DEBUG_PRINT("[%sMEMDBG %s]: [%sBLANK_LINES%s]%s input_string copy=%s%p%s\n", 
+		lt_pl, nml, cy, nml, yl, red, (void*)input_string, nml);
+    DEBUG_PRINT("[%sMEMDBG %s]: [%sBLANK_LINES%s]%s FREE noise_result=%s%p%s\n",
+		lt_pl, nml, cy, nml, yl, gr,  (void*)noise_result, nml);
     g_free(noise_result);
     int trimmed_count=0;
     GString *output_buffer = g_string_new("");
@@ -995,29 +1371,56 @@ char* strip_blank_lines(const char *input_text) {
     if (output_buffer->len > 0 && output_buffer->str[output_buffer->len - 1] == '\n') {
         g_string_set_size(output_buffer, output_buffer->len - 1);
     }
-    DEBUG_PRINT("[DEBUG]: [Blank Lines] Input length: %ld bytes, Output length: %ld bytes. Stripped %d blank lines\n",
-          in_len, output_buffer->len, trimmed_count);
-    DEBUG_PRINT("[MEMDBG]: [BLANK_LINES] FREE input_string=%p\n", (void*)input_string);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sBlank Lines%s]%s Input length: [%s%ld%s] bytes, Output length: [%s%ld%s] bytes. Stripped [%s%d%s] blank lines%s\n",
+	lt_pl, nml, cy, nml, yl, red, in_len, yl,
+	red, output_buffer->len, yl, red, trimmed_count, yl, nml);
+
+    DEBUG_PRINT("[%sMEMDBG %s]: [%sBLANK_LINES%s]%s FREE input_string=%s%p%s\n",
+	lt_pl, nml, cy, nml, yl, gr, (void*)input_string, nml);
     g_free(input_string);
     char *result = g_string_free(output_buffer, FALSE);
-    DEBUG_PRINT("[MEMDBG]: [BLANK_LINES] RETURN result=%p len=%zu\n", (void*)result, result ? strlen(result) : 0);
+    DEBUG_PRINT("[%sMEMDBG %s]: [%sBLANK_LINES%s]%s RETURN result=[%s%p%s] len=[%s%zu%s]%s\n",
+	lt_pl, nml, cy,nml, yl, red, (void*)result, yl, red, result ? strlen(result) : 0, yl, nml);
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     return result;
 }
 
-void print_version() {
-    printf("aiterm version:\t%s%-16s%s\n", ANSI_CYAN, AITERM_VERSION, ANSI_RESET);
-    printf("Build ID:\t%s%s%s\n", ANSI_CYAN, AITERM_BUILDID, ANSI_RESET);
-    printf("Build Time:\t%s%s%s\n", ANSI_CYAN, AITERM_BUILD_TIME, ANSI_RESET);
+void print_version(AppContext *app) {
+    printf("aiterm version:\t%s%-16s%s\n", app->ansi.cyan, AITERM_VERSION, app->ansi.normal);
+    printf("Build ID:\t%s%s%s\n", app->ansi.cyan, AITERM_BUILDID, app->ansi.normal);
+    printf("Build Time:\t%s%s%s\n", app->ansi.cyan, AITERM_BUILD_TIME, app->ansi.normal);
 }
 
 
 // Updated 0.9.6-omega
 void on_initialization_complete(AppContext *app) {
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     if (app->sys.is_initializing) {
         app->sys.is_initializing = false;
-        DEBUG_PRINT("[DEBUG]: [Initialization]: complete. Normal session active.\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sInitialization%s]: %scomplete. Normal session active.%s\n",
+		lt_pl, nml, cy, nml, yl, nml);
         fflush(stderr);
     }
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 // Updated 0.9.6-omega
@@ -1025,12 +1428,31 @@ gboolean on_app_startup_prime(gpointer user_data) {
     AppContext *app = (AppContext *)user_data;
     if (!app) return G_SOURCE_REMOVE;
 
-    DEBUG_PRINT("[DEBUG]: [INIT]: Priming Gemini session after GTK loop start...\n");
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sINIT%s]: %sPriming selected AI provider after GTK loop start...%s\n",
+	lt_pl, nml, cy, nml, yl, nml);
     
-    // GENERAL_DIRECTIVES will now automatically be injected into the root JSON 
-    // payload by perform_gemini_request() during this priming call.
-    send_to_gemini(app, "System Initialized. Acknowledge readiness in 1 sentence.");
+    /* Provider-neutral startup request.  This used to call Gemini directly,
+     * which meant changing provider still caused a Gemini request here. */
+    char *prime_response = ai_provider_send(
+        app, "System Initialized. Acknowledge readiness in 1 sentence.");
+    if (prime_response) {
+        g_free(prime_response);
+    }
     on_initialization_complete(app);
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     return G_SOURCE_REMOVE;
 }
 

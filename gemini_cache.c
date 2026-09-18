@@ -65,14 +65,30 @@ void gemini_cache_store(const char *prompt_hash, const char *response_json) {
 // Safely initialize the caching sub-structure inside AppContext
 void gemini_cache_init(AppContext *app) {
     if (!app) return;
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     app->gemini_cache.id = NULL;
     app->gemini_cache.created_at = 0;
     app->gemini_cache.turn_count = 0;
     if (!app->gemini_cache.min_token_threshold) {
         app->gemini_cache.min_token_threshold = GEMINI_CACHE_MIN_TOKEN_FLOOR;
     }
-    DEBUG_PRINT("[DEBUG]: [Smart Cache] initialized. Minimum threshold set to %ld tokens.\n", 
-                app->gemini_cache.min_token_threshold);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSmart Cache%s] %sinitialized. Minimum threshold set to [%s%ld%s] tokens.%s\n", 
+	lt_pl, nml, cy, nml, yl,
+        red, app->gemini_cache.min_token_threshold, yl, nml);
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 // Clear active caching parameters and release dynamic memory
@@ -97,7 +113,7 @@ gboolean gemini_cache_is_valid(AppContext *app, int current_history_turns) {
     // Invalidate if cache age exceeds 50 minutes (3000s) or history turn count dropped
     if ((now - app->gemini_cache.created_at) >= (GEMINI_CACHE_DEFAULT_TTL_SEC - GEMINI_CACHE_TTL_MARGIN_SEC) || 
         current_history_turns < app->gemini_cache.turn_count) {
-        DEBUG_PRINT("[DEBUG]: Invalidating old, expired, or mismatched Gemini Context Cache.\n");
+        DEBUG_PRINT("[ DEBUG ]: Invalidating old, expired, or mismatched Gemini Context Cache.\n");
         gemini_cache_clear(app);
         return FALSE;
     }
@@ -114,21 +130,21 @@ gboolean gemini_cache_create(AppContext *app, struct json_object *contents) {
     long pending_cache_tokens = GEMINI_CACHE_MIN_TOKEN_FLOOR;
     if (app->tokens.current) {
         pending_cache_tokens = app->tokens.current;
-        DEBUG_PRINT("[DEBUG] [Cache Create] Pending Cache Tokens %ld\n", pending_cache_tokens);
+        DEBUG_PRINT("[ DEBUG ] [Cache Create] Pending Cache Tokens %ld\n", pending_cache_tokens);
     } else {
-        DEBUG_PRINT("[DEBUG] [Cache Create] Set Default Pending Cache Tokens %ld\n", pending_cache_tokens);
+        DEBUG_PRINT("[ DEBUG ] [Cache Create] Set Default Pending Cache Tokens %ld\n", pending_cache_tokens);
     }
 
     // Safeguard 1: Don't cache if below local threshold floor
     if (pending_cache_tokens < app->gemini_cache.min_token_threshold) {
-        DEBUG_PRINT("[DEBUG]: Cache creation bypassed. Current tokens (%ld) below floor (%ld).\n",
+        DEBUG_PRINT("[ DEBUG ]: Cache creation bypassed. Current tokens (%ld) below floor (%ld).\n",
                     pending_cache_tokens, app->gemini_cache.min_token_threshold);
         return FALSE;
     }
 
     // Safeguard 2: Threshold < 0 disables explicit caching overhead entirely
     if (app->gemini_cache.min_token_threshold < 0) {
-        DEBUG_PRINT("[DEBUG]: Cache bypassed. Explicit caching disabled via threshold setting.\n");
+        DEBUG_PRINT("[ DEBUG ]: Cache bypassed. Explicit caching disabled via threshold setting.\n");
         return FALSE;
     }
 
@@ -196,22 +212,22 @@ gboolean gemini_cache_create(AppContext *app, struct json_object *contents) {
                     app->gemini_cache.created_at = time(NULL);
                     app->gemini_cache.turn_count = turn_count;
                     success = TRUE;
-                    DEBUG_PRINT("[DEBUG]: Gemini Context Cache Created! ID: %s, Cached Turns: %d\n", 
+                    DEBUG_PRINT("[ DEBUG ]: Gemini Context Cache Created! ID: %s, Cached Turns: %d\n", 
                                 app->gemini_cache.id, app->gemini_cache.turn_count);
                 } else {
                     struct json_object *error_obj = NULL, *msg_obj = NULL;
                     if (json_object_object_get_ex(resp_root, "error", &error_obj) &&
                         json_object_object_get_ex(error_obj, "message", &msg_obj)) {
-                        DEBUG_PRINT("[DEBUG]: Gemini Cache Creation Skipped: %s\n", 
+                        DEBUG_PRINT("[ DEBUG ]: Gemini Cache Creation Skipped: %s\n", 
                                     json_object_get_string(msg_obj));
                     } else {
-                        DEBUG_PRINT("[DEBUG]: Gemini Cache Creation Failed: Unexpected JSON format.\n");
+                        DEBUG_PRINT("[ DEBUG ]: Gemini Cache Creation Failed: Unexpected JSON format.\n");
                     }
                 }
                 json_object_put(resp_root);
             }
         } else {
-            DEBUG_PRINT("[DEBUG]: CURL error during Cache Creation: %s\n", curl_easy_strerror(res));
+            DEBUG_PRINT("[ DEBUG ]: CURL error during Cache Creation: %s\n", curl_easy_strerror(res));
         }
 
         curl_slist_free_all(headers);
@@ -258,7 +274,7 @@ char *gemini_cache_build_query_payload(AppContext *app, const char *new_prompt_t
 void gemini_cache_invalidate(AppContext *app) {
     if (!app) return;
 
-    DEBUG_PRINT("[DEBUG]: Manual cache invalidation triggered.\n");
+    DEBUG_PRINT("[ DEBUG ]: Manual cache invalidation triggered.\n");
 
     if (app->gemini_cache.id && app->provider_config.api_key) {
         ProviderConfig *api = &app->provider_config;

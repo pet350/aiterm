@@ -150,6 +150,12 @@ void setup_menu_toggle(GtkWidget *menu_item, AppContext *app, ToggleType type, g
         case TOGGLE_TEE:
             app->ui.toggle_tee = menu_item;
             break;
+        case TOGGLE_DEBUG:
+            app->ui.toggle_debug = menu_item;
+            break;
+        case TOGGLE_XML:
+            app->ui.toggle_xml_payload_tagging = menu_item;
+            break;
         case TOGGLE_AUTOEXE:
             app->ui.toggle_autoexe = menu_item;
             break;

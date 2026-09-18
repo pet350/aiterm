@@ -27,11 +27,62 @@
 #include "menu.h"
 
 static const char *CONFIG_FILE_VERSION="1.2";
+
+static char* LOADED_PREFIX(AppContext *app) {
+    int len = 64;
+    char *out = g_malloc(len);
+    snprintf(out, len, "[%s DEBUG %s]: [%sLoaded%s]%s",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal, app->ansi.yellow);
+    return out;
+}
+
+// Return ansi colored debug and decrypted
+static char* DECRYPTED_PREFIX(AppContext *app) {
+    int len = 128;
+    char *out = g_malloc(len);
+    snprintf(out, len, "[%s DEBUG %s]: [%sDECRYPTED%s]  [%sAES_256_CBC%s] %s",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal, app->ansi.lt_red, app->ansi.normal, app->ansi.yellow);
+    return out;
+}
+
+// Return ansi colored debug override
+static char* OVERRIDE_PREFIX(AppContext *app) {
+    int len = 128;
+    char *out = g_malloc(len);
+    snprintf(out, len, "[%s DEBUG %s]: [%sOVERRIDE%s] %s",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.lt_red, app->ansi.normal, app->ansi.yellow); 
+    return out;
+}
+
+// Return ansi green "On"
+static char* ON_VAL(AppContext *app) {
+    int len = 32;
+    char *out = g_malloc(len);
+    snprintf(out, len, "%sOn%s", app->ansi.green, app->ansi.yellow);
+    return out;
+}
+
+// Return ansi red "Off"
+static char* OFF_VAL(AppContext *app) {
+    int len = 32;
+    char *out = g_malloc(len);
+    snprintf(out, len, "%sOff%s", app->ansi.red, app->ansi.yellow);
+    return out;
+}
+
+static char* SKIP_VAL(AppContext *app) {
+    int len = 128;
+    char *out = g_malloc(len);
+    snprintf(out, len, "[%s DEBUG %s]: [%sSKIP%s] %s",
+	app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal, app->ansi.yellow);
+    return out;
+}
+
 // Function to save config file
 void save_config(AppContext *app) {
     FILE *fp = fopen(CONFIG_FILE, "w");
     if (!fp) {
-        DEBUG_PRINT("[DEBUG]: Error opening config file for writing\n");
+        DEBUG_PRINT("[ DEBUG ]: Error opening config file for writing\n");
         return;
     }
 
@@ -39,8 +90,15 @@ void save_config(AppContext *app) {
     fprintf(fp, "# aiterm.conf version: %s\n", CONFIG_FILE_VERSION);
     fprintf(fp, "# Configuration file for aiterm\n");
     fprintf(fp, "# WARNING: Any changes made to this file will be overwritten\n\n");
+    fprintf(fp, "color=%d\n", app->sys.debug_color);
     fprintf(fp, "provider=%s\n", app->provider_config.provider ? app->provider_config.provider : "gemini");
     fprintf(fp, "model=%s\n", app->aiterm_runtime.model ? app->aiterm_runtime.model : "gemini-flash-latest");
+    fprintf(fp, "provider_base_url=%s\n", app->provider_config.base_url ? app->provider_config.base_url : "");
+    fprintf(fp, "provider_endpoint=%s\n", app->provider_config.endpoint ? app->provider_config.endpoint : "");
+    fprintf(fp, "provider_auth_header=%s\n", app->provider_config.auth_header ? app->provider_config.auth_header : "");
+    fprintf(fp, "provider_auth_scheme=%s\n", app->provider_config.auth_scheme ? app->provider_config.auth_scheme : "");
+    fprintf(fp, "provider_query_key=%s\n", app->provider_config.query_key_name ? app->provider_config.query_key_name : "");
+    fprintf(fp, "provider_api_key_in_query=%d\n", app->provider_config.api_key_in_query);
     char *encrypted_api_key = crypt_to_hex(app->security.api_key ? app->security.api_key : "", app->security.master_key);
     if (encrypted_api_key) {
 	fprintf(fp, "api_key=%s\n", encrypted_api_key);
@@ -84,10 +142,11 @@ void save_config(AppContext *app) {
     fprintf(fp, "ai_retry_max_retries=%d\n", app->retry_config.max_retries);
     fprintf(fp, "ai_retry_delay_sec=%d\n", app->retry_config.delay_sec);
     fprintf(fp, "load_from_session=%d\n", app->sys.load_from_session);
+    fprintf(fp, "idle_timeout_minutes=%u\n", idle_get_timeout_minutes(app));
     fprintf(fp, "# End of Config file.\n\n");
 
     fclose(fp);
-    DEBUG_PRINT("[DEBUG]: Settings saved to aiterm.conf\n");
+    DEBUG_PRINT("[ DEBUG ]: Settings saved to aiterm.conf\n");
 }
 
 void load_config(AppContext *app) {
@@ -99,148 +158,232 @@ void load_config(AppContext *app) {
 
     FILE *fp = fopen(CONFIG_FILE, "r");
     if (!fp) {
-        DEBUG_PRINT("[DEBUG]: Config file %s not found\n", CONFIG_FILE);
+        DEBUG_PRINT("[ DEBUG ]: Config file %s not found\n", CONFIG_FILE);
         return;
     }
-    DEBUG_PRINT("[DEBUG]: Loading config file: %s\n", CONFIG_FILE);
+    DEBUG_PRINT("%s config file: %s\n", LOADED_PREFIX(app), CONFIG_FILE);
 
     char line[1024];
     while (fgets(line, sizeof(line), fp)) {
 	line[strcspn(line, "\r\n")] = 0;
 	if (*line == '#') {
                 // Do nothing this line starts with #
-                DEBUG_PRINT("[DEBUG]: [SKIP] Skipping commented line\n");
+                DEBUG_PRINT("%s Skipping commented line %s\n", SKIP_VAL(app), app->ansi.normal);
+        } else if (strstr(line, "color=")) {
+		app->sys.debug_color = atoi(strchr(line, '=') + 1);
+		init_colors(app);
+		char *color_val = app->sys.debug_color ? ON_VAL(app) : OFF_VAL(app);
+		DEBUG_PRINT("%s  debug color enabled: [%s]%s\n", LOADED_PREFIX(app),
+			color_val, app->ansi.normal);
 	} else if (strstr(line, "api_key=")) {
 		char *val = strchr(line, '=') + 1;
 		if (app->security.api_key) free(app->security.api_key);
 		app->security.api_key = hex_to_decrypt(val, app->security.master_key);
-		DEBUG_PRINT("[DEBUG]: [DECRYPTED] [AES_256_CBC] API Key\n");
+		DEBUG_PRINT("%s API Key%s\n", DECRYPTED_PREFIX(app), app->ansi.normal);
 	} else if (strstr(line, "provider=")) {
 		char *val = strchr(line, '=') + 1;
 		if (app->provider_config.provider) free(app->provider_config.provider);
 		app->provider_config.provider = strdup(val);
-		DEBUG_PRINT("[DEBUG]: [LOADED] Provider: [%s]\n", app->provider_config.provider);
+		DEBUG_PRINT("%s  Provider: [%s%s%s]%s\n", LOADED_PREFIX(app),
+			app->ansi.cyan, app->provider_config.provider, app->ansi.yellow, app->ansi.normal);
 	} else if (strstr(line, "model=")) {
 		char *val = strchr(line, '=') + 1;
-		if (app->aiterm_runtime.model) free(app->aiterm_runtime.model);
+		if (app->aiterm_runtime.model) {
+			free(app->aiterm_runtime.model);
+		}
 		app->aiterm_runtime.model = strdup(val);
-		DEBUG_PRINT("[DEBUG]: [LOADED] Model: [%s]\n", app->aiterm_runtime.model);
+		DEBUG_PRINT("%s  Model: [%s%s%s]%s\n", LOADED_PREFIX(app),
+                        app->ansi.cyan, app->aiterm_runtime.model, app->ansi.yellow, app->ansi.normal);
+	} else if (strstr(line, "provider_base_url=")) {
+        char *val = strchr(line, '=') + 1;
+        g_free(app->provider_config.base_url);
+        app->provider_config.base_url = g_strdup(val);
+    } else if (strstr(line, "provider_endpoint=")) {
+        char *val = strchr(line, '=') + 1;
+        g_free(app->provider_config.endpoint);
+        app->provider_config.endpoint = g_strdup(val);
+    } else if (strstr(line, "provider_auth_header=")) {
+        char *val = strchr(line, '=') + 1;
+        g_free(app->provider_config.auth_header);
+        app->provider_config.auth_header = g_strdup(val);
+    } else if (strstr(line, "provider_auth_scheme=")) {
+        char *val = strchr(line, '=') + 1;
+        g_free(app->provider_config.auth_scheme);
+        app->provider_config.auth_scheme = g_strdup(val);
+    } else if (strstr(line, "provider_query_key=")) {
+        char *val = strchr(line, '=') + 1;
+        g_free(app->provider_config.query_key_name);
+        app->provider_config.query_key_name = g_strdup(val);
+    } else if (strstr(line, "provider_api_key_in_query=")) {
+        app->provider_config.api_key_in_query = atoi(strchr(line, '=') + 1) != 0;
 	} else if (strstr(line, "db_host=")) {
 		char *val = strchr(line, '=') + 1;
-		if (app->database.db_host) free(app->database.db_host);
+		if (app->database.db_host) {
+			free(app->database.db_host);
+		}
 		app->database.db_host = strdup(val);
-		DEBUG_PRINT("[DEBUG]: [LOADED] DB Host: [%s]\n", app->database.db_host);
+		DEBUG_PRINT("%s  DB Host: [%s%s%s]%s\n",  LOADED_PREFIX(app),
+                        app->ansi.cyan, app->database.db_host, app->ansi.yellow, app->ansi.normal);
 	} else if (strstr(line, "db_user=")) {
 		char *val = strchr(line, '=') + 1;
-		if (app->database.db_user) free(app->database.db_user);
+		if (app->database.db_user) {
+			free(app->database.db_user);
+		}
 		app->database.db_user = strdup(val);
-		DEBUG_PRINT("[DEBUG]: [LOADED] DB User: [%s]\n", app->database.db_user);
+		DEBUG_PRINT("%s  DB User: [%s%s%s]%s\n",  LOADED_PREFIX(app),
+                        app->ansi.cyan, app->database.db_user, app->ansi.yellow, app->ansi.normal);
 	} else if (strstr(line, "db_pass=")) {
 		char *val = strchr(line, '=') + 1;
-		if (app->database.db_pass) free(app->database.db_pass);
+		if (app->database.db_pass) {
+			free(app->database.db_pass);
+		}
 		app->database.db_pass = hex_to_decrypt(val, app->security.master_key);
-		DEBUG_PRINT("[DEBUG]: [DECRYPTED] [AES_256_CBC] DB Password: [xxxxxx]\n");
+		DEBUG_PRINT("%s DB Password: [%sxxxxxx%s]%s\n", DECRYPTED_PREFIX(app), 
+			app->ansi.yellow, app->ansi.yellow, app->ansi.normal);
 	} else if (strstr(line, "db_name")) {
 		char *val = strchr(line, '=') + 1;
-		if (app->database.db_name) free(app->database.db_name);
+		if (app->database.db_name) {
+			free(app->database.db_name);
+		}
 		app->database.db_name = strdup(val);
-		DEBUG_PRINT("[DEBUG]: [LOADED] DB Name: [%s]\n", app->database.db_name);
+		DEBUG_PRINT("%s  DB Name: [%s%s%s]%s\n",  LOADED_PREFIX(app),
+                        app->ansi.cyan, app->database.db_name, app->ansi.yellow, app->ansi.normal);
 	} else if (strstr(line, "ai_transparency=")) {
 		char *val = strchr(line, '=') + 1;
 		app->gui.ai_transparency = atof(val);
 		if (app->gui.ai_transparency < 0.1) app->gui.ai_transparency = 0.8;
-		DEBUG_PRINT("[DEBUG]: [LOADED] AI transparency: [%f]\n", app->gui.ai_transparency);
+		DEBUG_PRINT("%s  AI transparency: [%s%f%s]%s\n",  LOADED_PREFIX(app),
+                        app->ansi.cyan, app->gui.ai_transparency, app->ansi.yellow, app->ansi.normal);
 	} else if (strstr(line, "term_transparency=")) {
 		char *val = strchr(line, '=') + 1;
 		app->gui.transparency = atof(val);
 		if (app->gui.transparency < 0.1) app->gui.transparency = 0.8;
-		DEBUG_PRINT("[DEBUG]: [LOADED] terminal transparency: [%f]\n", app->gui.transparency);
+		DEBUG_PRINT("%s  terminal transparency: [%s%f%s]%s\n",  LOADED_PREFIX(app),
+                        app->ansi.cyan, app->gui.transparency, app->ansi.yellow, app->ansi.normal);
         } else if (strstr(line, "terminal_font=")) {
 		char *val = strchr(line, '=') + 1;
-		if (app->gui.terminal_font) free(app->gui.terminal_font);
+		if (app->gui.terminal_font) {
+			free(app->gui.terminal_font);
+		}
 		app->gui.terminal_font = strdup(val);
-		DEBUG_PRINT("[DEBUG]: [LOADED] terminal font: [%s]\n", app->gui.terminal_font);
+		DEBUG_PRINT("%s  terminal font: [%s%s%s]%s\n", LOADED_PREFIX(app),
+			app->ansi.cyan, app->gui.terminal_font, app->ansi.yellow, app->ansi.normal);
 	} else if (strstr(line, "ai_font=")) {
 		char *val = strchr(line, '=') + 1;
-		if (app->gui.ai_font) free(app->gui.ai_font);
+		if (app->gui.ai_font) {
+			free(app->gui.ai_font);
+		}
 		app->gui.ai_font = strdup(val);
-		DEBUG_PRINT("[DEBUG]: [LOADED] AI font: [%s]\n", app->gui.ai_font);
+                char *ai_font_val = g_malloc(128);
+                snprintf(ai_font_val, 128, "%s%s%s", app->ansi.cyan, app->gui.ai_font, app->ansi.yellow);
+		DEBUG_PRINT("%s  AI font: [%s] %s\n", LOADED_PREFIX(app),
+			ai_font_val, app->ansi.normal);
 	} else if (strstr(line, "tee_enabled=")) {
 		app->sys.tee_enabled = atoi(strchr(line, '=') + 1);
-		const char *tee_val = app->sys.tee_enabled ? "ON" : "OFF";
-		DEBUG_PRINT("[DEBUG]: [LOADED] default tee enabled: [%s]\n", tee_val);
+		char *tee_val = app->sys.tee_enabled ? ON_VAL(app) : OFF_VAL(app);
+		DEBUG_PRINT("%s  default tee enabled: [%s]%s\n", LOADED_PREFIX(app),
+			tee_val, app->ansi.normal);
 	} else if (strstr(line, "autoreply_enabled=")) {
 		app->sys.autoreply_enabled = atoi(strchr(line, '=') + 1);
-		const char *auto_val = app->sys.autoreply_enabled ? "ON" : "OFF";
-		DEBUG_PRINT("[DEBUG]: [LOADED] default auto reply enabled: [%s]\n", auto_val);
+		const char *auto_val = app->sys.autoreply_enabled ? ON_VAL(app) : OFF_VAL(app);
+		DEBUG_PRINT("%s  default auto reply enabled: [%s]%s\n", LOADED_PREFIX(app),
+			auto_val, app->ansi.normal);
 	} else if (strstr(line, "auto_execute_enabled=")) {
 		app->sys.auto_execute_enabled = atoi(strchr(line, '=') + 1);
-		const char *auto_exec_val = app->sys.auto_execute_enabled ? "ON" : "OFF";
-		DEBUG_PRINT("[DEBUG]: [LOADED] Default auto execute enabled: [%s]\n", auto_exec_val);
+		const char *auto_exec_val = app->sys.auto_execute_enabled ? ON_VAL(app) : OFF_VAL(app);
+		DEBUG_PRINT("%s  Default auto execute enabled: [%s]%s\n", LOADED_PREFIX(app),
+			auto_exec_val, app->ansi.normal);
 	} else if (strstr(line, "ratelimit_enabled=")) {
         	app->sys.ratelimit_enabled = atoi(strchr(line, '=') + 1);
-                const char *ratelimit_enabled_val = app->sys.ratelimit_enabled ? "ON" : "OFF";
-        	DEBUG_PRINT("[DEBUG]: [LOADED] Rate limit enabled: [%s]\n", ratelimit_enabled_val);
+                const char *ratelimit_enabled_val = app->sys.ratelimit_enabled ? ON_VAL(app) : OFF_VAL(app);
+        	DEBUG_PRINT("%s  Rate limit enabled: [%s]%s\n", LOADED_PREFIX(app),
+			ratelimit_enabled_val, app->ansi.normal);
         } else if (strstr(line, "send_snmp_payload=")) {
                 app->SnmpContext.enable_gemini_feed  = atoi(strchr(line, '=') + 1);
-                const char *SnmpContext_enable_gemini_feed_val = app->SnmpContext.enable_gemini_feed  ? "ON" : "OFF";
-                DEBUG_PRINT("[DEBUG]: [LOADED] Send SNMP Payload: [%s]\n", SnmpContext_enable_gemini_feed_val);
+                const char *SnmpContext_enable_gemini_feed_val = app->SnmpContext.enable_gemini_feed  ? ON_VAL(app) : OFF_VAL(app);
+                DEBUG_PRINT("%s  Send SNMP Payload: [%s]%s\n", LOADED_PREFIX(app),
+			SnmpContext_enable_gemini_feed_val, app->ansi.normal);
         } else if (strstr(line, "snmp_ticker_enabled=")) {
                 app->sys.snmp_ticker_enabled = atoi(strchr(line, '=') + 1);
-                const char *snmp_ticker_enabled_val = app->sys.snmp_ticker_enabled ? "ON" : "OFF";
-                DEBUG_PRINT("[DEBUG]: [LOADED] SNMP Ticker Enabled: [%s]\n", snmp_ticker_enabled_val);
+                const char *snmp_ticker_enabled_val = app->sys.snmp_ticker_enabled ? ON_VAL(app) : OFF_VAL(app);
+                DEBUG_PRINT("%s  SNMP Ticker Enabled: [%s]%s\n", LOADED_PREFIX(app), 
+			snmp_ticker_enabled_val, app->ansi.normal);
         } else if (strstr(line, "snmp_poll_interval=")) {
                 app->SnmpContext.poll_interval_sec = atoi(strchr(line, '=') + 1);
-                DEBUG_PRINT("[DEBUG]: [LOADED] SNMP Poll Interval: [%d]\n", app->SnmpContext.poll_interval_sec);
+                char *poll_interval_val = g_malloc(32);
+                snprintf(poll_interval_val, 32, "%s%d%s", app->ansi.cyan, app->SnmpContext.poll_interval_sec, app->ansi.yellow); 
+                DEBUG_PRINT("%s  SNMP Poll Interval: [%s]%s\n", LOADED_PREFIX(app), 
+			poll_interval_val, app->ansi.normal);
         } else if (strstr(line, "rpm=")) {
                 app->limiter.requests_per_minute = atoi(strchr(line, '=') + 1);
-                DEBUG_PRINT("[DEBUG]: [LOADED] Requests Per Minute (RPM): [%d]\n", app->limiter.requests_per_minute);
+                DEBUG_PRINT("%s  Requests Per Minute (RPM): [%s%d%s]%s\n", LOADED_PREFIX(app),
+			app->ansi.cyan, app->limiter.requests_per_minute, app->ansi.yellow, app->ansi.normal);
         } else if (strstr(line, "smart_cache_enabled=")) {
                 app->sys.smart_cache_enabled = atoi(strchr(line, '=') + 1);
-                const char *smart_cache_val = app->sys.smart_cache_enabled ? "ON" : "OFF";
-                DEBUG_PRINT("[DEBUG]: [LOADED] Smart Cache enabled: [%s]\n", smart_cache_val);
+                const char *smart_cache_val = app->sys.smart_cache_enabled ? ON_VAL(app) : OFF_VAL(app);
+                DEBUG_PRINT("%s  Smart Cache enabled: [%s]%s\n", LOADED_PREFIX(app), 
+			smart_cache_val, app->ansi.normal);
         } else if (strstr(line, "write_to_global=")) {
                 app->session.write_to_global = atoi(strchr(line, '=') + 1);
                 app->session.cfg_loaded_write_to_global = TRUE;
                 const char *write_to_global_val = app->session.write_to_global ? "GLOBAL session" : "STRICT session";
-                DEBUG_PRINT("[DEBUG]: [LOADED] Write to database [%s]\n", write_to_global_val);
+                DEBUG_PRINT("%s  Write to database [%s%s%s]%s\n", LOADED_PREFIX(app),
+			app->ansi.cyan,  write_to_global_val, app->ansi.yellow, app->ansi.normal);
         } else if (strstr(line, "read_from_global=")) {
                 app->session.read_from_global = atoi(strchr(line, '=') + 1);
                 app->session.cfg_loaded_read_from_global = TRUE;
                 const char *read_from_global_val = app->session.read_from_global ? "GLOBAL session" : "STRICT session";
-                DEBUG_PRINT("[DEBUG]: [LOADED] Read from database [%s]\n", read_from_global_val);
+                DEBUG_PRINT("%s  Read from database [%s%s%s]%s\n", LOADED_PREFIX(app),
+			app->ansi.cyan,  read_from_global_val, app->ansi.yellow, app->ansi.normal);
         } else if (strstr(line, "noise_filter_enabled=")) {
                 app->sys.noise_filter_enabled = atoi(strchr(line, '=') + 1);
-                const char *noise_filter_enabled_val = app->sys.noise_filter_enabled ? "ON" : "OFF";
-                DEBUG_PRINT("[DEBUG]: [LOADED] Noise Filter Enabled [%s]\n", noise_filter_enabled_val);
+                const char *noise_filter_enabled_val = app->sys.noise_filter_enabled ? ON_VAL(app) : OFF_VAL(app);
+                DEBUG_PRINT("%s  Noise Filter Enabled [%s]%s\n", LOADED_PREFIX(app),
+			noise_filter_enabled_val, app->ansi.normal);
         } else if (strstr(line, "debug_mode=")) {
                 if (app->sys.debug_mode_override) {
-                    DEBUG_PRINT("[DEBUG]: [OVERRIDE] Loading debug mode override from command line\n");
+                    DEBUG_PRINT("%s Loading debug mode override from command line%s\n", OVERRIDE_PREFIX(app), app->ansi.normal);
                 } else {
                     app->sys.debug_mode = atoi(strchr(line, '=') + 1);
-                    const char *debug_mode_val = app->sys.debug_mode ? "ON" : "OFF";
-                    DEBUG_PRINT("[DEBUG]: [LOADED] Debug Mode Enabled [%s]\n", debug_mode_val);
+                    const char *debug_mode_val = app->sys.debug_mode ? ON_VAL(app) : OFF_VAL(app);
+                    DEBUG_PRINT("%s  Debug Mode Enabled [%s]%s\n", LOADED_PREFIX(app),
+			debug_mode_val, app->ansi.normal);
                 }
         } else if (strstr(line, "xml_tagging=")) {
                 app->xml.tagging_enabled = atoi(strchr(line, '=') + 1);
-                const char *xml_tagging_enabled_val = app->xml.tagging_enabled ? "ON" : "OFF";
-                DEBUG_PRINT("[DEBUG]: [LOADED] XML Payload Tagging Enabled [%s]\n", xml_tagging_enabled_val);
+                const char *xml_tagging_enabled_val = app->xml.tagging_enabled ? ON_VAL(app) : OFF_VAL(app);
+                DEBUG_PRINT("%s  XML Payload Tagging Enabled [%s]%s\n", LOADED_PREFIX(app),
+			xml_tagging_enabled_val, app->ansi.normal);
         } else if (strstr(line, "ai_retry_enabled=")) {
                 app->retry_config.is_enabled = atoi(strchr(line, '=') + 1);
                 app->retry_state.config.is_enabled = app->retry_config.is_enabled;
-                DEBUG_PRINT("[DEBUG]: [LOADED] AI Retry Enabled [%s]\n", app->retry_config.is_enabled ? "ON" : "OFF");
+                const char *retry_is_enabled_val = app->retry_state.config.is_enabled ? ON_VAL(app) : OFF_VAL(app);
+                DEBUG_PRINT("%s  AI Retry Enabled [%s]%s\n", LOADED_PREFIX(app), 
+			retry_is_enabled_val, app->ansi.normal);
         } else if (strstr(line, "ai_retry_max_retries=")) {
                 app->retry_config.max_retries = atoi(strchr(line, '=') + 1);
                 app->retry_state.config.max_retries = app->retry_config.max_retries;
-                DEBUG_PRINT("[DEBUG]: [LOADED] AI Retry Max Attempts [%d]\n", app->retry_config.max_retries);
+		char *MAX_RETRY_VAL = g_malloc(64);
+                snprintf(MAX_RETRY_VAL, 32, "%s%d%s", app->ansi.cyan, 
+			app->retry_config.max_retries, app->ansi.yellow);
+                DEBUG_PRINT("%s  AI Retry Max Attempts [%s] %s\n", LOADED_PREFIX(app), 
+			MAX_RETRY_VAL, app->ansi.normal);
         } else if (strstr(line, "ai_retry_delay_sec=")) {
                 app->retry_config.delay_sec = atoi(strchr(line, '=') + 1);
                 app->retry_state.config.delay_sec = app->retry_config.delay_sec;
-                DEBUG_PRINT("[DEBUG]: [LOADED] AI Retry Delay [%d sec]\n", app->retry_config.delay_sec);
+                DEBUG_PRINT("%s  AI Retry Delay [%d sec]%s\n", LOADED_PREFIX(app), 
+			app->retry_config.delay_sec, app->ansi.normal);
         } else if (strstr(line, "load_from_session=")) {
                 app->sys.load_from_session = atoi(strchr(line, '=') + 1);
-                const char *load_from_session_val = app->sys.load_from_session ? "ON" : "OFF";
-                DEBUG_PRINT("[DEBUG]: [LOADED] Session based config enabled: [%s]\n", load_from_session_val);
+                const char *load_from_session_val = app->sys.load_from_session ? ON_VAL(app) : OFF_VAL(app);
+                DEBUG_PRINT("%s  Session based config enabled: [%s]%s\n", LOADED_PREFIX(app), load_from_session_val, app->ansi.normal);
+        } else if (strstr(line, "idle_timeout_minutes=")) {
+                long idle_minutes = strtol(strchr(line, '=') + 1, NULL, 10);
+                if (idle_minutes >= 0 && idle_minutes <= 1440) {
+                    app->idle.timeout_minutes = (guint)idle_minutes;
+                    DEBUG_PRINT("%s  Idle timeout: [%u minutes]%s\n",
+                        LOADED_PREFIX(app), app->idle.timeout_minutes, app->ansi.normal);
+                }
         }
     }
     fclose(fp);

@@ -36,20 +36,51 @@
 AppContext *global_app = NULL;
 
 int main(int argc, char *argv[]) {
+    // Initialize structure AppContext
     AppContext *app = g_malloc0(sizeof(AppContext));
     global_app = app;
 
-    // 1. Set initial variables to their needed defaults
+    // 1.1: Set initial variables to their needed defaults
     initialize_booleans(app);
 
-    // 2. Parse command line options if any
+    // 1.2: Check Environment Variables
+    // Added 0.9.9-beta
+    char *env_color = getenv("AITERM_COLOR");
+    if (env_color) {
+        app->sys.debug_color = atoi(env_color);
+    }
+
+    char *env_debug = getenv("AITERM_DEBUG");
+    if (env_debug) {
+        app->sys.debug_mode = atoi(env_debug);
+    }
+
+    // 1.3: Initialize Color Variabled
+    init_colors(app);
+
+    // 2.0: Parse command line options if any
     parse_command_line_options(app, argc, argv);
 
-    // 2.1 Set Config filename
-    init_config_pointer();
+    // 2.1: Set Config filename
+    init_config_pointer(app);
 
-    // 3. Initialize GTK
-    DEBUG_PRINT("[DEBUG]: [MAIN] Initializing GTK...\n");
+    // 2.2: Check Network availability
+    app->sys.is_network_available = check_network_availability(app);
+    if(!app->sys.is_network_available && !app->sys.offline_override) {
+       DEBUG_PRINT("[ DEBUG ]: [Network] Unavailable.\n");
+       exit(1);
+    }
+
+    // 2.3: Check if our STDERR is outputting to a TTY or not
+    check_debug_tty(app);
+
+    // 2.4: Initialize ANSI Colors
+    init_colors(app);
+ 
+    // 3.0: Initialize GTK
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s] %sInitializing GTK...%s\n",
+	app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+	app->ansi.lt_purple, app->ansi.normal);
     gtk_init(&argc, &argv);
     g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme", TRUE, NULL);
 
@@ -59,19 +90,26 @@ int main(int argc, char *argv[]) {
     // 3.2: Initilize Runtime Queues
     init_runtime_queues(app);
 
-    // 4 Initialize App Context and load config
-    DEBUG_PRINT("[DEBUG]: [MAIN] Invoking load_config... \n");
+    // 4.0: Initialize App Context and load config
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s] %sInvoking load_config...%s \n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
     load_config(app);
-    DEBUG_PRINT("[DEBUG]: [MAIN] Done! load_config sequence is now complete.\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s] %sDone! load_config sequence is now complete.%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
 
-    // 5) Initialize all DB synchronization primitives BEFORE any worker can use them.
+    // 5.0: Initialize all DB synchronization primitives BEFORE any worker can use them.
     pthread_mutex_init(&app->access.db_mutex, NULL);
     pthread_mutex_init(&app->access.db_init_mutex, NULL);
     pthread_cond_init(&app->access.db_init_cond, NULL);
     app->sys.db_initialized = FALSE;
     app->access.db_init_thread_started = FALSE;
 
-    DEBUG_PRINT("[DEBUG]: [MAIN] Spawning asynchronous DB initialization thread...\n");
+    // 5.1: Start Database worker thread
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s]%s Spawning asynchronous DB initialization thread...%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
     if (pthread_create(&app->access.db_init_thread, NULL, init_db_thread_worker, app) == 0) {
         app->access.db_init_thread_started = TRUE;
     } else {
@@ -83,30 +121,46 @@ int main(int argc, char *argv[]) {
         pthread_mutex_unlock(&app->access.db_init_mutex);
     }
 
-    // 6) Initialize Session Manager
-    DEBUG_PRINT("[DEBUG]: [MAIN] Initializing Session Manager...\n");
+    // 6.0: Initialize Session Manager
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s]%s Initializing Session Manager...%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
     session_init(app);
-    DEBUG_PRINT("[DEBUG]: [MAIN] Done! Session Manager is now active.\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s]%s Done! Session Manager is now active.%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
 
-    // 7) INITIALIZE THE TEE HANDLER HERE
-    DEBUG_PRINT("[DEBUG]: [MAIN] Initializing Tee Handler...\n");
+    // 7.0: INITIALIZE THE TEE HANDLER HERE
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s]%s Initializing Tee Handler...%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
     tee_handler_init(app);
-    DEBUG_PRINT("[DEBUG]: [MAIN] Done! Tee Handler Initialized\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s]%s Done! Tee Handler Initialized%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
 
-    // 8) Initialize Noise Filter
+    // 8.0: Initialize Noise Filter
     if (app->sys.db_initialized) {
-        DEBUG_PRINT("[DEBUG]: [Noise Filter]: Initializing List...\n");
+        DEBUG_PRINT("[%s DEBUG %s]: [%sNoise Filter%s]:%s Initializing List...%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
         noise_filter_load_from_db(app);
-        DEBUG_PRINT("[DEBUG]: [Noise Filter]: Initializing Done!\n");
+        DEBUG_PRINT("[%s DEBUG %s]: [%sNoise Filter%s]:%s Initializing Done!%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
     }
 
-    // 9) Initialize Token Tracker
+    // 9.0: Initialize Token Tracker
     // Added 0.9.5
-    DEBUG_PRINT("[DEBUG]: [MAIN] Initializing Token Tracker...\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s]%s Initializing Token Tracker...%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
     init_token_tracker(app);
-    DEBUG_PRINT("[DEBUG]: [Token Tracker] Initalizing Done!\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sToken Tracker%s]%s Initalizing Done!%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
 
-    // 10) FALLBACK: Only check env vars if config key is still NULL
+    // 10.0: FALLBACK: Only check env vars if config key is still NULL
     if (!app->security.api_key || strlen(app->security.api_key) == 0) {
         app->security.api_key = getenv("GEMINI_API_KEY");
     }
@@ -119,65 +173,104 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Error: No API key found.\n");
     }
 
-    // 11) initialize AI Provider config
-    DEBUG_PRINT("[DEBUG]: [MAIN] Initialize AI Provider Configuration...\n");
+    // 11.0: initialize AI Provider config
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s]%s Initialize AI Provider Configuration...%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
     init_provider_config(app);
-    DEBUG_PRINT("[DEBUG]: [AI Provider] Initialization Done!\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sAI Provider%s]%s Initialization Done!%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
 
-    // 12) initialize rate limiter
-    DEBUG_PRINT("[DEBUG]: [MAIN] Initialize Rate Limiter...\n");
+    // 12.0: initialize rate limiter
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s]%s Initialize Rate Limiter...%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
     ratelimit_init(&app->limiter, app->limiter.requests_per_minute);
-    DEBUG_PRINT("[DEBUG]: [Rate Limiter] Initialization Done!\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sRate Limiter%s]%s Initialization Done!%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
 
-    // 13) Initialize local command cache
+    // 13.0: Initialize local command cache
     // Added 0.9.5
-    DEBUG_PRINT("[DEBUG]: [MAIN] Initialize Local Command History Cache.\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s]%s Initialize Local Command History Cache.%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
     init_local_cmd_history(app);
-    DEBUG_PRINT("[DEBUG]: [Local Command] Initialization Done! Use Up/Down Arrow keys to activate\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sLocal Command%s]%s Initialization Done! Use Up/Down Arrow keys to activate%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
 
-    // 14) Initialize Smart Cache
+    // 14.0: Initialize Smart Cache
     // Added 0.9.5-omega
-    DEBUG_PRINT("[DEBUG]: [MAIN] Initialize smart cache variables\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s]%s Initialize smart cache variables%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
     gemini_cache_init(app);
-    DEBUG_PRINT("[DEBUG]: [Smart Cache] Done initalizing\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sSmart Cach%s]%s Done initalizing%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
 
-    // 15) Build the UI (from gui.c)
+    // 15.0: Build the UI (from gui.c)
     // Revised 0.9.2, 0.9.3, 0.9.4 and 0.9.5
-    DEBUG_PRINT("[DEBUG]: [MAIN] Launching create_main_window GUI setup...\n");
-    setup_gui(app);
-    DEBUG_PRINT("[DEBUG]: [GUI Setup] Done!\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s]%s Launching create_main_window GUI setup...%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
 
-    // 16) Send general direcives Added 0.9.6-gamma
-    DEBUG_PRINT("[DEBUG]: [Main] Sending General Directives\n");
+    setup_gui(app);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sGUI Setup%s]%s Done!%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
+
+    // 15.1: Start the idle watchdog after the GUI exists.  The timeout is
+    // loaded from aiterm.conf when present; otherwise idle.c defaults to 10
+    // minutes.
+    idle_init(app);
+
+
+    // 16.0: Send general direcives Added 0.9.6-gamma
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMain%s] %sSending General Directives%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
+
     g_idle_add(on_app_startup_prime, app);
 
-    // 17) Initialize SNMP Subsystem
+    // 17.0: Initialize SNMP Subsystem
     init_snmp_subsystem(app);
     init_snmp("aiterm");
     snmp_load_targets_from_db(app);
     snmp_start_poller(app);
 
-    // 17.1) Sync all Booleans
+    // 17.1: Sync all Booleans
     sync_toggle_ui_elements(app);
 
-    // 18) Enter the GTK Main Event Loop
-    DEBUG_PRINT("[DEBUG]: [MAIN] Passing control to gtk_main loop.\n");
+    // 18.0: Enter the GTK Main Event Loop
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s]%s Passing control to gtk_main loop.%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
+
     gtk_main();
 
-    // 19) Clean up
-    DEBUG_PRINT("[DEBUG]: [MAIN] Beginning orderly shutdown.\n");
+    // 19.0: Clean up
+    DEBUG_PRINT("[ DEBUG ]: [MAIN] Beginning orderly shutdown.\n");
 
-    /* Stop and join the SNMP worker before destroying AppContext resources. */
+    // Restore any temporarily suspended toggle states before the final DB
+    // synchronization so an idle period is never persisted as a real user
+    // choice.
+    idle_shutdown(app);
+    
+    // 19.1: Stop and join the SNMP worker before destroying AppContext resources. */
     snmp_stop_poller(app);
 
-    /* The DB initialization worker owns no AppContext lifetime.  Join it so
-     * shutdown can never race a still-running database initializer. */
+    // 19.2: The DB initialization worker owns no AppContext lifetime.  Join it so
+    // shutdown can never race a still-running database initializer.
     if (app->access.db_init_thread_started) {
-        DEBUG_PRINT("[DEBUG]: [MAIN] Joining DB initialization thread.\n");
+        DEBUG_PRINT("[ DEBUG ]: [MAIN] Joining DB initialization thread.\n");
         pthread_join(app->access.db_init_thread, NULL);
         app->access.db_init_thread_started = FALSE;
     }
 
+    // 19.3: Sync system booleans to the database
     session_sync_booleans_to_db(app);
 
     if (app->database.global_db_conn) {
@@ -185,8 +278,11 @@ int main(int argc, char *argv[]) {
         app->database.global_db_conn = NULL;
     }
 
+    // 19.4: Clean up ANSI
+    cleanup_colors(app);
+
     // 20) Close main threaded database connection
-    DEBUG_PRINT("[DEBUG]: [MAIN] Closing threaded database connection.\n");
+    DEBUG_PRINT("[ DEBUG ]: [MAIN] Closing threaded database connection.\n");
     pthread_cond_destroy(&app->access.db_init_cond);
     pthread_mutex_destroy(&app->access.db_init_mutex);
     pthread_mutex_destroy(&app->access.db_mutex);

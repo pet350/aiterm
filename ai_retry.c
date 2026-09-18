@@ -21,6 +21,22 @@
 #include "update.h"
 #include "gemini.h"
 
+// Return ansi green "On"
+static char* ON_VAL(AppContext *app) {
+    int len = 32;
+    char *out = g_malloc(len);
+    snprintf(out, len, "%sOn%s", app->ansi.green, app->ansi.yellow);
+    return out;
+}
+
+// Return ansi red "Off"
+static char* OFF_VAL(AppContext *app) {
+    int len = 32;
+    char *out = g_malloc(len);
+    snprintf(out, len, "%sOff%s", app->ansi.red, app->ansi.yellow);
+    return out;
+}
+
 // Inspects the raw HTTP body or status code for rate limit/quota signatures
 gboolean is_quota_or_ratelimit_error(long http_code, const char *raw_response) {
     // 1. Check HTTP Status Code
@@ -61,6 +77,13 @@ double extract_recommended_delay(const char *raw_response, double default_delay_
 void ai_retry_init(AppContext *app) {
     if (!app) return;
 
+    char *lt_pl = g_strdup(app->ansi.lt_purple);
+    char *cy    = g_strdup(app->ansi.cyan);
+    char *yl    = g_strdup(app->ansi.yellow);
+    char *gr    = g_strdup(app->ansi.green);
+    char *red   = g_strdup(app->ansi.red);
+    char *nml   = g_strdup(app->ansi.normal);
+
     // Initialize configuration parameters using gui.h layout
     app->retry_config.is_enabled = TRUE;
     app->retry_config.max_retries = 3;
@@ -70,11 +93,24 @@ void ai_retry_init(AppContext *app) {
     app->retry_state.config = app->retry_config;
     app->retry_state.total_retries_executed = 0;
 
-    DEBUG_PRINT("[DEBUG]: [MAIN] Initializing AI Retry Handler...\n");
-    DEBUG_PRINT("[DEBUG]: [LOADED] AI Retry Enabled [%s]\n", app->retry_config.is_enabled ? "ON" : "OFF");
-    DEBUG_PRINT("[DEBUG]: [LOADED] AI Retry Max Attempts [%d]\n", app->retry_config.max_retries);
-    DEBUG_PRINT("[DEBUG]: [LOADED] AI Retry Delay [%d sec]\n", app->retry_config.delay_sec);
-    DEBUG_PRINT("[DEBUG]: [MAIN] Done! AI Retry Handler Initialized\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s] %sInitializing AI Retry Handler...%s\n",
+	lt_pl, nml, cy, nml, yl, nml);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sLOADED%s] %sAI Retry Enabled [%s]\n", 
+	lt_pl, nml, cy, nml, yl, app->retry_config.is_enabled ? ON_VAL(app) : OFF_VAL(app) );
+
+    DEBUG_PRINT("[%s DEBUG %s]: [%sLOADED%s] %sAI Retry Max Attempts [%s%d%s]%s\n",
+	lt_pl, nml, cy, nml, yl, gr, app->retry_config.max_retries, yl, nml);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sLOADED%s] %sAI Retry Delay [%s%d sec%s]%s\n",
+	lt_pl, nml, cy, nml, yl, red, app->retry_config.delay_sec, yl, nml);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s] %sDone!%s AI Retry Handler Initialized%s\n",
+	lt_pl, nml, cy, nml, gr, yl, nml);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
 }
 
 gboolean ai_retry_is_transient_error(long http_status, const char *response_body) {
@@ -108,6 +144,13 @@ char* ai_retry_execute_with_retry(AppContext *app,
     char *raw_response = NULL;
     long http_code = 0;
 
+    char *lt_pl = g_strdup(app->ansi.lt_purple);
+    char *cy    = g_strdup(app->ansi.cyan);
+    char *yl    = g_strdup(app->ansi.yellow);
+    char *gr    = g_strdup(app->ansi.green);
+    char *red   = g_strdup(app->ansi.red);
+    char *nml   = g_strdup(app->ansi.normal);
+
     for (int attempt = 1; attempt <= max_attempts; attempt++) {
         if (raw_response) {
             free(raw_response);
@@ -128,10 +171,11 @@ char* ai_retry_execute_with_retry(AppContext *app,
             // Determine sleep duration (use API's recommended retry time if available)
             double sleep_sec = extract_recommended_delay(raw_response, base_delay * attempt);
 
-            DEBUG_PRINT("[DEBUG]: [AI RETRY] Quota/Rate Limit hit (HTTP %ld). Attempt %d/%d.\n", 
-                        http_code, attempt, max_attempts);
-            DEBUG_PRINT("[DEBUG]: [AI RETRY] Backing off for %.2f seconds before next retry...\n", 
-                        sleep_sec);
+            DEBUG_PRINT("[%s DEBUG %s]: [%sAI RETRY%s] %sQuota/Rate Limit hit %s(HTTP %ld)%s. Attempt %s%d/%d%s.\n", 
+                        lt_pl, nml, cy, nml, yl, gr, http_code, yl, gr, attempt, max_attempts, nml);
+
+            DEBUG_PRINT("[%s DEBUG %s]: [%sAI RETRY%s]%s Backing off for [%s%.2f%s] seconds before next retry...%s\n", 
+                        lt_pl, nml, cy, nml, yl, red, sleep_sec, yl, nml);
 
             if (attempt < max_attempts) {
                 // Sleep using GLib microsecond delay
@@ -142,18 +186,28 @@ char* ai_retry_execute_with_retry(AppContext *app,
 
         // If it's a non-retryable error (e.g. 400 Bad Request, 401 Unauthorized), break early
         if (http_code >= 400 && http_code < 500 && http_code != 429) {
-            DEBUG_PRINT("[DEBUG]: [AI RETRY] Non-retryable HTTP error (%ld) encountered. Aborting.\n", http_code);
+            DEBUG_PRINT("[%s DEBUG %s]: [%sAI RETRY%s] %sNon-retryable HTTP error (%s%ld%s) encountered. %sAborting.%s\n", 
+		lt_pl, nml, cy, nml, yl, gr, http_code, yl, red, nml);
             break;
         }
 
         // Standard exponential backoff for other transient failures (5xx, timeouts)
         if (attempt < max_attempts) {
             double sleep_sec = base_delay * attempt;
-            DEBUG_PRINT("[DEBUG]: [AI RETRY] Transient error (HTTP %ld). Retrying in %.2f seconds...\n", http_code, sleep_sec);
+            DEBUG_PRINT("[%s DEBUG %s]: [%sAI RETRY%s] %sTransient error (%sHTTP %ld%s). Retrying in [%s%.2f%s] seconds...%s\n", 
+		lt_pl, nml, cy, nml,yl, red, http_code, yl, red, sleep_sec, yl, nml);
             g_usleep((gulong)(sleep_sec * 1000000.0));
         }
     }
 
     if (out_http_code) *out_http_code = http_code;
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     return raw_response;
 }

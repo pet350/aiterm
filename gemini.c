@@ -19,6 +19,7 @@
 #include "utils.h"
 #include "update.h"
 #include "openai.h"
+#include "ai_provider.h"
 #include "session_manager.h"
 #include "noisefilter.h"
 #include "ai_retry.h"
@@ -61,7 +62,7 @@ static char *gemini_http_single_attempt(const char *payload, long *out_http_code
         if (res == CURLE_OK) {
             curl_easy_getinfo(curl_handle, CURLINFO_RESPONSE_CODE, &http_code);
         } else {
-            DEBUG_PRINT("[DEBUG]: CURL Error: %s\n", curl_easy_strerror(res));
+            DEBUG_PRINT("[ DEBUG ]: CURL Error: %s\n", curl_easy_strerror(res));
             http_code = 0;
         }
 
@@ -80,6 +81,13 @@ static char *gemini_http_single_attempt(const char *payload, long *out_http_code
 // UI-neutral execution wrapped with AI Retry handler
 char* perform_gemini_request(AppContext *app, const char *prompt, const char *terminal_context) {
     char url[1024];
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
 
     /* GTK/VTE objects belong to the main thread.  The caller captures the
      * terminal context before launching this worker.  Never query VTE here. */
@@ -102,28 +110,18 @@ char* perform_gemini_request(AppContext *app, const char *prompt, const char *te
         json_object_object_add(sys_instruction, "parts", sys_parts);
         json_object_object_add(root, "system_instruction", sys_instruction);
     } else {
-        DEBUG_PRINT("[DEBUG]: [Send to Gemini] GENERAL_DIRECTIVES is NULL or empty.\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSend to Gemini%s] %s GENERAL_DIRECTIVES%s is %sNULL%s or empty.%s\n",
+		lt_pl, nml, cy, nml, gr, yl, red, yl, nml );
     }
 
     // 2. Load History from Database (Only when not initializing)
     if (!app->sys.is_initializing) {
-        DEBUG_PRINT("[DEBUG]: [Perform Gemini Request] Not Initializing, Loading History\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sPerform Gemini Request%s]%s Not Initializing, Loading History%s\n",
+		lt_pl, nml, cy, nml, yl, nml );
         load_history_to_gemini(app, contents, prompt);
     } else {
-        DEBUG_PRINT("[DEBUG]: [Init Phase] Bypassing history retrieval.\n");
-    }
-
-    // Compute prompt hash for cache lookup/storage
-    char *prompt_hash = g_compute_checksum_for_string(G_CHECKSUM_SHA256, prompt, -1);
-
-    // Check local cache first
-    char *cached_res = gemini_cache_lookup(prompt_hash);
-    if (cached_res != NULL) {
-        g_free(prompt_hash);
-        g_free(tee_chunk);
-
-        json_object_put(root);
-        return cached_res; 
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sInit Phase%s] %sBypassing history retrieval.%s\n",
+		lt_pl, nml, cy, nml, yl, nml);
     }
 
     int total_history_turns = json_object_array_length(contents);
@@ -148,6 +146,21 @@ char* perform_gemini_request(AppContext *app, const char *prompt, const char *te
     struct json_object *user_part = json_object_new_object();
 
     char *full_prompt = g_strdup_printf("%s\n\nUSER INSTRUCTION: %s", tee_chunk, prompt);
+
+    /* Terminal context is part of the effective Gemini request.  Include the
+     * assembled prompt in the local cache key so a context-dependent question
+     * such as "summarize dmesg" cannot reuse a response produced without that
+     * terminal snapshot. */
+    char *prompt_hash = g_compute_checksum_for_string(G_CHECKSUM_SHA256, full_prompt, -1);
+
+    // Check local cache only after the terminal-aware prompt has been assembled.
+    char *cached_res = gemini_cache_lookup(prompt_hash);
+    if (cached_res != NULL) {
+        g_free(prompt_hash);
+        g_free(tee_chunk);
+        json_object_put(root);
+        return cached_res;
+    }
 
     json_object_object_add(user_part, "text", json_object_new_string(full_prompt));
     json_object_array_add(user_parts, user_part);
@@ -184,8 +197,10 @@ char* perform_gemini_request(AppContext *app, const char *prompt, const char *te
     char *raw_json = ai_retry_execute_with_retry(app, gemini_http_single_attempt, post_data, &http_data, &final_http_code);
 
     if (raw_json != NULL) {
-        DEBUG_PRINT("[DEBUG]: \n--- RAW GEMINI RESPONSE (HTTP %ld) ---\n%s\n--------------------------\n", final_http_code, raw_json);
-        
+        DEBUG_PRINT("[ %sDEBUG%s ]:%s --- %sRAW GEMINI RESPONSE%s --- %s\n",
+		lt_pl, nml, yl, cy, yl, nml); 
+        DEBUG_PRINT("%s(HTTP %s%ld%s)%s ---\n%s%s%s\n--------------------------%s\n", 
+		gr, red, final_http_code, gr, yl, red, raw_json, yl, nml);
         // Cache successful responses
         if (final_http_code == 200) {
             gemini_cache_store(prompt_hash, raw_json);
@@ -215,6 +230,13 @@ char* perform_gemini_request(AppContext *app, const char *prompt, const char *te
     g_free(prompt_hash);
     g_free(full_prompt);
     g_free(tee_chunk);
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     /* terminal_context is borrowed here; AIThreadData owns and frees it. */
     json_object_put(root);
 
@@ -226,53 +248,20 @@ gpointer ai_thread_func(gpointer data) {
     AIThreadData *td = (AIThreadData *)data;
     if (!td) return NULL;
 
+    // Set the thread name
+    SET_THREAD_NAME("aiterm-ai");
+
     char *raw_json = NULL;
 
-    if (td->app->provider_config.kind == PROVIDER_KIND_GEMINI_GENERATE) {
-        raw_json = perform_gemini_request(td->app, td->prompt, td->terminal_context);
-    } else {
-        raw_json = send_to_openai(td->app, td->prompt);
-    }
+    /* Provider-neutral dispatch.  The worker does not need to know whether
+     * the selected backend is Gemini, OpenAI, Groq, OpenRouter, Mistral,
+     * Ollama, or another OpenAI-compatible endpoint. */
+    raw_json = ai_provider_send_with_context(td->app, td->prompt, td->terminal_context);
 
     char *final_text = NULL;
     if (raw_json) {
-        struct json_object *root_obj = json_tokener_parse(raw_json);
-        if (root_obj) {
-            extern gboolean refresh_token_display(gpointer data);
-
-            if (td->app->provider_config.kind == PROVIDER_KIND_GEMINI_GENERATE) {
-                struct json_object *usage_meta;
-                if (json_object_object_get_ex(root_obj, "usageMetadata", &usage_meta)) {
-                    struct json_object *total_toks = NULL;
-                    struct json_object *cand_toks = NULL;
-                    
-                    if (json_object_object_get_ex(usage_meta, "totalTokenCount", &total_toks)) {
-                        td->app->tokens.current = json_object_get_int64(total_toks);
-                    }
-                    if (json_object_object_get_ex(usage_meta, "candidatesTokenCount", &cand_toks)) {
-                        td->app->tokens.last = json_object_get_int64(cand_toks);
-                    }
-                    g_idle_add(refresh_token_display, td->app);
-                }
-            } else {
-                struct json_object *usage_obj;
-                if (json_object_object_get_ex(root_obj, "usage", &usage_obj)) {
-                    struct json_object *total_toks = NULL;
-                    struct json_object *comp_toks = NULL;
-                    
-                    if (json_object_object_get_ex(usage_obj, "total_tokens", &total_toks)) {
-                        td->app->tokens.current = json_object_get_int64(total_toks);
-                    }
-                    if (json_object_object_get_ex(usage_obj, "completion_tokens", &comp_toks)) {
-                        td->app->tokens.last = json_object_get_int64(comp_toks);
-                    }
-                    g_idle_add(refresh_token_display, td->app);
-                }
-            }
-            json_object_put(root_obj); 
-        }
-
-        final_text = extract_ai_text(raw_json);
+        ai_provider_extract_usage(td->app, raw_json);
+        final_text = ai_provider_extract_text(raw_json);
         if (final_text) {
             save_to_history(td->prompt, final_text);
         }
@@ -298,16 +287,16 @@ char* send_to_gemini(AppContext *app, const char *prompt) {
         ratelimit_wait_if_needed(&app->limiter);
     }
     if (g_atomic_int_get(&app->sys.ai_busy)) {
-        DEBUG_PRINT("[DEBUG] SEND_TO_GEMINI: ai_busy flag set not executing perform_gemini_request\n");
+        DEBUG_PRINT("[ DEBUG ] SEND_TO_GEMINI: ai_busy flag set not executing perform_gemini_request\n");
         return NULL;
     }
 
     char *output = g_strdup(noise_filter_apply(app, prompt));
     g_atomic_int_set(&app->sys.ai_busy, 1);
-    DEBUG_PRINT("[DEBUG]: [SEND_TO_GEMINI] set ai_busy flag TRUE\n");
+    DEBUG_PRINT("[ DEBUG ]: [SEND_TO_GEMINI] set ai_busy flag TRUE\n");
     char *data = perform_gemini_request(app, output, NULL);
     g_atomic_int_set(&app->sys.ai_busy, 0);
-    DEBUG_PRINT("[DEBUG]: [SEND_TO_GEMINI] Cleared ai_busy flag, returning response\n");
+    DEBUG_PRINT("[ DEBUG ]: [SEND_TO_GEMINI] Cleared ai_busy flag, returning response\n");
     g_free(output);
     return data;
 }
@@ -340,15 +329,15 @@ char* gemini_list_models(AppContext *app) {
         headers = curl_slist_append(headers, api_key_header);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-        DEBUG_PRINT("[DEBUG]: [Gemini Models] Fetching models from: %s\n", url);
+        DEBUG_PRINT("[ DEBUG ]: [Gemini Models] Fetching models from: %s\n", url);
 
         res = curl_easy_perform(curl);
 
         if (res != CURLE_OK) {
-            DEBUG_PRINT("[DEBUG]: [Gemini Models] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+            DEBUG_PRINT("[ DEBUG ]: [Gemini Models] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
             g_string_append_printf(model_output_str, "Error: Failed to fetch models from Gemini API: %s\n", curl_easy_strerror(res));
         } else {
-            DEBUG_PRINT("[DEBUG]: [Gemini Models] Raw response: %s\n", chunk.memory);
+            DEBUG_PRINT("[ DEBUG ]: [Gemini Models] Raw response: %s\n", chunk.memory);
             root = json_tokener_parse(chunk.memory);
             if (root == NULL) {
                 g_string_append(model_output_str, "Error: Failed to parse Gemini API response (invalid JSON).\n");

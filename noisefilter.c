@@ -26,9 +26,8 @@
 #include "tee_handler.h"
 #include "ratelimit.h"
 
-/**
- * Strips ANSI escape sequences (colors, cursor movements) from a string.
- */
+
+// Strips ANSI escape sequences (colors, cursor movements) from a string.
 char* strip_ansi_sequences(const char *src) {
     if (!src) return NULL;
 
@@ -52,6 +51,16 @@ char* strip_ansi_sequences(const char *src) {
     return dst;
 }
 
+// Begining of every DEBUG_PRINT statement 
+// produced by this .c file
+static char* DEBUG_PREFIX(AppContext *app) {
+    int len = 64;
+    char *out = g_malloc(len);
+    snprintf(out, len, "[%s DEBUG %s]: [%sNoise Filter%s]%s",
+	app->ansi.lt_purple, app->ansi.normal, app->ansi.cyan, app->ansi.normal, app->ansi.lt_green);
+    return out;
+}
+
 /**
  * In-place substring removal helper.
  * Removes all occurrences of `sub` from `str`.
@@ -61,7 +70,7 @@ void remove_substring(char *str, const char *sub, gboolean dash) {
     size_t len = strlen(sub);
     if (len == 0) return;
     if (dash) {
-        fprintf(stderr, "-");
+        fprintf(stderr, "%s-%s", global_app->ansi.red, global_app->ansi.normal);
     }
     char *match;
     while ((match = strstr(str, sub)) != NULL) {
@@ -76,7 +85,8 @@ void noise_filter_load_from_db(AppContext *app) {
     if (!app || !app->database.global_db_conn) return;
 
     pthread_mutex_lock(&app->access.db_mutex);
-    DEBUG_PRINT("[DEBUG]: [Noise Filter] Locked DB Mutex\n");
+    DEBUG_PRINT("%s  Locked DB Mutex%s\n",
+	DEBUG_PREFIX(app), app->ansi.normal);
 
     // GTK model is maintained only for the UI. Background workers use the
     // thread-safe pattern snapshot below.
@@ -93,14 +103,16 @@ void noise_filter_load_from_db(AppContext *app) {
         g_ptr_array_set_size(app->noise.patterns, 0);
 
     const char *query = "SELECT pattern FROM noise_filters ORDER BY id ASC";
-    DEBUG_PRINT("[DEBUG]: [Noise Filter] Running SQL Query: %s\n", query);
+    DEBUG_PRINT("%s  Running SQL Query: %s%s%s\n", 
+	DEBUG_PREFIX(app), app->ansi.cyan, query, app->ansi.normal);
 
     if (mysql_query(app->database.global_db_conn, query) != 0) {
         fprintf(stderr, "[Noise Filter] MySQL query error: %s\n",
                 mysql_error(app->database.global_db_conn));
         g_mutex_unlock(&app->noise.patterns_mutex);
         pthread_mutex_unlock(&app->access.db_mutex);
-        DEBUG_PRINT("[DEBUG]: [Noise Filter] Unlocked DB Mutex\n");
+        DEBUG_PRINT("%s  Unlocked DB Mutex%s\n",
+		DEBUG_PREFIX(app), app->ansi.normal);
         return;
     }
 
@@ -117,13 +129,16 @@ void noise_filter_load_from_db(AppContext *app) {
                 g_ptr_array_add(app->noise.patterns, g_strdup(row[0]));
             }
         }
-        DEBUG_PRINT("[DEBUG]: [Noise Filter] Loaded %ld Filters from database\n", app->noise.count);
+        DEBUG_PRINT("%s  Loaded %s%ld%s Filters from database%s\n",
+		DEBUG_PREFIX(app), app->ansi.yellow,  app->noise.count,
+		app->ansi.lt_green, app->ansi.normal);
         mysql_free_result(result);
     }
 
     g_mutex_unlock(&app->noise.patterns_mutex);
     pthread_mutex_unlock(&app->access.db_mutex);
-    DEBUG_PRINT("[DEBUG]: [Noise Filter] Unlocked DB Mutex\n");
+    DEBUG_PRINT("%s  Unlocked DB Mutex%s\n",
+		DEBUG_PREFIX(app), app->ansi.normal);
 }
 
 // Core Application Engine Hook
@@ -144,7 +159,8 @@ char* noise_filter_apply(AppContext *app, const char *raw_input) {
     // GTK ListStore from a worker thread.
     g_mutex_lock(&app->noise.patterns_mutex);
     if (app->noise.patterns && app->noise.patterns->len > 0) {
-        DEBUG_PRINT("[DEBUG]: [Noise Filter] Initiating substring removals: ");
+        DEBUG_PRINT("%s Initiating substring removals:%s ",
+	    DEBUG_PREFIX(app), app->ansi.normal);
         for (guint i = 0; i < app->noise.patterns->len; i++) {
             const char *pattern = g_ptr_array_index(app->noise.patterns, i);
             if (pattern && *pattern)
@@ -156,7 +172,11 @@ char* noise_filter_apply(AppContext *app, const char *raw_input) {
 
     size_t in_len = strlen(raw_input);
     size_t out_len = strlen(working_text);
-    DEBUG_PRINT("[DEBUG]: [Noise Filter] In/Out Length %ld / %ld Bytes, Removed %ld Bytes\n", in_len, out_len, (in_len - out_len));
+    DEBUG_PRINT("%s In/Out Length %s%ld%s/%s%ld%s Bytes, Removed %s%ld%s Bytes %s\n", 
+	DEBUG_PREFIX(app), app->ansi.yellow, in_len, 		 app->ansi.lt_green,
+		        app->ansi.yellow, out_len,		 app->ansi.lt_green,
+			app->ansi.cyan,   (in_len - out_len), app->ansi.lt_green, 
+			app->ansi.normal);
 
     return working_text; // Allocated via g_malloc; caller frees with g_free()
 }
@@ -250,7 +270,8 @@ gboolean ignore_tee_line(AppContext *app, const char *line) {
 
     if (!app->database.global_db_conn) {
         pthread_mutex_unlock(&app->access.db_mutex);
-        DEBUG_PRINT("[DEBUG]: [Noise Filter] Database connection not active.\n");
+        DEBUG_PRINT("%s Database connection not active.%s\n",
+		DEBUG_PREFIX(app), app->ansi.normal);
         return FALSE;
     }
 
@@ -259,7 +280,7 @@ gboolean ignore_tee_line(AppContext *app, const char *line) {
     if (mysql_query(app->database.global_db_conn, query) != 0) {
         char *err_msg = g_strdup_printf("[ERROR]: MySQL query failed: %s\n", mysql_error(app->database.global_db_conn));
         pthread_mutex_unlock(&app->access.db_mutex);
-        DEBUG_PRINT("[DEBUG]: [Noise Filter] %s\n", err_msg);
+        DEBUG_PRINT("%s  %s%s\n", DEBUG_PREFIX(app), err_msg, app->ansi.normal);
         g_free(err_msg);
         return FALSE;
     }
@@ -267,7 +288,8 @@ gboolean ignore_tee_line(AppContext *app, const char *line) {
     MYSQL_RES *result = mysql_store_result(app->database.global_db_conn);
     if (!result) {
         pthread_mutex_unlock(&app->access.db_mutex);
-        DEBUG_PRINT("[DEBUG]: [Noise Filter] Could not retrieve MySQL result set.\n");
+        DEBUG_PRINT("%s  Could not retrieve MySQL result set.%s\n",
+		DEBUG_PREFIX(app), app->ansi.normal);
         return FALSE;
     }
 
@@ -275,7 +297,8 @@ gboolean ignore_tee_line(AppContext *app, const char *line) {
     if (num_rows == 0) {
         mysql_free_result(result);
         pthread_mutex_unlock(&app->access.db_mutex);
-        DEBUG_PRINT("[DEBUG]: [Noise Filter] No noise filters found!\n");
+        DEBUG_PRINT("%s  No noise filters found!%s\n",
+		DEBUG_PREFIX(app), app->ansi.normal);
         return FALSE;
     }
 
@@ -285,7 +308,8 @@ gboolean ignore_tee_line(AppContext *app, const char *line) {
         const char *pattern = row[1];
         if (pattern && strstr(line, pattern)) {
             rv = TRUE;
-            DEBUG_PRINT("[DEBUG]: [Noise Filter] Match found ignoring line\n");
+            DEBUG_PRINT("%s  Match found ignoring line%s\n",
+		DEBUG_PREFIX(app), app->ansi.normal);
             break;
         }
     }

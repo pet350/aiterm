@@ -18,6 +18,7 @@
 #include "history_manager_gui.h"
 #include "noise_filter_manager_gui.h"
 #include "policy_manager_gui.h"
+#include "provider_manager_gui.h"
 
 // Callback data container to map menu actions to command strings safely
 typedef struct {
@@ -34,6 +35,7 @@ char* prompt_for_argument(GtkWindow *parent, char *action_title, char *placehold
 void on_menu_history_manager_activate(GtkMenuItem *menuitem, gpointer user_data);
 void on_menu_noise_filter_manager_activate(GtkMenuItem *menuitem, gpointer user_data);
 void on_menu_policy_manager_activate(GtkMenuItem *menuitem, gpointer user_data);
+void on_menu_provider_manager_activate(GtkMenuItem *menuitem, gpointer user_data);
 void free_menu_data(gpointer data, GClosure *closure);
 void on_clear(GtkWidget *widget, gpointer data);
 void on_menu_exit(GtkWidget *widget, gpointer data);
@@ -60,6 +62,7 @@ void sync_toggle_ui_elements(AppContext *app);
 void sync_toggle_ui_elements(AppContext *app);
 void on_toggle_load_from_session(GtkCheckMenuItem *checkmenuitem, gpointer user_data);
 void on_menu_policy_manager_activate(GtkMenuItem *menuitem, gpointer user_data);
+void on_menu_provider_manager_activate(GtkMenuItem *menuitem, gpointer user_data);
 
 // Function Prototypes for new actions in 0.9.7-1lpha
 void export_to_console(AppContext *app);
