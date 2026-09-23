@@ -24,6 +24,39 @@ typedef struct {
     int slot_id;
 } DialogSlotContext;
 
+/*
+ * Find the VTE contained anywhere inside a notebook tab page.
+ *
+ * AITerm's current tab layout is nested: the notebook page is an outer
+ * GtkScrolledWindow, setup_terminal() creates another GtkScrolledWindow,
+ * and the VteTerminal is inside that inner container.  Looking only at the
+ * direct child therefore does not reliably find the VTE.
+ */
+static GtkWidget *find_vte_in_widget_tree(GtkWidget *widget)
+{
+    if (!widget) return NULL;
+
+    if (VTE_IS_TERMINAL(widget))
+        return widget;
+
+    if (GTK_IS_CONTAINER(widget)) {
+        GList *children = gtk_container_get_children(GTK_CONTAINER(widget));
+
+        for (GList *iter = children; iter != NULL; iter = iter->next) {
+            GtkWidget *found = find_vte_in_widget_tree(GTK_WIDGET(iter->data));
+            if (found) {
+                g_list_free(children);
+                return found;
+            }
+        }
+
+        g_list_free(children);
+    }
+
+    return NULL;
+}
+
+
 // Added 0.9.8-alpha
 void execute_next_queued_command(AppContext *app) {
     if (!app || app->aiterm_runtime.is_command_running) return;
@@ -38,11 +71,37 @@ void execute_next_queued_command(AppContext *app) {
         // Lock execution flag
         app->aiterm_runtime.is_command_running = TRUE;
         
-        // Feed command to active VTE terminal widget
-        if (VTE_IS_TERMINAL(app->gui.terminal_view)) {
+        // Resolve the terminal from the notebook's CURRENT page at execution time.
+        // Do not rely on app->gui.terminal_view here: that cached pointer can be
+        // changed while tabs are being created/switched, especially when an
+        // auto-execute queue is waiting on a policy dialog or VTE exit.
+        GtkWidget *active_terminal = NULL;
+        gint current_page = -1;
+
+        if (app->gui.notebook && GTK_IS_NOTEBOOK(app->gui.notebook)) {
+            current_page = gtk_notebook_get_current_page(GTK_NOTEBOOK(app->gui.notebook));
+            if (current_page >= 0) {
+                GtkWidget *page = gtk_notebook_get_nth_page(
+                    GTK_NOTEBOOK(app->gui.notebook), current_page);
+                active_terminal = find_vte_in_widget_tree(page);
+            }
+        }
+
+        // Fallback preserves the previous behavior if the notebook is not
+        // available during application startup/shutdown.
+        if (!active_terminal && VTE_IS_TERMINAL(app->gui.terminal_view)) {
+            active_terminal = app->gui.terminal_view;
+        }
+
+        if (active_terminal && VTE_IS_TERMINAL(active_terminal)) {
             char *formatted_cmd = g_strdup_printf("%s\n", next_cmd);
-            vte_terminal_feed_child(VTE_TERMINAL(app->gui.terminal_view), formatted_cmd, -1);
+            DEBUG_PRINT("[AUTOEXEC DISPATCH]: Current tab page #%d, VTE=%p\n",
+                        current_page, (void *)active_terminal);
+            vte_terminal_feed_child(VTE_TERMINAL(active_terminal), formatted_cmd, -1);
             g_free(formatted_cmd);
+        } else {
+            DEBUG_PRINT("[AUTOEXEC DISPATCH]: No valid active VTE terminal found; command not sent: %s\n",
+                        next_cmd);
         }
         
         g_free(next_cmd);
@@ -580,13 +639,40 @@ GList* extract_code_blocks(const char *text) {
 } 
 
 void feed_command_to_vte(AppContext *app, const char *cmd) {
-    if (!app || !VTE_IS_TERMINAL(app->gui.terminal_view)) return;
+    if (!app || !cmd) return;
+
+    // Always resolve the destination from the notebook's CURRENT page.
+    // app->gui.terminal_view is a cached pointer and is not safe as the sole
+    // routing source while multiple tabs are being created or switched.
+    GtkWidget *active_terminal = NULL;
+    gint current_page = -1;
+
+    if (app->gui.notebook && GTK_IS_NOTEBOOK(app->gui.notebook)) {
+        current_page = gtk_notebook_get_current_page(GTK_NOTEBOOK(app->gui.notebook));
+        if (current_page >= 0) {
+            GtkWidget *page = gtk_notebook_get_nth_page(
+                GTK_NOTEBOOK(app->gui.notebook), current_page);
+            active_terminal = find_vte_in_widget_tree(page);
+        }
+    }
+
+    // Fallback for startup/shutdown or any unusual state where the notebook
+    // is temporarily unavailable.
+    if (!active_terminal && VTE_IS_TERMINAL(app->gui.terminal_view)) {
+        active_terminal = app->gui.terminal_view;
+    }
+
+    if (!active_terminal || !VTE_IS_TERMINAL(active_terminal)) {
+        DEBUG_PRINT("[AUTOEXEC]: No valid current-tab VTE; command not sent: %s\n", cmd);
+        return;
+    }
 
     char *exec_str = g_strdup_printf("%s\n", cmd);
-    VteTerminal *vte = VTE_TERMINAL(app->gui.terminal_view);
+    VteTerminal *vte = VTE_TERMINAL(active_terminal);
 
+    DEBUG_PRINT("[AUTOEXEC]: Sending command to current tab page #%d (VTE=%p): %s",
+                current_page, (void *)vte, exec_str);
     vte_terminal_feed_child(vte, exec_str, strlen(exec_str));
-    DEBUG_PRINT("[AUTOEXEC]: Sent to VTE: %s", exec_str);
     g_free(exec_str);
 }
 

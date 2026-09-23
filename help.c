@@ -159,7 +159,7 @@ const char* get_features_text() {
         "\t- [Secure] Hex-XOR password data obfuscation for aiterm.conf.\n"
         "\n"
         "\tNotes:\n"
-        "\t- AI responses require a valid OpenAI/Gemini API key.\n"
+        "\t- AI responses require a valid API key for the selected provider. Provider-specific keys are stored as OPENAI_KEY, GEMINI_KEY, GROQ_KEY, OPENROUTER_KEY, etc.\n"
         "\t- Tee mode captures terminal output history securely for analysis.\n";
 }
 

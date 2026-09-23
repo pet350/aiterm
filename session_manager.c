@@ -74,7 +74,7 @@ void session_sync_booleans_to_db(AppContext *app) {
         DEBUG_PRINT("[%sERROR%s]: %sFailed to sync session booleans: %s%s%s\n",
 		lt_pl, nml, yl, red, mysql_error(app->database.global_db_conn), nml);
     } else {
-        DEBUG_PRINT("[ %sDEBUG%s ]: %sSuccessfully synced session booleans to DB.%s",
+        DEBUG_PRINT("[ %sDEBUG%s ]: %sSuccessfully synced session booleans to DB.%s\n",
 		lt_pl, nml, gr, nml);
     }
 

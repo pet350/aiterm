@@ -173,6 +173,13 @@ static gboolean throttled_delta_check(gpointer user_data) {
     AppContext *app = (AppContext *)user_data;
     if (!app->gui.terminal_view || !GTK_IS_WIDGET(app->gui.terminal_view)) return TRUE;
 
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     long cur_row, cur_col;
     vte_terminal_get_cursor_position(VTE_TERMINAL(app->gui.terminal_view), &cur_col, &cur_row);
 
@@ -208,13 +215,24 @@ static gboolean throttled_delta_check(gpointer user_data) {
             }
 
             if (new_text) {
-                if (app->sys.autoreply_enabled && strlen(new_text) > 1) {
+		if ((app->sys.tee_enabled || app->sys.autoreply_enabled) &&
+    			strlen(new_text) > 1) {
+		    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE ACCUMULATOR%s] %sFlushing tee data%s\n",
+			lt_pl, nml, cy, nml, gr, nml);		
                     tee_flush_timed(app);
                 }
                 g_free(new_text);
             }
         }
     }
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
+
     return TRUE;
 }
 

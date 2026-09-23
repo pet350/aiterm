@@ -1,4 +1,4 @@
-// Part of the aiterm project
+// Part of the aiterm project3
 // gui.c
 // C Program file for gui functions
 // By: Peter Talbott
@@ -449,6 +449,13 @@ void on_tab_close_clicked(GtkButton *button, gpointer user_data) {
     AppContext *app = (AppContext *)user_data;
     if (!app || !app->gui.notebook) return;
 
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     // Retrieve the associated terminal container widget attached to this close button
     GtkWidget *term_scroll = GTK_WIDGET(g_object_get_data(G_OBJECT(button), "tab-page-child"));
     if (!term_scroll) return;
@@ -458,7 +465,10 @@ void on_tab_close_clicked(GtkButton *button, gpointer user_data) {
     if (page_num != -1) {
         gint total_pages = gtk_notebook_get_n_pages(GTK_NOTEBOOK(app->gui.notebook));
 
-        DEBUG_PRINT("[ DEBUG ]: [Tabs] Closing GTK page index #%d (Total open: %d)\n", page_num, total_pages);
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTabs%s] %sClosing GTK page index [%s#%d%s] (Total open: [%s%d%s])%s\n",
+		lt_pl, nml, cy, nml, gr,
+		red, page_num, gr,
+		red, total_pages, gr, nml);
 
         // 1. Remove the page from the GTK Notebook container
         gtk_notebook_remove_page(GTK_NOTEBOOK(app->gui.notebook), page_num);
@@ -478,6 +488,14 @@ void on_tab_close_clicked(GtkButton *button, gpointer user_data) {
             add_terminal_tab(app);
         }
     }
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 void on_upload_clicked(GtkButton *button, gpointer data) {
@@ -560,16 +578,33 @@ void on_copy_clicked(GtkButton *button, gpointer data) {
 
 void set_icon(AppContext *app) {
     GError *icon_error = NULL;
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     GdkPixbuf *icon = gdk_pixbuf_new_from_resource("/com/aiterm/app/aiterm-icon.png", &icon_error);
 
     if (icon) {
         gtk_window_set_icon(GTK_WINDOW(app->gui.window), icon);
         g_object_unref(icon);
-        DEBUG_PRINT("[ DEBUG ]: [Embedded icon]: loaded from GResource successfully.\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sEmbedded icon%s]: %sloaded from GResource successfully.%s\n",
+	    lt_pl, nml, cy, nml, gr, nml);
     } else {
         g_warning("Could not load embedded icon: %s", icon_error->message);
         if (icon_error) g_error_free(icon_error);
     }
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 gboolean scroll_to_bottom_idle(gpointer data) {
@@ -731,6 +766,13 @@ gboolean update_snmp_ticker_scroll(gpointer user_data) {
 
     if (!app || !app->gui.snmp_ticker_label) return FALSE;
 
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     // ADD THIS CHECK HERE:
     if (!app->sys.snmp_ticker_enabled) {
         // Set a static "disabled" message
@@ -783,8 +825,16 @@ gboolean update_snmp_ticker_scroll(gpointer user_data) {
     if ((glong)app->gui.snmp_ticker_offset >= len) {
         app->gui.snmp_ticker_offset = 0;
         app->aiterm_runtime.ticker_completed = TRUE;
-        DEBUG_PRINT("[ DEBUG ]: [SNMP Ticker] Full payload completed one pass. Ready for next poll.\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSNMP Ticker%s] %sFull payload completed one pass. Ready for next poll.%s\n",
+		lt_pl, nml, cy, nml, gr, nml);
     }
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
 
     return TRUE;
 }
@@ -844,18 +894,25 @@ void update_snmp_ticker_payload(AppContext *app, const char *payload_summary) {
 		red, strlen(app->gui.snmp_ticker_text), yl,
                 red, (size_t)g_utf8_strlen(app->gui.snmp_ticker_text, -1), nml);
 
+    g_free(lt_pl);
     g_free(cy);
     g_free(yl);
     g_free(gr);
     g_free(red);
     g_free(nml);
 
-
 }
 
 // Self explainatory!! Totally Revised 0.9.4
 void setup_gui(AppContext *app) {
     apply_custom_theme();
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
 
     // 1. Create Window Base Framework
     app->gui.window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
@@ -888,7 +945,8 @@ void setup_gui(AppContext *app) {
     gtk_window_set_title(GTK_WINDOW(app->gui.window), "AI-Term C/GTK Edition");
     gtk_window_set_role(GTK_WINDOW(app->gui.window), AITERM_WM_ROLE);
     gtk_window_set_wmclass(GTK_WINDOW(app->gui.window), AITERM_WM_CLASS, "Aiterm");
-    DEBUG_PRINT("[ DEBUG ]: [Setup Gui] Set Window Title, Role and wmclass\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSetup Gui%s] %sSet Window Title, Role and wmclass%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
 
     gtk_window_set_default_size(GTK_WINDOW(app->gui.window), 1000, 600);
     g_signal_connect(app->gui.window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
@@ -1008,6 +1066,15 @@ void setup_gui(AppContext *app) {
     g_signal_connect(app->gui.gemini_view, "key-press-event", G_CALLBACK(on_window_key_press), app);
 
     gtk_widget_show_all(app->gui.window);
+
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 gboolean scroll_ai_pane_to_bottom(AppContext *app) {

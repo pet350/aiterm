@@ -177,7 +177,7 @@ char* perform_gemini_request(AppContext *app, const char *prompt, const char *te
     const char *endpoint = provider->endpoint ? provider->endpoint : "models/%s:generateContent";
     const char *model = provider->model ? provider->model : "gemini-3.1-flash-lite";
     const char *query_key = provider->query_key_name ? provider->query_key_name : "key";
-    const char *api_key = provider->api_key ? provider->api_key : app->security.api_key;
+    const char *api_key = provider->api_key;
 
     char endpoint_path[512];
     snprintf(endpoint_path, sizeof(endpoint_path), endpoint, model);
@@ -325,7 +325,7 @@ char* gemini_list_models(AppContext *app) {
 
         struct curl_slist *headers = NULL;
         char api_key_header[256];
-        snprintf(api_key_header, sizeof(api_key_header), "X-Goog-Api-Key: %s", app->security.api_key);
+        snprintf(api_key_header, sizeof(api_key_header), "X-Goog-Api-Key: %s", get_provider_api_key(app, "gemini") ? get_provider_api_key(app, "gemini") : "");
         headers = curl_slist_append(headers, api_key_header);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 

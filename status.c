@@ -88,6 +88,9 @@ void display_status(AppContext *app) {
     const char *debug_mode_val = app->sys.debug_mode ? "ON" : "OFF";
     g_string_append_printf(status_report, "Debug Mode Enabled:\t%s\n", debug_mode_val);
 
+    const char *debug_color_val = app->sys.debug_color ? "ON" : "OFF";
+    g_string_append_printf(status_report, "Debug ANSI Color:\t%s\n", debug_color_val);
+
     const char *xml_tagging_val = app->xml.tagging_enabled ? "ON" : "OFF";
     g_string_append_printf(status_report, "XML Payload Tagging Enabled:\t%s\n", xml_tagging_val);
 
@@ -118,7 +121,8 @@ void display_status(AppContext *app) {
     const char *mysql_ping_val = is_connected ? "ON" : "OFF";
     g_string_append_printf(status_report, "MariaDB Ping Results:\t%s\n", mysql_ping_val);
 
-    int ai_ok = (app->security.api_key && strlen(app->security.api_key) > 0);
+    const char *active_api_key = get_provider_api_key(app, app->provider_config.provider);
+    int ai_ok = (active_api_key && strlen(active_api_key) > 0);
     g_string_append_printf(status_report, "AI Status:\t%s\n", ai_ok ? "READY" : "MISSING CONFIG");
 
     g_string_append_printf(status_report, "Session UUID:\t%s\n", app->session.session_uuid ? app->session.session_uuid : "N/A");
@@ -201,9 +205,14 @@ void display_status(AppContext *app) {
     append_ai_text(app, delay_sec_val, "ai_tag");
     append_ai_text(app, "\n", "body_tag");
 
-    // Noise Filter Row
+    // Debug Enabled Row
     append_ai_text(app, "Debug Mode:\t\t", "body_tag");
     append_ai_text(app, debug_mode_val, app->sys.debug_mode ? "ai_tag" : "cmd_tag");
+    append_ai_text(app, "\n", "body_tag");
+
+    // Debug Color Row
+    append_ai_text(app, "Debug Color Text:\t", "body_tag");
+    append_ai_text(app, debug_color_val, app->sys.debug_color ? "ai_tag" : "cmd_tag");
     append_ai_text(app, "\n", "body_tag");
 
     // Noise Filter Row

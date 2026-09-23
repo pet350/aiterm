@@ -63,6 +63,9 @@ extern const char* GENERAL_DIRECTIVES;
         } \
     } while (0)
 
+#define DBG_PRINT(fmt, ...) \
+     do { if (global_app && global_app->sys.debug_mode) fprintf(stderr, fmt, ##__VA_ARGS__); } while (0)
+
 #define SET_THREAD_NAME(name) prctl(PR_SET_NAME, name, 0, 0, 0)
 
 typedef struct {
@@ -94,6 +97,7 @@ typedef struct {
     char *user_text;
     char *ai_text;
     char *session_uuid;
+    char *history_role;       /* terminal, snmp, etc. */
 
     int sequence_id;
     int is_tee;
@@ -110,6 +114,8 @@ extern const char* CONFIG_FILE;
 size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp);
 int init_remote_db(AppContext *app);
 int execute_sql_file(MYSQL *conn, const char *filepath);
+int init_db_from_directory(MYSQL *conn, const char *dirpath);
+const char* get_sql_init_dir(void);
 
 const char* get_config_filename(void);
 
@@ -126,16 +132,22 @@ char* xml_wrap(AppContext *app, const char *input);
 void* init_db_thread_worker(void *data);
 void* db_worker_thread(void *arg);
 
+void check_for_root(void);
 void init_config_pointer(AppContext *app);
 void print_version(AppContext *app);
 void init_provider_config(AppContext *app);
 void free_provider_config(ProviderConfig *provider);
+void init_provider_key_store(AppContext *app);
+void clear_provider_key_store(AppContext *app);
+const char *get_provider_api_key(AppContext *app, const char *provider_name);
+void set_provider_api_key(AppContext *app, const char *provider_name, const char *api_key);
+char *provider_key_env_name(const char *provider_name);
 void initialize_booleans(AppContext *app);
 void append_to_view(GtkWidget *view, const char *prefix, const char *text);
 void load_history_to_gemini(AppContext *app, struct json_object *contents_array, const char *current_prompt);
 void load_history_to_api(struct json_object *messages_array);
 void save_to_history(const char *user_text, const char *ai_text);
-void save_tee_to_history(const char *terminal_text, const char *ai_analysis);
+void save_tee_to_history(const char *terminal_text, const char *ai_analysis, const char *history_role);
 void display_all_history(AppContext *app);
 void tee_handle_output(AppContext *app, const char *text) ;
 void tee_flush_timed(AppContext *app);

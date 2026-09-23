@@ -9,7 +9,7 @@ terminal analysis, optional automatic command execution, SNMP telemetry,
 provider abstraction, caching, noise filtering, rate limiting,
 export/printing, and session-aware configuration.
 
-> **Current source tree:** 0.9.10-beta / September 2026\
+> **Current source tree:** 0.9.11-alpha / September 2026\
 > **Primary build system:** GNU Make\
 > **Primary configuration file:** `/etc/aiterm.conf`
 
@@ -2740,7 +2740,7 @@ for the license applicable to this project.
 
 ## Project Status
 
-This README documents the source tree reviewed for the **0.9.10-beta
+This README documents the source tree reviewed for the **0.9.10-gamma-3
 idle test build**.
 
 It supersedes the older README content that referenced earlier
@@ -2748,3 +2748,8 @@ It supersedes the older README content that referenced earlier
 
 The source tree should be treated as the authoritative reference for
 behavior when this document and older historical notes disagree.
+
+
+## 0.9.11-alpha Provider Credentials
+
+Each provider now has its own encrypted API key, using names such as `OPENAI_KEY`, `GEMINI_KEY`, `GROQ_KEY`, `OPENROUTER_KEY`, and `MISTRAL_KEY`.

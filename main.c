@@ -58,6 +58,9 @@ int main(int argc, char *argv[]) {
     // 1.3: Initialize Color Variabled
     init_colors(app);
 
+    // 1.4 Check if root is calling the app
+    check_for_root();
+
     // 2.0: Parse command line options if any
     parse_command_line_options(app, argc, argv);
 
@@ -160,18 +163,9 @@ int main(int argc, char *argv[]) {
         app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
         app->ansi.lt_purple, app->ansi.normal);
 
-    // 10.0: FALLBACK: Only check env vars if config key is still NULL
-    if (!app->security.api_key || strlen(app->security.api_key) == 0) {
-        app->security.api_key = getenv("GEMINI_API_KEY");
-    }
-
-    if (!app->security.api_key || strlen(app->security.api_key) == 0) {
-        app->security.api_key = getenv("OPENAI_API_KEY");
-    }
-
-    if (!app->security.api_key) {
-        fprintf(stderr, "Error: No API key found.\n");
-    }
+    /* 0.9.11-alpha: provider-specific credentials are resolved by the
+     * Provider Manager/configuration layer.  Do not fall back from one
+     * provider's credential to another provider's credential. */
 
     // 11.0: initialize AI Provider config
     DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s]%s Initialize AI Provider Configuration...%s\n",
@@ -181,6 +175,11 @@ int main(int argc, char *argv[]) {
     DEBUG_PRINT("[%s DEBUG %s]: [%sAI Provider%s]%s Initialization Done!%s\n",
         app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
         app->ansi.lt_purple, app->ansi.normal);
+
+    if (!app->provider_config.api_key || strlen(app->provider_config.api_key) == 0) {
+        DEBUG_PRINT("[ DEBUG ]: No API key configured for active provider [%s].\n",
+                    app->provider_config.provider ? app->provider_config.provider : "unknown");
+    }
 
     // 12.0: initialize rate limiter
     DEBUG_PRINT("[%s DEBUG %s]: [%sMAIN%s]%s Initialize Rate Limiter...%s\n",
@@ -252,7 +251,9 @@ int main(int argc, char *argv[]) {
     gtk_main();
 
     // 19.0: Clean up
-    DEBUG_PRINT("[ DEBUG ]: [MAIN] Beginning orderly shutdown.\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sMAIN%s] %sBeginning orderly shutdown.%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
 
     // Restore any temporarily suspended toggle states before the final DB
     // synchronization so an idle period is never persisted as a real user
@@ -265,7 +266,10 @@ int main(int argc, char *argv[]) {
     // 19.2: The DB initialization worker owns no AppContext lifetime.  Join it so
     // shutdown can never race a still-running database initializer.
     if (app->access.db_init_thread_started) {
-        DEBUG_PRINT("[ DEBUG ]: [MAIN] Joining DB initialization thread.\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sMAIN%s] %sJoining DB initialization thread.%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
+
         pthread_join(app->access.db_init_thread, NULL);
         app->access.db_init_thread_started = FALSE;
     }
@@ -278,11 +282,14 @@ int main(int argc, char *argv[]) {
         app->database.global_db_conn = NULL;
     }
 
-    // 19.4: Clean up ANSI
+    // 20: Close main threaded database connection
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sMAIN%s] %sClosing threaded database connection.%s\n",
+        app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
+        app->ansi.lt_purple, app->ansi.normal);
+
+    // 20.1: Clean up ANSI
     cleanup_colors(app);
 
-    // 20) Close main threaded database connection
-    DEBUG_PRINT("[ DEBUG ]: [MAIN] Closing threaded database connection.\n");
     pthread_cond_destroy(&app->access.db_init_cond);
     pthread_mutex_destroy(&app->access.db_init_mutex);
     pthread_mutex_destroy(&app->access.db_mutex);
@@ -295,8 +302,15 @@ int main(int argc, char *argv[]) {
         free(app->security.master_key);
     }
 
-    // 22) free provider config
+    // 22) free provider config and explicit provider credentials
     free_provider_config(&app->provider_config);
+    g_free(app->security.openai_key);
+    g_free(app->security.gemini_key);
+    g_free(app->security.groq_key);
+    g_free(app->security.openrouter_key);
+    g_free(app->security.mistral_key);
+    g_free(app->security.ollama_key);
+    g_free(app->security.custom_key);
 
     /* Release GTK-owned ticker resources before destroying AppContext. */
     if (app->gui.snmp_ticker_timer_id) {

@@ -20,6 +20,8 @@
 #include <unistd.h>
 #include <ifaddrs.h>
 #include <sys/socket.h>
+#include <dirent.h>
+#include <errno.h>
 
 #include "utils.h"
 #include "gui.h"
@@ -34,12 +36,32 @@
 #include "ai_provider.h"
 #include "snmp_manager.h"
 
+// Added 0.9.10-zeta
+void check_for_root(void) {
+    if (getuid() == 0) {
+        // We are running as root
+        setenv("HOME", "/root", 1);
+        setenv("XDG_CONFIG_HOME", "/root/.config", 1);
+        setenv("XDG_CACHE_HOME", "/root/.cache", 1);
+        unsetenv("XDG_RUNTIME_DIR");
+    }
+}
+
 // Added 0.9.9-beta
 // Helper function to read and execute a single .sql file
 int execute_sql_file(MYSQL *conn, const char *filepath) {
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     FILE *f = fopen(filepath, "rb");
     if (!f) {
-        DEBUG_PRINT("[ DEBUG ]: [DB] Failed to open SQL file: %s\n", filepath);
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sDB%s] %sFailed to open SQL file: %s%s%s\n", 
+		lt_pl, nml, cy, nml, yl, 
+		red, filepath, nml);
         return 0;
     }
 
@@ -55,7 +77,9 @@ int execute_sql_file(MYSQL *conn, const char *filepath) {
     char *buffer = malloc(length + 1);
     if (!buffer) {
         fclose(f);
-        DEBUG_PRINT("[ DEBUG ]: [DB] Memory allocation error reading %s\n", filepath);
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sDB%s] %sMemory allocation error reading %s%s%s\n", 
+		lt_pl, nml, cy, nml, yl,
+		red, filepath, nml);
         return 0;
     }
 
@@ -63,11 +87,17 @@ int execute_sql_file(MYSQL *conn, const char *filepath) {
     buffer[read_bytes] = '\0';
     fclose(f);
 
-    DEBUG_PRINT("[ DEBUG ]: [DB] Executing SQL script: %s\n", filepath);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sDB%s] %sExecuting SQL script: %s%s%s\n", 
+	lt_pl, nml, cy, nml, gr, 
+	red, filepath, nml);
 
     // Run query
     if (mysql_query(conn, buffer) != 0) {
-        DEBUG_PRINT("[ DEBUG ]: [DB] Error executing %s: %s\n", filepath, mysql_error(conn));
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sDB%s] %sError executing %s%s%s: %s%s%s\n",
+		lt_pl, nml, cy, nml, yl, 
+		red, filepath, yl,
+		red, mysql_error(conn), nml);
+
         free(buffer);
         return 0;
     }
@@ -82,7 +112,95 @@ int execute_sql_file(MYSQL *conn, const char *filepath) {
     } while (mysql_next_result(conn) == 0);
 
     free(buffer);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     return 1;
+}
+
+// Added 0.9.9-beta
+// scandir() filter: only match files ending in ".sql" (case-insensitive)
+static int sql_file_filter(const struct dirent *entry) {
+    size_t len = strlen(entry->d_name);
+    if (len <= 4) return 0; // must have room for at least "x.sql"
+    return (strcasecmp(entry->d_name + (len - 4), ".sql") == 0);
+}
+
+// Added 0.9.9-beta
+// Scans dirpath for *.sql files and executes each one via execute_sql_file(),
+// in alphabetical order (scandir + alphasort). This lets init scripts be
+// ordered with a numeric prefix, e.g. 001_create_history.sql, 002_migrations.sql,
+// so schema changes can be dropped into dirpath instead of hard-coded here.
+//
+// Stops at the first script that fails, since later scripts may assume
+// earlier ones already ran (e.g. an ALTER TABLE against a table a prior
+// script creates). Returns 1 if every script executed successfully (or the
+// directory was simply empty), 0 if the directory couldn't be opened or any
+// script failed.
+int init_db_from_directory(MYSQL *conn, const char *dirpath) {
+    struct dirent **namelist;
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
+    int n = scandir(dirpath, &namelist, sql_file_filter, alphasort);
+
+    if (n < 0) {
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sDB%s] %sFailed to open SQL directory: %s%s%s (%s%s%s)%s\n",
+		lt_pl, nml, cy, nml, yl,
+                red, dirpath, yl,
+		red, strerror(errno), yl, nml);
+
+        return 0;
+    }
+
+    if (n == 0) {
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sDB%s] %sNo .sql files found in: %s%s%s\n", 
+		lt_pl, nml, cy, nml, yl, 
+		red, dirpath, nml);
+
+        free(namelist);
+        return 1; // An empty directory is not treated as fatal
+    }
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sDB%s] %sFound %s%d%s SQL file(s) in %s%s%s\n",
+	lt_pl, nml, cy, nml, gr, 
+	red, n, gr,
+	red, dirpath, nml);
+
+    int overall_success = 1;
+    for (int i = 0; i < n; i++) {
+        if (overall_success) {
+            char *full_path = g_build_filename(dirpath, namelist[i]->d_name, NULL);
+            if (!execute_sql_file(conn, full_path)) {
+                DEBUG_PRINT("[ %sDEBUG%s ]: [%sDB%s] %sAborting further init scripts, failed on: %s%s%s\n", 
+			lt_pl, nml, cy, nml, yl, 
+			red, full_path, nml);
+                overall_success = 0;
+            }
+            g_free(full_path);
+        }
+        free(namelist[i]);
+    }
+    free(namelist);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
+    return overall_success;
 }
 
 // Added 0.9.9-beta
@@ -190,6 +308,27 @@ const char* get_config_filename(void) {
     return "/etc/aiterm.conf";
 }
 
+// Added 0.9.10-gamma
+// Resolves the directory of *.sql scripts used to init/upgrade the schema
+// (see init_db_from_directory). Checks AITERM_SQL_DIR first so the scripts
+// can be run from a local checkout during development without root, falling
+// back to AITERM_SQL_DIR_DEFAULT - normally /usr/share/aiterm/db, but the
+// Makefile's `install` target can compile in a different default via -D to
+// match wherever it actually installed the .sql files (see SQLDIR in the
+// Makefile). The #ifndef keeps this identical to the old hard-coded path if
+// utils.c is ever compiled outside the Makefile (e.g. by hand).
+#ifndef AITERM_SQL_DIR_DEFAULT
+#define AITERM_SQL_DIR_DEFAULT "/usr/share/aiterm/db"
+#endif
+
+const char* get_sql_init_dir(void) {
+    char *env_dir = getenv("AITERM_SQL_DIR");
+    if (env_dir && access(env_dir, F_OK) == 0) {
+        return env_dir;
+    }
+    return AITERM_SQL_DIR_DEFAULT;
+}
+
 void init_config_pointer(AppContext *app) {
     if (!CONFIG_FILE) {    
         CONFIG_FILE = get_config_filename();
@@ -257,6 +396,14 @@ void initialize_booleans(AppContext *app) {
     }
     app->database.sequence_id = 0;
     app->limiter.requests_per_minute=20;
+
+    app->security.openai_key = NULL;
+    app->security.gemini_key = NULL;
+    app->security.groq_key = NULL;
+    app->security.openrouter_key = NULL;
+    app->security.mistral_key = NULL;
+    app->security.ollama_key = NULL;
+    app->security.custom_key = NULL;
 }
 
 // Added 0.9.9-beta
@@ -283,6 +430,72 @@ void init_runtime_queues(AppContext *app) {
 static void provider_replace_string(char **field, const char *value) {
     if (*field) free(*field);
     *field = value ? strdup(value) : NULL;
+}
+
+static char *normalize_provider_name(const char *provider_name) {
+    if (!provider_name || !*provider_name) return g_strdup("OPENAI");
+    GString *out = g_string_new(NULL);
+    for (const unsigned char *p = (const unsigned char *)provider_name; *p; ++p) {
+        if (g_ascii_isalnum(*p))
+            g_string_append_c(out, (char)g_ascii_toupper(*p));
+        else
+            g_string_append_c(out, '_');
+    }
+    return g_string_free(out, FALSE);
+}
+
+char *provider_key_env_name(const char *provider_name) {
+    char *norm = normalize_provider_name(provider_name);
+    char *name = g_strdup_printf("%s_KEY", norm);
+    g_free(norm);
+    return name;
+}
+
+/* 0.9.11-alpha: map provider names directly to explicit SecurityConfig
+ * fields.  There is deliberately no generic provider-key hash here. */
+static char **provider_key_slot(AppContext *app, const char *provider_name) {
+    if (!app || !provider_name || !*provider_name) return NULL;
+
+    if (strcasecmp(provider_name, "openai") == 0) return &app->security.openai_key;
+    if (strcasecmp(provider_name, "gemini") == 0) return &app->security.gemini_key;
+    if (strcasecmp(provider_name, "groq") == 0) return &app->security.groq_key;
+    if (strcasecmp(provider_name, "openrouter") == 0) return &app->security.openrouter_key;
+    if (strcasecmp(provider_name, "mistral") == 0) return &app->security.mistral_key;
+    if (strcasecmp(provider_name, "ollama") == 0) return &app->security.ollama_key;
+
+    /* Provider Manager's custom endpoint uses the custom credential slot. */
+    return &app->security.custom_key;
+}
+
+const char *get_provider_api_key(AppContext *app, const char *provider_name) {
+    char **slot = provider_key_slot(app, provider_name);
+    return (slot && *slot) ? *slot : NULL;
+}
+
+void set_provider_api_key(AppContext *app, const char *provider_name, const char *api_key) {
+    char **slot = provider_key_slot(app, provider_name);
+    if (!slot) return;
+
+    g_free(*slot);
+    *slot = (api_key && *api_key) ? g_strdup(api_key) : NULL;
+}
+
+void clear_provider_key_store(AppContext *app) {
+    if (!app) return;
+    set_provider_api_key(app, "openai", NULL);
+    set_provider_api_key(app, "gemini", NULL);
+    set_provider_api_key(app, "groq", NULL);
+    set_provider_api_key(app, "openrouter", NULL);
+    set_provider_api_key(app, "mistral", NULL);
+    set_provider_api_key(app, "ollama", NULL);
+    set_provider_api_key(app, "custom", NULL);
+}
+
+void init_provider_key_store(AppContext *app) {
+    /* Kept as a compatibility entry point for callers from 0.9.10-alpha.
+     * Credentials are now explicit SecurityConfig fields, so no allocation
+     * or hash-table initialization is required. */
+    (void)app;
 }
 
 void free_provider_config(ProviderConfig *provider) {
@@ -321,7 +534,27 @@ void init_provider_config(AppContext *app) {
     free_provider_config(provider);
     provider_replace_string(&provider->provider, name);
     provider_replace_string(&provider->name, name);
-    provider_replace_string(&provider->api_key, app->security.api_key);
+    const char *provider_key = get_provider_api_key(app, name);
+
+    /* Environment fallback supports both the new NAME_KEY convention and the
+     * common NAME_API_KEY convention used by provider SDKs. */
+    if (!provider_key || !*provider_key) {
+        char *env_name = provider_key_env_name(name);
+        const char *env_key = getenv(env_name);
+        if (!env_key || !*env_key) {
+            char *norm = normalize_provider_name(name);
+            char *api_env_name = g_strdup_printf("%s_API_KEY", norm);
+            env_key = getenv(api_env_name);
+            g_free(api_env_name);
+        }
+        if (env_key && *env_key) {
+            set_provider_api_key(app, name, env_key);
+            provider_key = get_provider_api_key(app, name);
+        }
+        g_free(env_name);
+    }
+
+    provider_replace_string(&provider->api_key, provider_key);
 
     if (strcasecmp(name, "gemini") == 0) {
         provider->kind = PROVIDER_KIND_GEMINI_GENERATE;
@@ -392,9 +625,15 @@ void init_provider_config(AppContext *app) {
     if (env_auth_scheme) provider_replace_string(&provider->auth_scheme, *env_auth_scheme ? env_auth_scheme : NULL);
     if (env_query_key && *env_query_key) provider_replace_string(&provider->query_key_name, env_query_key);
 
-    DEBUG_PRINT("[%s DEBUG %s]: [%sProvider_Init%s]:%s Provider: %s%s%s | Protocol: %s | Base URL: %s%s%s\n",
-                lt_pl, nml, cy, nml, yl, gr, name, nml,
-                provider->kind == PROVIDER_KIND_GEMINI_GENERATE ? "gemini-generateContent" : "openai-chat-completions",
+    DEBUG_PRINT("[%s DEBUG %s]: [%sProvider_Init%s]:%s Provider: %s%s%s\n", 
+                lt_pl, nml, cy, nml, yl, gr, name, nml);
+
+    DEBUG_PRINT("[%s DEBUG %s]: [%sProvider_Init%s]:%s Protocol: %s%s%s\n",
+		lt_pl, nml, cy, nml, yl,
+		gr, provider->kind == PROVIDER_KIND_GEMINI_GENERATE ? "gemini-generateContent" : "openai-chat-completions", nml);
+
+    DEBUG_PRINT("[%s DEBUG %s]: [%sProvider_Init%s]:%s Base URL: %s%s%s\n",
+		lt_pl, nml, cy, nml, yl,
                 gr, provider->base_url ? provider->base_url : "(none)", nml);
 
     g_free(name);
@@ -457,11 +696,14 @@ void* init_db_thread_worker(void *data) {
 	lt_pl, nml, cy, nml, yl, nml);
     // CRITICAL: Clean up thread-specific MySQL memory
     mysql_thread_end();
+
+    g_free(lt_pl);
     g_free(cy);
     g_free(yl);
     g_free(gr);
     g_free(red);
     g_free(nml);
+
     return NULL;
 }
 
@@ -488,9 +730,17 @@ void display_all_history(AppContext *app) {
         goto cleanup;
     }
 
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     // LOCK: Ensure only one thread uses the database pipe at a time
     pthread_mutex_lock(&global_app->access.db_mutex);
-    DEBUG_PRINT("[ DEBUG ]: DISPLAY_ALL_HISTORY: Locked DB Mutex\n");
+    DEBUG_PRINT("[%s DEBUG %s]: [%sDISPLAY_ALL_HISTORY%s] %sLocked DB Mutex%s\n",
+	lt_pl, nml, cy, nml, red, nml);
     if (!app->database.global_db_conn) {
         write_to_ai_pane(app, "System: ", "Database connection is not active.", "cmd_tag", "cmd_tag");
         goto cleanup;
@@ -507,7 +757,9 @@ void display_all_history(AppContext *app) {
         write_to_ai_pane(app, "System: ", "Error fetching history from database.", "cmd_tag", "cmd_tag");
         goto cleanup;
     }
-    DEBUG_PRINT("[ DEBUG ]: DISPLAY_ALL_HISTORY: Query %s\n", query);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sDISPLAY_ALL_HISTORY%s] %sQuery %s%s%s\n",
+	lt_pl, nml, cy, nml, yl, gr, query, nml);
+
     res = mysql_store_result(app->database.global_db_conn);
     if (!res) goto cleanup;
 
@@ -538,7 +790,9 @@ void display_all_history(AppContext *app) {
     }
 
     pthread_mutex_unlock(&global_app->access.db_mutex);
-    DEBUG_PRINT("[ DEBUG ]: DISPLAY_ALL_HISTORY: Unlocked DB Mutex\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sDISPLAY_ALL_HISTORY%s] %sUnlocked DB Mutex%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
+
     mysql_thread_end();
     return;
 }
@@ -628,7 +882,7 @@ void* db_worker_thread(void *arg) {
                                      esc_uuid, data->session_uuid ? data->session_uuid : "", uuid_len);
 
             size_t query_len = strlen(esc_out) + strlen(esc_ai) + strlen(esc_uuid) +
-                               strlen(target_uuid ? target_uuid : "") + 512;
+                               strlen(data->session_uuid ? data->session_uuid : "") + 512;
             char *query = malloc(query_len);
             DEBUG_PRINT("[%sMEMDBG %s]: [%sWORKER%s]%s query alloc=%s%p%s size=%s%zu%s\n",
                 lt_pl, nml, cy, nml, yl,
@@ -636,12 +890,32 @@ void* db_worker_thread(void *arg) {
 		red, query_len, yl);
 
             if (query) {
-                snprintf(query, query_len,
-                         "INSERT INTO aiterm_history (role, content, is_tee, session_uuid, sequence_id) VALUES "
-                         "('terminal', '%s', 1, '%s', %d), ('assistant', '%s', 1, '%s', %d)",
-                         esc_out, target_uuid ? target_uuid : "", data->sequence_id,
-                         esc_ai, esc_uuid, data->sequence_id);
+                /* Both rows are one tee event and must use the UUID captured
+                 * when save_tee_to_history() queued the worker. */
+                const char *tee_uuid = data->session_uuid ? data->session_uuid : "";
+                if (data->ai_analysis) {
+                    /* AutoReply is enabled: save the terminal payload and the
+                     * corresponding AI analysis as one tee event. */
+                    snprintf(query, query_len,
+                             "INSERT INTO aiterm_history (role, content, is_tee, session_uuid, sequence_id) VALUES "
+                             "('%s', '%s', 1, '%s', %d), ('assistant', '%s', 1, '%s', %d)",
+                             data->history_role ? data->history_role : "terminal",
+                             esc_out, tee_uuid, data->sequence_id,
+                             esc_ai, tee_uuid, data->sequence_id);
+                } else {
+                    /* Tee-only mode: persist the terminal capture without
+                     * fabricating an empty assistant response. */
+                    snprintf(query, query_len,
+                             "INSERT INTO aiterm_history (role, content, is_tee, session_uuid, sequence_id) VALUES "
+                             "('%s', '%s', 1, '%s', %d)",
+                             data->history_role ? data->history_role : "terminal",
+                             esc_out, tee_uuid, data->sequence_id);
+                }
                 int qrc = mysql_query(global_app->database.global_db_conn, query);
+                if (qrc != 0) {
+                    DEBUG_PRINT("[MEMDBG ]: [WORKER] TEE INSERT FAILED: %s\n",
+                                mysql_error(global_app->database.global_db_conn));
+                }
 
                 DEBUG_PRINT("[%sMEMDBG %s]: [%sWORKER%s]%s mysql_query rc=%s%d%s query=%s%p%s\n",
 			lt_pl, nml, cy, nml, yl,
@@ -656,11 +930,20 @@ void* db_worker_thread(void *arg) {
             }
         }
 
-        DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE esc_out=%p\n", (void*)esc_out);
+        DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s] %sFREE esc_out=[%s%p%s]%s\n", 
+		lt_pl, nml, cy, nml, gr,
+		red, (void*)esc_out, gr, nml);
+
         free(esc_out);
-        DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE esc_ai=%p\n", (void*)esc_ai);
+        DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s] %sFREE esc_ai=[%s%p%s]%s\n",
+		lt_pl, nml, cy, nml, gr,
+		red,  (void*)esc_ai, gr, nml);
+
         free(esc_ai);
-        DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE esc_uuid=%p\n", (void*)esc_uuid);
+        DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s] %sFREE esc_uuid=[%s%p%s]%s\n",
+		lt_pl, nml, cy, nml, gr,
+		red,  (void*)esc_uuid, gr, nml);
+
         free(esc_uuid);
     } else {
         size_t user_len = data->user_text ? strlen(data->user_text) : 0;
@@ -682,7 +965,11 @@ void* db_worker_thread(void *arg) {
             size_t query_len = strlen(esc_user) + strlen(esc_ai) + strlen(esc_uuid) +
                                strlen(target_uuid ? target_uuid : "") + 512;
             char *query = malloc(query_len);
-            DEBUG_PRINT("[MEMDBG ]: [WORKER] nonTEE query alloc=%p size=%zu\n", (void*)query, query_len);
+            DEBUG_PRINT("[%sMEMDBG %s]: [%sWORKER%s] %snonTEE query alloc=[%s%p%s] size=[%s%zu%s]%s\n", 
+		lt_pl, nml, cy, nml, gr, 
+		red, (void*)query, gr,
+		red,  query_len, gr, nml);
+
             if (query) {
                 snprintf(query, query_len,
                          "INSERT INTO aiterm_history (role, content, is_tee, session_uuid, sequence_id) "
@@ -690,46 +977,92 @@ void* db_worker_thread(void *arg) {
                          esc_user, target_uuid ? target_uuid : "", data->sequence_id,
                          esc_ai, esc_uuid, data->sequence_id);
                 int qrc = mysql_query(global_app->database.global_db_conn, query);
-                DEBUG_PRINT("[MEMDBG ]: [WORKER] nonTEE mysql_query rc=%d query=%p\n", qrc, (void*)query);
-                DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE nonTEE query=%p\n", (void*)query);
+                DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s]%s nonTEE mysql_query rc=[%s%d%s] query=[%s%p%s]%s\n", 
+			lt_pl, nml, cy, nml, gr, 
+			red, qrc, gr, 
+			red, (void*)query, gr, nml);
+
+                DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s] %sFREE nonTEE query=[%s%p%s]%s\n",
+			lt_pl, nml, cy, nml, gr, 
+			red,  (void*)query, gr, nml);
+
                 free(query);
             }
         }
 
-        DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE esc_user=%p\n", (void*)esc_user);
+        DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s]%s FREE esc_user=[%s%p%s]%s\n", 
+		lt_pl, nml, cy, nml, gr, 
+		red, (void*)esc_user, gr, nml);
+
         free(esc_user);
-        DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE nonTEE esc_ai=%p\n", (void*)esc_ai);
+        DEBUG_PRINT("[%sMEMDBG %s]: [%sWORKER%s] %sFREE nonTEE esc_ai=[%s%p%s]%s\n", 
+		lt_pl, nml, cy, nml, gr,
+		red, (void*)esc_ai, gr, nml);
+
         free(esc_ai);
-        DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE nonTEE esc_uuid=%p\n", (void*)esc_uuid);
+        DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s]%s FREE nonTEE esc_uuid=[%s%p%s]%s\n", 
+		lt_pl, nml, cy, nml, gr, 
+		red, (void*)esc_uuid, gr, nml);
         free(esc_uuid);
     }
 
     pthread_mutex_unlock(&global_app->access.db_mutex);
-    DEBUG_PRINT("[ DEBUG ]: [WORKER] Unlocked DB Mutex\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sWORKER%s]%s Unlocked DB Mutex%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
 
     cleanup:
     /* DBWorkerData owns these copies exclusively.  The caller never frees them
      * after successful pthread_create(). */
-    DEBUG_PRINT("[MEMDBG ]: [WORKER] CLEANUP data=%p\n", (void*)data);
-    DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE terminal_output=%p\n", (void*)data->terminal_output);
+    DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s]%s CLEANUP data=[%s%p%s]%s\n", 
+	lt_pl, nml, cy, nml, gr, 
+	red, (void*)data, gr, nml);
+
+    DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s]%s FREE terminal_output=[%s%p%s]%s\n", 
+	lt_pl, nml, cy, nml, gr,
+	red, (void*)data->terminal_output, gr, nml);
+
     g_free(data->terminal_output);
-    DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE ai_analysis=%p\n", (void*)data->ai_analysis);
+    DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s]%s FREE ai_analysis=[%s%p%s]%s\n",
+	lt_pl, nml, cy, nml, gr, 
+	red,  (void*)data->ai_analysis, gr, nml);
+
     g_free(data->ai_analysis);
-    DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE user_text=%p\n", (void*)data->user_text);
+    DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s] %sFREE user_text=[%s%p%s]%s\n", 
+	lt_pl, nml, cy, nml, gr,
+	red, (void*)data->user_text, gr, nml);
+
     g_free(data->user_text);
-    DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE ai_text=%p\n", (void*)data->ai_text);
+    DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s] %sFREE ai_text=[%s%p%s]%s\n", 
+	lt_pl, nml, cy, nml, gr, 
+	red, (void*)data->ai_text, gr, nml);
+
     g_free(data->ai_text);
-    DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE session_uuid=%p\n", (void*)data->session_uuid); 
+    DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s] %sFREE session_uuid=[%s%p%s]%s\n", 
+	lt_pl, nml, cy, nml, gr,
+	red, (void*)data->session_uuid, gr, nml);
+ 
     g_free(data->session_uuid);
+    DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s] %sFREE history_role=[%s%p%s]%s\n",
+	lt_pl, nml, cy, nml, gr, 
+	red,  (void*)data->history_role, gr, nml);
+
+    g_free(data->history_role);
     /* Save scalar debug information before releasing the owning structure.
      * Do not evaluate the freed pointer in a DEBUG_PRINT after free(). */
     int completed_sequence_id = data->sequence_id;
-    DEBUG_PRINT("[ DEBUG ]: [WORKER] Job completed for seq %d\n",
-                completed_sequence_id);
-    DEBUG_PRINT("[MEMDBG ]: [WORKER] FREE DBWorkerData=%p\n", (void*)data);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sWORKER%s]%s Job completed for seq [%s%d%s]%s\n",
+	lt_pl, nml, cy, nml, gr, 
+        red, completed_sequence_id, gr, nml);
+
+    DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s] %sFREE DBWorkerData=[%s%p%s]%s\n", 
+	lt_pl,  nml, cy, nml, gr, 
+	red, (void*)data, gr, nml);
+
     free(data);
-    DEBUG_PRINT("[MEMDBG ]: [WORKER] DBWorkerData released for seq %d\n",
-                completed_sequence_id);
+    DEBUG_PRINT("[%sMEMDBG%s ]: [%sWORKER%s]%s DBWorkerData released for seq [%s%d%s]%s\n",
+	lt_pl, nml, cy, nml, gr,
+        red, completed_sequence_id, gr, nml);
+
     mysql_thread_end();
 
     g_free(cy);
@@ -785,83 +1118,52 @@ int init_remote_db(AppContext *app) {
     DEBUG_PRINT("[%s DEBUG %s]: [%sDB%s]%s Connecting to %s%s%s (%stimeout: %us%s)...%s\n", 
 	lt_pl, nml, cy,nml, yl, red, app->database.db_host, yl, red, timeout, yl, nml);
     // 2. Connect to the server (No DB selected yet)
-    if (mysql_real_connect(app->database.global_db_conn, app->database.db_host, app->database.db_user, app->database.db_pass, NULL, 0, NULL, 0) == NULL) {
+    // Modified 0.9.10-gamma: CLIENT_MULTI_STATEMENTS is required now that schema
+    // init comes from *.sql files (see init_db_from_directory / execute_sql_file)
+    // instead of one hard-coded query per statement - a script with more than
+    // one statement separated by ';' would otherwise silently only run the first.
+    if (mysql_real_connect(app->database.global_db_conn, app->database.db_host, app->database.db_user, app->database.db_pass, NULL, 0, NULL, CLIENT_MULTI_STATEMENTS) == NULL) {
         DEBUG_PRINT("[ DEBUG ]: DB Connection Error: %s\n", mysql_error(app->database.global_db_conn));
         mysql_close(app->database.global_db_conn);
         app->database.global_db_conn = NULL;
         return 0;
     }
-    DEBUG_PRINT("[ DEBUG ]: [DB] Successfully connected to database host.\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sDB%s] %sSuccessfully connected to database host.%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
 
     // 3. Create and Select Database
     char db_query[256];
     snprintf(db_query, sizeof(db_query), "CREATE DATABASE IF NOT EXISTS %s", app->database.db_name);
 
-    DEBUG_PRINT("[ DEBUG ]: [DB] Executing: %s\n", db_query);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sDB%s] %sExecuting: %s%s%s\n", 
+	lt_pl, nml, cy, nml, gr,
+	red, db_query, nml);
+
     mysql_query(app->database.global_db_conn, db_query);
 
-    DEBUG_PRINT("[ DEBUG ]: [DB] Selecting database: %s\n", app->database.db_name);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sDB%s] %sSelecting database: %s%s%s\n",
+	lt_pl, nml, cy, nml, gr,
+	red,  app->database.db_name, nml);
+
     mysql_select_db(app->database.global_db_conn, app->database.db_name);
 
-    // 4. Create History Table
-    DEBUG_PRINT("[ DEBUG ]: [DB] Executing: CREATE TABLE IF NOT EXISTS aiterm_history\n");
-    mysql_query(app->database.global_db_conn, "CREATE TABLE IF NOT EXISTS aiterm_history (id INT AUTO_INCREMENT PRIMARY KEY)");
+    // 4. Initialize/upgrade schema from SQL init scripts
+    // Modified 0.9.10-gamma: schema is no longer hard-coded here. Drop numbered
+    // *.sql files (e.g. 001_create_x.sql, 002_add_column.sql) into the directory
+    // below and they run in filename order via init_db_from_directory(). Override
+    // the location with the AITERM_SQL_DIR env var (see get_sql_init_dir()).
+    const char *sql_dir = get_sql_init_dir();
 
-    // 5. Run Migrations
-    const char* migrations[] = {
-        "ALTER TABLE aiterm_history ADD COLUMN IF NOT EXISTS role VARCHAR(20)",
-        "ALTER TABLE aiterm_history ADD COLUMN IF NOT EXISTS content TEXT",
-        "ALTER TABLE aiterm_history ADD COLUMN IF NOT EXISTS is_tee TINYINT(1) DEFAULT 0",
-        "ALTER TABLE aiterm_history ADD COLUMN IF NOT EXISTS session_uuid VARCHAR(36)",
-        "ALTER TABLE aiterm_history ADD COLUMN IF NOT EXISTS sequence_id INT DEFAULT 0",
-        "ALTER TABLE aiterm_history ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
-    };
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sDB%s] %sInitializing schema from: %s%s%s\n", 
+	lt_pl, nml, cy, nml, gr, 
+	red, sql_dir, nml);
 
-    for (int i = 0; i < sizeof(migrations)/sizeof(char*); i++) {
-        DEBUG_PRINT("[ DEBUG ]: [DB] query [%d]: %s\n", i, migrations[i]);
-        mysql_query(app->database.global_db_conn, migrations[i]);
+    if (!init_db_from_directory(app->database.global_db_conn, sql_dir)) {
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sDB%s] %sOne or more SQL init scripts failed - schema may be incomplete.%s\n",
+		lt_pl, nml, cy, nml, red, nml);
     }
-
-    // 6. Setup Triggers Table
-    const char *trigger_table_query =
-        "CREATE TABLE IF NOT EXISTS relevance_triggers ("
-        "id INT AUTO_INCREMENT PRIMARY KEY, "
-        "keyword VARCHAR(50) UNIQUE, "
-        "hit_count INT DEFAULT 1, "
-        "last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON DUPLICATE KEY UPDATE last_used=CURRENT_TIMESTAMP)";
-    DEBUG_PRINT("[ DEBUG ]: [DB] Executing: CREATE TABLE IF NOT EXISTS relevance_triggers\n");
-    mysql_query(app->database.global_db_conn, trigger_table_query);
-
-    const char *command_policy_table =
-	"CREATE TABLE IF NOT EXISTS command_policies ("
-	"command VARCHAR(256) PRIMARY KEY, "
-	"type VARCHAR(32) NOT NULL, "
-	"risk_level VARCHAR(32) NOT NULL, "
-	"updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON DUPLICATE KEY UPDATE updated_at=CURRENT_TIMESTAMP"
-	")";
-    DEBUG_PRINT("[ DEBUG ]: [DB] Executing: CREATE TABLE IF NOT EXISTS command_policies\n");
-    mysql_query(app->database.global_db_conn, command_policy_table);
-
-    // Run Migrations for Sessions Table
-    const char* session_migrations[] = {
-        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS load_from_session TINYINT(1) DEFAULT 0",
-        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS debug_mode TINYINT(1) DEFAULT 0",
-        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS tee_enabled TINYINT(1) DEFAULT 0",
-        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS autoreply_enabled TINYINT(1) DEFAULT 0",
-        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auto_execute_enabled TINYINT(1) DEFAULT 0",
-        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ratelimit_enabled TINYINT(1) DEFAULT 1",
-        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS smart_cache_enabled TINYINT(1) DEFAULT 0",
-        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS noise_filter_enabled TINYINT(1) DEFAULT 1",
-        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS xml_payload_tagging TINYINT(1) DEFAULT 1",
-        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS write_to_global TINYINT(1) DEFAULT 0",
-        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS read_from_global TINYINT(1) DEFAULT 1"
-    };
-
-    for (int i = 0; i < sizeof(session_migrations)/sizeof(char*); i++) {
-        DEBUG_PRINT("[ DEBUG ]: [DB] query [%d]: %s\n", i, session_migrations[i]);
-        mysql_query(app->database.global_db_conn, session_migrations[i]);
-    }
-    DEBUG_PRINT("[ DEBUG ]: [DB] init_remote_db sequence fully complete!\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sDB%s] %sinit_remote_db sequence fully complete!%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
 
     g_free(cy);
     g_free(yl);
@@ -1149,7 +1451,7 @@ void save_to_history(const char *user_text, const char *ai_text) {
     g_free(cleaned_ai_text);
 }
 
-void save_tee_to_history(const char *terminal_text, const char *ai_analysis) {
+void save_tee_to_history(const char *terminal_text, const char *ai_analysis, const char *history_role) {
     extern AppContext *global_app;
 
     char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
@@ -1159,7 +1461,7 @@ void save_tee_to_history(const char *terminal_text, const char *ai_analysis) {
     char *red     = g_strdup(global_app->ansi.red);
     char *nml     = g_strdup(global_app->ansi.normal);
 
-    if (!global_app || !terminal_text || !ai_analysis || !global_app->session.session_uuid) {
+    if (!global_app || !terminal_text || !global_app->session.session_uuid) {
         DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_SAVE%s]%s WARNING: %sInvalid inputs detected. Aborting.%s\n",
 		lt_pl, nml, cy, nml, red, yl, nml);
         return;
@@ -1174,7 +1476,7 @@ void save_tee_to_history(const char *terminal_text, const char *ai_analysis) {
 	lt_pl, nml, cy, nml, yl, red, (void*)terminal_output, nml);
 
     char *cleaned_terminal_output = strip_blank_lines(terminal_output);
-    char *cleaned_ai_analysis = strip_blank_lines(ai_analysis);
+    char *cleaned_ai_analysis = ai_analysis ? strip_blank_lines(ai_analysis) : NULL;
 
     DEBUG_PRINT("[%sMEMDBG%s ]: [%sTEE_SAVE%s] %scleaned terminal=%s%p%s ai=%s%p%s\n",
 	lt_pl, nml, cy, nml, yl,
@@ -1184,7 +1486,9 @@ void save_tee_to_history(const char *terminal_text, const char *ai_analysis) {
     g_free(terminal_output);
 
     if (!cleaned_terminal_output) cleaned_terminal_output = g_strdup("");
-    if (!cleaned_ai_analysis) cleaned_ai_analysis = g_strdup("");
+    /* NULL ai_analysis is intentional in Tee-only mode.  The DB worker uses
+     * that NULL to save the terminal row without creating a fake assistant
+     * row. */
 
     DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_SAVE%s]%s Data cleaned. Allocating DBWorkerData.%s\n",
 	lt_pl, nml, cy, nml, yl, nml);
@@ -1199,7 +1503,23 @@ void save_tee_to_history(const char *terminal_text, const char *ai_analysis) {
 
     data->terminal_output = cleaned_terminal_output;
     data->ai_analysis = cleaned_ai_analysis;
-    data->session_uuid = g_strdup(global_app->session.session_uuid);
+
+    /* Tee and SNMP use the same asynchronous history worker, but retain
+     * their distinct database roles. Only internal callers supply these
+     * controlled role names. */
+    if (!history_role ||
+        (strcmp(history_role, "terminal") != 0 && strcmp(history_role, "snmp") != 0)) {
+        history_role = "terminal";
+    }
+    data->history_role = g_strdup(history_role);
+
+    /* TRUE intentionally targets the legacy/global all-zero UUID. FALSE
+     * targets the real current session UUID. Capture the destination now,
+     * before the asynchronous DB worker starts. */
+    const char *tee_target_uuid = global_app->session.write_to_global
+                                  ? GLOBAL_SESSION_UUID
+                                  : global_app->session.session_uuid;
+    data->session_uuid = g_strdup(tee_target_uuid);
     data->sequence_id = global_app->database.sequence_id++;
     DEBUG_PRINT("[%sMEMDBG%s ]: [%sTEE_SAVE%s]%s DBWorkerData=%s%p%s terminal=%s%p%s ai=%s%p%s uuid=%s%p%s seq=%s%d%s\n",
 		lt_pl, nml, cy, nml, yl,
@@ -1220,6 +1540,7 @@ void save_tee_to_history(const char *terminal_text, const char *ai_analysis) {
         g_free(data->terminal_output);
         g_free(data->ai_analysis);
         g_free(data->session_uuid);
+        g_free(data->history_role);
         free(data);
         return;
     }
@@ -1392,9 +1713,9 @@ char* strip_blank_lines(const char *input_text) {
 }
 
 void print_version(AppContext *app) {
-    printf("aiterm version:\t%s%-16s%s\n", app->ansi.cyan, AITERM_VERSION, app->ansi.normal);
-    printf("Build ID:\t%s%s%s\n", app->ansi.cyan, AITERM_BUILDID, app->ansi.normal);
-    printf("Build Time:\t%s%s%s\n", app->ansi.cyan, AITERM_BUILD_TIME, app->ansi.normal);
+    printf("%saiterm version:\t%s%-16s%s\n", app->ansi.lt_green, app->ansi.cyan, AITERM_VERSION, app->ansi.normal);
+    printf("%sBuild ID:\t%s%s%s\n", app->ansi.lt_green, app->ansi.cyan, AITERM_BUILDID, app->ansi.normal);
+    printf("%sBuild Time:\t%s%s%s\n", app->ansi.lt_green, app->ansi.cyan, AITERM_BUILD_TIME, app->ansi.normal);
 }
 
 
@@ -1447,6 +1768,7 @@ gboolean on_app_startup_prime(gpointer user_data) {
     }
     on_initialization_complete(app);
 
+    g_free(lt_pl);
     g_free(cy);
     g_free(yl);
     g_free(gr);
