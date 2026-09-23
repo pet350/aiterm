@@ -6,11 +6,14 @@
 // September 2026
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <gtk/gtk.h>
 #include <time.h>
 
 #include "gui.h"
 #include "idle.h"
 #include "menu.h"
+#include "utils.h"
 #include "ai_retry.h"
 #include "commands.h"
 #include "toggles.h"
@@ -23,7 +26,7 @@
  * changes to GTK widgets and all live-toggle changes happen on the GTK main
  * thread, exactly where the existing toggle system expects them.
  */
-static void idle_save_toggle_state(AppContext *app)
+void idle_save_toggle_state(AppContext *app)
 {
     app->idle.saved_autoreply            = app->sys.autoreply_enabled;
     app->idle.saved_auto_execute         = app->sys.auto_execute_enabled;
@@ -41,7 +44,7 @@ static void idle_save_toggle_state(AppContext *app)
     app->idle.saved_session_config         = app->sys.load_from_session;
 }
 
-static void idle_force_toggles_off(AppContext *app)
+void idle_force_toggles_off(AppContext *app)
 {
     app->sys.autoreply_enabled          = FALSE;
     app->sys.auto_execute_enabled       = FALSE;
@@ -71,7 +74,7 @@ static void idle_force_toggles_off(AppContext *app)
     }
 }
 
-static void idle_restore_toggle_state(AppContext *app)
+void idle_restore_toggle_state(AppContext *app)
 {
     app->sys.autoreply_enabled          = app->idle.saved_autoreply;
     app->sys.auto_execute_enabled       = app->idle.saved_auto_execute;
@@ -94,10 +97,11 @@ static void idle_restore_toggle_state(AppContext *app)
             g_timeout_add(150, update_snmp_ticker_scroll, app);
         g_source_set_name_by_id(app->gui.snmp_ticker_timer_id,
                                 "aiterm-snmp-ticker");
+        cmd_force_snmp_flush(app, NULL);
     }
 }
 
-static void idle_sync_toggle_menu(AppContext *app)
+void idle_sync_toggle_menu(AppContext *app)
 {
     if (!app) return;
 
@@ -145,19 +149,39 @@ static void idle_sync_toggle_menu(AppContext *app)
 #undef IDLE_SET_MENU
 }
 
-static void idle_log(AppContext *app, const char *message)
+void idle_log(AppContext *app, const char *message)
 {
     if (!app || !message) return;
 
-    /* Do not use DEBUG_PRINT here when debug mode itself is being suspended.
-     * stderr logging remains useful, but this avoids coupling idle handling
-     * to the state of the debug toggle. */
-    fprintf(stderr, "[ aiterm IDLE ]: %s\n", message);
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%saiterm IDLE%s]: %s%s%s\n", 
+	lt_pl, nml, cy, nml, red, message, nml);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
-static void idle_suspend(AppContext *app)
+void idle_suspend(AppContext *app)
 {
     if (!app || app->idle.suspended) return;
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
 
     /* Snapshot exactly what was enabled immediately before suspension. */
     idle_save_toggle_state(app);
@@ -169,12 +193,27 @@ static void idle_suspend(AppContext *app)
      * of command/DB side effects. */
     idle_sync_toggle_menu(app);
 
-    idle_log(app, "No user activity detected; toggle systems suspended.");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sIdle%s] %sNo user activity detected.%s toggle systems suspended.%s\n",
+	lt_pl, nml, cy, nml, red, yl, nml);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
 }
 
-static void idle_resume(AppContext *app)
+void idle_resume(AppContext *app)
 {
     if (!app || !app->idle.suspended) return;
+
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
 
     idle_restore_toggle_state(app);
     app->idle.suspended = FALSE;
@@ -182,7 +221,15 @@ static void idle_resume(AppContext *app)
     /* Restore the menu exactly to the state it had before idle suspension. */
     idle_sync_toggle_menu(app);
 
-    idle_log(app, "User activity detected; previous toggle states restored.");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sIdle%s] %sUser activity detected.%s previous toggle states restored.%s\n",
+	lt_pl, nml, cy, nml, gr, yl, nml);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
 }
 
 static gboolean idle_watchdog(gpointer user_data)
@@ -259,6 +306,13 @@ void idle_init(AppContext *app)
         app->idle.timeout_minutes = IDLE_DEFAULT_TIMEOUT_MINUTES;
     }
 
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     app->idle.suspended = FALSE;
     app->idle.last_activity_us = g_get_monotonic_time();
 
@@ -267,7 +321,16 @@ void idle_init(AppContext *app)
         g_source_set_name_by_id(app->idle.timer_id, "aiterm-idle-watchdog");
     }
 
-    idle_log(app, "Idle watchdog started.");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sIdle%s] %swatchdog started.%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 void idle_shutdown(AppContext *app)

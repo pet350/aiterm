@@ -19,7 +19,7 @@
 #include "build_id.h"
 
 // Current AITERM version
-const char* AITERM_VERSION      = "0.9.10-gamma";
+const char* AITERM_VERSION      = "0.9.11-beta";
 const char* AITERM_BUILDID      = BUILD_ID;
 const char* AITERM_BUILD_TIME   = BUILD_TIME;
 const char* CONFIG_FILE         = NULL;

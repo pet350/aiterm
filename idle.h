@@ -41,19 +41,20 @@ typedef struct {
     gboolean saved_session_config;
 } IdleState;
 
-/* Initialize the idle subsystem and start its lightweight 1-second watcher. */
-void idle_init(AppContext *app);
 
-/* Stop the watcher during orderly application shutdown. */
-void idle_shutdown(AppContext *app);
-
-/* Mark user activity.  This is intentionally cheap and main-thread only. */
-void idle_mark_activity(AppContext *app);
-
-/* GTK window event hook used to detect keyboard/mouse activity globally. */
+// Function Prototypes
 gboolean idle_event_after(GtkWidget *widget, GdkEvent *event, gpointer user_data);
-
-/* Return the configured timeout, defaulting to 10 minutes if unset. */
 guint idle_get_timeout_minutes(AppContext *app);
+
+void idle_save_toggle_state(AppContext *app);
+void idle_force_toggles_off(AppContext *app);
+void idle_restore_toggle_state(AppContext *app);
+void idle_sync_toggle_menu(AppContext *app);
+void idle_log(AppContext *app, const char *message);
+void idle_suspend(AppContext *app);
+void idle_resume(AppContext *app);
+void idle_mark_activity(AppContext *app);
+void idle_init(AppContext *app);
+void idle_shutdown(AppContext *app);
 
 #endif

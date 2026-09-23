@@ -15,6 +15,7 @@ typedef struct {
     AppContext *app;
     char *response_text;
     char *terminal_output;
+    char *history_role;       /* terminal or snmp */
 } TeeResponseData;
 
 // Function prototypes defines in updare.c

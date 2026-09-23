@@ -1,7 +1,7 @@
 // Part of the AITerm project
 // provider_manager_gui.c
 // AI Provider Manager GUI
-// 0.9.10-beta
+// 0.9.11-alpha
 
 #include <gtk/gtk.h>
 #include <string.h>
@@ -81,7 +81,7 @@ static void fill_from_provider(ProviderManagerDialog *dlg, const char *name) {
     set_entry(dlg->endpoint_entry, endpoint);
     set_entry(dlg->auth_header_entry, auth_header);
     set_entry(dlg->auth_scheme_entry, auth_scheme);
-    set_entry(dlg->api_key_entry, dlg->app->security.api_key);
+    set_entry(dlg->api_key_entry, get_provider_api_key(dlg->app, name));
     set_entry(dlg->query_key_entry, query_key);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(dlg->api_key_query_check), key_in_query);
     set_protocol(dlg, kind);
@@ -129,8 +129,8 @@ static gboolean apply_provider(ProviderManagerDialog *dlg, gboolean save) {
                   ? PROVIDER_KIND_GEMINI_GENERATE : PROVIDER_KIND_OPENAI_CHAT;
     p->api_key = (*api_key) ? g_strdup(api_key) : NULL;
 
-    g_free(app->security.api_key);
-    app->security.api_key = (*api_key) ? g_strdup(api_key) : NULL;
+    /* 0.9.11-alpha: keep a separate credential in SecurityConfig for every provider. */
+    set_provider_api_key(app, name, api_key);
     g_free(app->aiterm_runtime.model);
     app->aiterm_runtime.model = g_strdup(model);
 
@@ -230,6 +230,7 @@ void open_provider_manager_window(AppContext *app) {
 
     GtkWidget *info = gtk_label_new(
         "Select a provider, edit its connection details, test it, then Apply & Save.\n"
+        "Each provider keeps its own encrypted API key, so providers can be swapped without re-entering credentials.\n"
         "Custom entries can point at any OpenAI-compatible or Gemini-compatible endpoint.");
     gtk_label_set_xalign(GTK_LABEL(info), 0.0);
     gtk_label_set_line_wrap(GTK_LABEL(info), TRUE);
@@ -320,7 +321,7 @@ void open_provider_manager_window(AppContext *app) {
     set_entry(dlg->endpoint_entry, app->provider_config.endpoint);
     set_entry(dlg->auth_header_entry, app->provider_config.auth_header);
     set_entry(dlg->auth_scheme_entry, app->provider_config.auth_scheme);
-    set_entry(dlg->api_key_entry, app->security.api_key);
+    set_entry(dlg->api_key_entry, get_provider_api_key(app, app->provider_config.provider));
     set_entry(dlg->query_key_entry, app->provider_config.query_key_name);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(dlg->api_key_query_check),
                                  app->provider_config.api_key_in_query);

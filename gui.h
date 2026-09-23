@@ -415,7 +415,18 @@ typedef struct {
 // Added 0.9.5-omega
 typedef struct {
     char *master_key;
-    char *api_key;
+
+    /* 0.9.11-alpha: every provider has its own credential slot.
+     * These are the authoritative in-memory API credentials.  Keeping the
+     * credentials as explicit AppContext fields makes provider switching
+     * deterministic and prevents one provider's key from following another. */
+    char *openai_key;
+    char *gemini_key;
+    char *groq_key;
+    char *openrouter_key;
+    char *mistral_key;
+    char *ollama_key;
+    char *custom_key;
 } SecurityConfig;
 
 // AppContext the backbone of this entire application used by almost all functions

@@ -2,14 +2,23 @@
 # unencrtpted/plain text passwords are no longer supposrted in the config file!
 # you must use the ouput from the built in ssl function in ./aiterm --master=<master key> --crypt-pw=<string>
 
-# Provider [openai/gemini]
+# Provider [openai/gemini/groq/openrouter/mistral/ollama]
 provider=gemini
 
 # AI Model name. (Working Gemini model listed} 
 model=gemini-flash-latest
 
-# API Key
-api_key={ Encrypted with AES-256-CBC API Key, use ./aiterm --master=<master key> --crypt-pw=<unencrypted key> }
+# Provider API Keys. Leave providers you do not use blank.
+OPENAI_KEY={ Encrypted OpenAI key }
+GEMINI_KEY={ Encrypted Gemini key }
+GROQ_KEY={ Encrypted Groq key }
+OPENROUTER_KEY={ Encrypted OpenRouter key }
+MISTRAL_KEY={ Encrypted Mistral key }
+OLLAMA_KEY=
+CUSTOM_KEY={ Encrypted custom-provider key }
+
+# Legacy api_key= is still accepted when upgrading an older 0.9.x config,
+# but new configurations should use the provider-specific keys above.
 
 # New version 0.5 MariaDB config
 # Database Host

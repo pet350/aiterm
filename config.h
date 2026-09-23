@@ -13,6 +13,11 @@
 #include <json-c/json.h>
 #include "gui.h"
 
+typedef struct {
+    const char *config_name;
+    char **key_ptr;
+} ProviderKeyEntry;
+
 void save_config(AppContext *app);
 void load_config(AppContext *app);
 

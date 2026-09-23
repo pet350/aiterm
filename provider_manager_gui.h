@@ -1,7 +1,7 @@
 // Part of the AITerm project
 // provider_manager_gui.h
 // AI Provider Manager GUI
-// 0.9.10-beta
+// 0.9.11-alpha
 
 #ifndef PROVIDER_MANAGER_GUI_H
 #define PROVIDER_MANAGER_GUI_H

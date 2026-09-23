@@ -35,6 +35,7 @@
 #include "provider_manager_gui.h"
 #include "autoexec.h"
 #include "terminal.h"
+#include "provider_keys.h"
 
 extern const char* HIGHLIGHT_STRING;
 extern const char* GENERAL_DIRECTIVES;
@@ -126,9 +127,55 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
                 exit(1);
             }
             print_version(app);
-            load_config(app);            
-            printf("Decrypted AI Key:\t%s\n", app->security.api_key);
-            printf("Decrypted DB Password:\t%s\n", app->database.db_pass);
+            load_config(app);
+
+            char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+            char *cy      = g_strdup(global_app->ansi.cyan);
+            char *yl      = g_strdup(global_app->ansi.yellow);
+            char *gr      = g_strdup(global_app->ansi.green);
+            char *red     = g_strdup(global_app->ansi.red);
+            char *nml     = g_strdup(global_app->ansi.normal);
+
+	    app->sys.debug_mode = TRUE;            
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sDecrypted%s] %sOPENAI_KEY:\t%s%s%s\n",
+		lt_pl, nml, cy, nml, gr,
+		red, app->security.openai_key ? app->security.openai_key : "", nml);
+
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sDecrypted%s] %sGEMINI_KEY:\t%s%s%s\n",
+                lt_pl, nml, cy, nml, gr,
+ 		red, app->security.gemini_key ? app->security.gemini_key : "", nml);
+
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sDecrypted%s] %sGROQ_KEY:\t%s%s%s\n",
+                lt_pl, nml, cy, nml, gr,
+		red,  app->security.groq_key ? app->security.groq_key : "", nml);
+
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sDecrypted%s] %sOPENROUTER_KEY:\t%s%s%s\n",
+                lt_pl, nml, cy, nml, gr,
+		red,  app->security.openrouter_key ? app->security.openrouter_key : "", nml);
+
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sDecrypted%s] %sMISTRAL_KEY:\t%s%s%s\n",
+                lt_pl, nml, cy, nml, gr,
+		red,  app->security.mistral_key ? app->security.mistral_key : "", nml);
+
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sDecrypted%s] %sOLLAMA_KEY:\t%s%s%s\n",
+                lt_pl, nml, cy, nml, gr,
+		red,  app->security.ollama_key ? app->security.ollama_key : "", nml);
+
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sDecrypted%s] %sCUSTOM_KEY:\t%s%s%s\n",
+                lt_pl, nml, cy, nml, gr,
+		red, app->security.custom_key ? app->security.custom_key : "", nml);
+
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sDecrypted%s] %sDB Password:\t%s%s%s\n",
+                lt_pl, nml, cy, nml, gr,
+		red, app->database.db_pass, nml);
+
+	    g_free(lt_pl);
+	    g_free(cy);
+    	    g_free(yl);
+    	    g_free(gr);
+	    g_free(red);
+	    g_free(nml);
+
             exit(0);
         } else if (strncmp(argv[i], "--master=", 9) == 0) {
             app->security.master_key = strdup(argv[i] + 9);
@@ -140,12 +187,29 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
             char *plaintext = argv[i] + 11;
             char *encrypted = crypt_to_hex(plaintext, app->security.master_key);
             print_version(app);
+	    app->sys.debug_mode = TRUE;
+
+            char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+            char *cy      = g_strdup(global_app->ansi.cyan);
+            char *yl      = g_strdup(global_app->ansi.yellow);
+            char *gr      = g_strdup(global_app->ansi.green);
+            char *red     = g_strdup(global_app->ansi.red);
+            char *nml     = g_strdup(global_app->ansi.normal);
+
             if (encrypted) {
-        	printf("Encrypted string: %s\n", encrypted);
+        	DEBUG_PRINT("Encrypted string: %s\n", encrypted);
         	free(encrypted);
             } else {
-        	fprintf(stderr, "Error: Encryption failed.\n");
+        	DEBUG_PRINT("Error: Encryption failed.\n");
             }
+
+            g_free(lt_pl);
+            g_free(cy);
+            g_free(yl);
+            g_free(gr);
+            g_free(red);
+            g_free(nml);
+
             exit(0);
        }
     }
@@ -186,6 +250,7 @@ static CommandRegistry registry[] = {
     {"noise reload", "Reload noise filters from database", cmd_noisefilter_reload_wrapper},
     {"open history manager", "Open History Manager window", cmd_history_manager_wrapper},
     {"open noise manager", "Opens Noise Filter Manager window", cmd_noisefilter_manager_wrapper},
+    {"open provider api keys", "Opens provider api key links window", provider_keys_show_wrapper},
     {"open provider manager", "Opens AI Provider Manager window", cmd_provider_manager_wrapper},
     {"open policy manager", "Open Policy Manager window", cmd_policy_manager_wrapper},
     {"open snmp manager", "Opens SNMP Target Manager window", cmd_snmp_manager_wrapper},
@@ -391,6 +456,10 @@ void cmd_close_snmp_manager_wrapper(AppContext *app, const char *args) {
 
 void cmd_show_queue_wrapper(AppContext *app, const char *args) {
     cmd_show_queue(app);
+}
+
+void provider_keys_show_wrapper(AppContext *app, const char *args) {
+    provider_keys_show(app);
 }
 
 void display_dynamic_help(AppContext *app) {

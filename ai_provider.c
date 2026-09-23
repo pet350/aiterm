@@ -1,12 +1,13 @@
 // part of aiterm project
 // ai_provider.c - Provider abstraction layer
 // By: Peter Talbott
-// 0.9.10-beta
+// 0.9.11-alpha
 
 #include <string.h>
 #include <json-c/json.h>
 
 #include "ai_provider.h"
+#include "gui.h"
 #include "gemini.h"
 #include "openai.h"
 #include "utils.h"
@@ -15,24 +16,52 @@ static gboolean provider_is_gemini(const AppContext *app) {
     return app && app->provider_config.kind == PROVIDER_KIND_GEMINI_GENERATE;
 }
 
+extern int debug_mode;
+
 char *ai_provider_send_with_context(AppContext *app, const char *prompt,
                                     const char *terminal_context) {
     if (!app || !prompt) return NULL;
 
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
+    char *RV = g_malloc(128);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sProvider%s] %sdispatch ->%s", 
+	lt_pl, nml, cy, nml, yl, gr);
     if (provider_is_gemini(app)) {
-        DEBUG_PRINT("[ DEBUG ]: [Provider] dispatch -> Gemini (%s), terminal_context=%zu bytes\n",
-                    app->provider_config.model ? app->provider_config.model : "default",
-                    terminal_context ? strlen(terminal_context) : 0UL);
-        /* Use the context-aware Gemini entry point so the GTK-thread VTE snapshot
-         * captured by update.c survives the provider abstraction layer. */
-        return perform_gemini_request(app, prompt, terminal_context);
+        DBG_PRINT("Gemini [%s%s%s]%s\n",
+                red, app->provider_config.model ? app->provider_config.model : "default",
+		gr, nml);
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sProvider%s] %sterminal_context=%s%zu%s bytes%s\n",
+		lt_pl, nml, cy, nml, gr,
+                red, terminal_context ? strlen(terminal_context) : 0UL, gr, nml);
+
+        RV = g_strdup(perform_gemini_request(app, prompt, terminal_context));
+    } else {
+        DBG_PRINT("OpenAI-compatible %s%s / %s%s\n",
+                red, app->provider_config.provider ? app->provider_config.provider : "openai",
+                app->provider_config.model ? app->provider_config.model : "default", nml);
+
+ 	DEBUG_PRINT("[ %sDEBUG%s ] [%sProvider%s] %sterminal_context=%s%zu%s bytes%s\n",
+		lt_pl, nml, cy, nml, gr, 
+                red, terminal_context ? strlen(terminal_context) : 0UL, gr, nml);
+
+        RV = g_strdup(send_to_openai(app, prompt));
     }
 
-    DEBUG_PRINT("[ DEBUG ]: [Provider] dispatch -> OpenAI-compatible (%s / %s), terminal_context=%zu bytes\n",
-                app->provider_config.provider ? app->provider_config.provider : "openai",
-                app->provider_config.model ? app->provider_config.model : "default",
-                terminal_context ? strlen(terminal_context) : 0UL);
-    return send_to_openai(app, prompt);
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
+    return(RV);
 }
 
 char *ai_provider_send(AppContext *app, const char *prompt) {

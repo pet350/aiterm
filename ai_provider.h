@@ -1,12 +1,13 @@
 // part of aiterm project
 // ai_provider.h - Provider abstraction layer
 // By: Peter Talbott
-// 0.9.10-beta
+// 0.9.11-alpha
 
 #ifndef AI_PROVIDER_H
 #define AI_PROVIDER_H
 
 #include "gui.h"
+#include "utils.h"
 
 /* Send a prompt using the provider selected in app->provider_config. */
 char *ai_provider_send(AppContext *app, const char *prompt);

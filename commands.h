@@ -39,6 +39,7 @@ void cmd_show_command_line_help_wrapper(AppContext *app, const char *args);
 void cmd_invalidate_cache(AppContext *app, const char *args);
 void cmd_session_sync(AppContext *app, const char *args);
 void dispatch_command_to_pane(AppContext *app, int target_pane_id, const char *cmd);
+void provider_keys_show_wrapper(AppContext *app, const char *args);
 
 // Handle Wrapper Prototypes
 void handle_directive_wrapper(AppContext *app, const char *args);

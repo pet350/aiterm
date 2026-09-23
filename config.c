@@ -26,7 +26,7 @@
 #include "config.h"
 #include "menu.h"
 
-static const char *CONFIG_FILE_VERSION="1.2";
+static const char *CONFIG_FILE_VERSION="1.3";
 
 static char* LOADED_PREFIX(AppContext *app) {
     int len = 64;
@@ -99,14 +99,23 @@ void save_config(AppContext *app) {
     fprintf(fp, "provider_auth_scheme=%s\n", app->provider_config.auth_scheme ? app->provider_config.auth_scheme : "");
     fprintf(fp, "provider_query_key=%s\n", app->provider_config.query_key_name ? app->provider_config.query_key_name : "");
     fprintf(fp, "provider_api_key_in_query=%d\n", app->provider_config.api_key_in_query);
-    char *encrypted_api_key = crypt_to_hex(app->security.api_key ? app->security.api_key : "", app->security.master_key);
-    if (encrypted_api_key) {
-	fprintf(fp, "api_key=%s\n", encrypted_api_key);
-	free(encrypted_api_key);
-    } else {
-	fprintf(fp, "api_key=\n");
+
+    /* 0.9.11-alpha: persist one encrypted key per provider.  These names
+     * map directly to AppContext.security fields. */
+    const char *known_providers[] = {
+        "openai", "gemini", "groq", "openrouter", "mistral", "ollama", "custom", NULL
+    };
+    for (int i = 0; known_providers[i]; ++i) {
+        const char *key = get_provider_api_key(app, known_providers[i]);
+        char *config_name = provider_key_env_name(known_providers[i]);
+        char *encrypted = crypt_to_hex(key ? key : "", app->security.master_key);
+        fprintf(fp, "%s=%s\n", config_name, encrypted ? encrypted : "");
+        g_free(config_name);
+        g_free(encrypted);
     }
-    //fprintf(fp, "api_key=%s\n", app->security.api_key ? app->security.api_key : "");
+
+    /* Legacy api_key= is intentionally no longer written.  load_config still
+     * understands it so older 0.9.x configuration files continue to work. */
     fprintf(fp, "db_host=%s\n", app->database.db_host ? app->database.db_host : "localhost");
     fprintf(fp, "db_user=%s\n", app->database.db_user ? app->database.db_user : "root");
 
@@ -149,12 +158,54 @@ void save_config(AppContext *app) {
     DEBUG_PRINT("[ DEBUG ]: Settings saved to aiterm.conf\n");
 }
 
-void load_config(AppContext *app) {
-    app->security.api_key = NULL;
-    app->provider_config.provider = strdup("openai");
+static gboolean parse_provider_key_line(AppContext *app, const char *line) {
+    if (!app || !line) return FALSE;
+    const char *eq = strchr(line, '=');
+    if (!eq || eq <= line + 4) return FALSE;
 
-    app->gui.terminal_font = strdup("Monospace 10");
-    app->gui.ai_font = strdup("Monospace 10");
+    size_t name_len = (size_t)(eq - line);
+    if (name_len < 5 || strcmp(eq - 4, "_KEY") != 0) return FALSE;
+
+    for (size_t i = 0; i < name_len; ++i) {
+        unsigned char c = (unsigned char)line[i];
+        if (!(g_ascii_isupper(c) || g_ascii_isdigit(c) || c == '_')) return FALSE;
+    }
+
+    char *provider_name = g_strndup(line, (gsize)name_len - 4);
+    char *decrypted = hex_to_decrypt(eq + 1, app->security.master_key);
+    set_provider_api_key(app, provider_name, decrypted ? decrypted : "");
+    DEBUG_PRINT("%s Provider key loaded: [%s_KEY]%s\n", LOADED_PREFIX(app),
+                provider_name, app->ansi.normal);
+    g_free(provider_name);
+    g_free(decrypted);
+    return TRUE;
+}
+
+void load_config(AppContext *app) {
+    if (!app) return;
+
+    init_config_pointer(app);
+    /* load_config can be called again from the command layer. */
+    clear_provider_key_store(app);
+    char *legacy_api_key = NULL;
+
+    ProviderKeyEntry provider_keys[] = {
+        { "OPENAI_KEY",       &app->security.openai_key },
+        { "GEMINI_KEY",       &app->security.gemini_key },
+        { "GROQ_KEY",         &app->security.groq_key },
+        { "OPENROUTER_KEY",   &app->security.openrouter_key },
+        { "MISTRAL_KEY",      &app->security.mistral_key },
+        { "OLLAMA_KEY",       &app->security.ollama_key },
+        { "CUSTOM_KEY",       &app->security.custom_key },
+    };
+
+    g_clear_pointer(&app->provider_config.provider, g_free);
+    app->provider_config.provider = g_strdup("openai");
+
+    g_clear_pointer(&app->gui.terminal_font, g_free);
+    g_clear_pointer(&app->gui.ai_font, g_free);
+    app->gui.terminal_font = g_strdup("Monospace 10");
+    app->gui.ai_font = g_strdup("Monospace 10");
 
     FILE *fp = fopen(CONFIG_FILE, "r");
     if (!fp) {
@@ -166,7 +217,34 @@ void load_config(AppContext *app) {
     char line[1024];
     while (fgets(line, sizeof(line), fp)) {
 	line[strcspn(line, "\r\n")] = 0;
-	if (*line == '#') {
+        for (size_t i = 0; i < G_N_ELEMENTS(provider_keys); i++) {
+            char prefix[128];
+
+            snprintf(prefix, sizeof(prefix), "%s=", provider_keys[i].config_name);
+
+            if (strncmp(line, prefix, strlen(prefix)) == 0) {
+                char *val = strchr(line, '=') + 1;
+
+                if (*provider_keys[i].key_ptr) {
+                    free(*provider_keys[i].key_ptr);
+                    *provider_keys[i].key_ptr = NULL;
+                }
+
+                *provider_keys[i].key_ptr =
+                    hex_to_decrypt(val, app->security.master_key);
+
+                DEBUG_PRINT(
+                    "%s %s%s%s\n",
+                    DECRYPTED_PREFIX(app),
+                    provider_keys[i].config_name,
+                    app->ansi.normal,
+                    app->ansi.normal
+                );
+
+                break;
+            }
+        } 
+        if (*line == '#') {
                 // Do nothing this line starts with #
                 DEBUG_PRINT("%s Skipping commented line %s\n", SKIP_VAL(app), app->ansi.normal);
         } else if (strstr(line, "color=")) {
@@ -175,13 +253,16 @@ void load_config(AppContext *app) {
 		char *color_val = app->sys.debug_color ? ON_VAL(app) : OFF_VAL(app);
 		DEBUG_PRINT("%s  debug color enabled: [%s]%s\n", LOADED_PREFIX(app),
 			color_val, app->ansi.normal);
-	} else if (strstr(line, "api_key=")) {
+	} else if (strcmp(line, "api_key=") == 0 || strncmp(line, "api_key=", 8) == 0) {
+		/* Legacy 0.9.x single-key format.  Hold it temporarily and migrate
+		 * it into the configured provider's explicit credential field after
+		 * the complete file has been parsed. */
 		char *val = strchr(line, '=') + 1;
-		if (app->security.api_key) free(app->security.api_key);
-		app->security.api_key = hex_to_decrypt(val, app->security.master_key);
-		DEBUG_PRINT("%s API Key%s\n", DECRYPTED_PREFIX(app), app->ansi.normal);
+		g_free(legacy_api_key);
+		legacy_api_key = hex_to_decrypt(val, app->security.master_key);
+		DEBUG_PRINT("%s Legacy API Key loaded for migration%s\n", DECRYPTED_PREFIX(app), app->ansi.normal);
 	} else if (strstr(line, "provider=")) {
-		char *val = strchr(line, '=') + 1;
+	    	char *val = strchr(line, '=') + 1;
 		if (app->provider_config.provider) free(app->provider_config.provider);
 		app->provider_config.provider = strdup(val);
 		DEBUG_PRINT("%s  Provider: [%s%s%s]%s\n", LOADED_PREFIX(app),
@@ -195,28 +276,30 @@ void load_config(AppContext *app) {
 		DEBUG_PRINT("%s  Model: [%s%s%s]%s\n", LOADED_PREFIX(app),
                         app->ansi.cyan, app->aiterm_runtime.model, app->ansi.yellow, app->ansi.normal);
 	} else if (strstr(line, "provider_base_url=")) {
-        char *val = strchr(line, '=') + 1;
-        g_free(app->provider_config.base_url);
-        app->provider_config.base_url = g_strdup(val);
-    } else if (strstr(line, "provider_endpoint=")) {
-        char *val = strchr(line, '=') + 1;
-        g_free(app->provider_config.endpoint);
-        app->provider_config.endpoint = g_strdup(val);
-    } else if (strstr(line, "provider_auth_header=")) {
-        char *val = strchr(line, '=') + 1;
-        g_free(app->provider_config.auth_header);
-        app->provider_config.auth_header = g_strdup(val);
-    } else if (strstr(line, "provider_auth_scheme=")) {
-        char *val = strchr(line, '=') + 1;
-        g_free(app->provider_config.auth_scheme);
-        app->provider_config.auth_scheme = g_strdup(val);
-    } else if (strstr(line, "provider_query_key=")) {
-        char *val = strchr(line, '=') + 1;
-        g_free(app->provider_config.query_key_name);
-        app->provider_config.query_key_name = g_strdup(val);
-    } else if (strstr(line, "provider_api_key_in_query=")) {
-        app->provider_config.api_key_in_query = atoi(strchr(line, '=') + 1) != 0;
-	} else if (strstr(line, "db_host=")) {
+            char *val = strchr(line, '=') + 1;
+            g_free(app->provider_config.base_url);
+            app->provider_config.base_url = g_strdup(val);
+        } else if (strstr(line, "provider_endpoint=")) {
+            char *val = strchr(line, '=') + 1;
+            g_free(app->provider_config.endpoint);
+            app->provider_config.endpoint = g_strdup(val);
+        } else if (strstr(line, "provider_auth_header=")) {
+            char *val = strchr(line, '=') + 1;
+            g_free(app->provider_config.auth_header);
+            app->provider_config.auth_header = g_strdup(val);
+        } else if (strstr(line, "provider_auth_scheme=")) {
+            char *val = strchr(line, '=') + 1;
+            g_free(app->provider_config.auth_scheme);
+            app->provider_config.auth_scheme = g_strdup(val);
+        } else if (strstr(line, "provider_query_key=")) {
+            char *val = strchr(line, '=') + 1;
+            g_free(app->provider_config.query_key_name);
+            app->provider_config.query_key_name = g_strdup(val);
+        } else if (strstr(line, "provider_api_key_in_query=")) {
+            app->provider_config.api_key_in_query = atoi(strchr(line, '=') + 1) != 0;
+        } else if (parse_provider_key_line(app, line)) {
+            /* Provider-specific encrypted key handled above. */
+        } else if (strstr(line, "db_host=")) {
 		char *val = strchr(line, '=') + 1;
 		if (app->database.db_host) {
 			free(app->database.db_host);
@@ -386,6 +469,18 @@ void load_config(AppContext *app) {
                 }
         }
     }
+
+    /* Migrate an old single api_key only when the active provider does not
+     * already have an explicit credential. */
+    if (legacy_api_key && *legacy_api_key) {
+        const char *active_key = get_provider_api_key(app, app->provider_config.provider);
+        if (!active_key || !*active_key) {
+            set_provider_api_key(app, app->provider_config.provider, legacy_api_key);
+            DEBUG_PRINT("%s Legacy API key migrated to [%s_KEY]%s\n",
+                        LOADED_PREFIX(app), app->provider_config.provider, app->ansi.normal);
+        }
+    }
+    g_free(legacy_api_key);
     fclose(fp);
     sync_toggle_ui_elements(app);
 }

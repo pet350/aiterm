@@ -81,6 +81,7 @@ char* tee_extract_for_ai(AppContext *app) {
     DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_EXTRACT_FOR_AI%s]: %sUnlocked buffer mutex%s\n",
 	lt_pl, nml, cy, nml, gr, nml);
 
+    g_free(lt_pl);
     g_free(cy);
     g_free(yl);
     g_free(gr);
@@ -115,18 +116,46 @@ void tee_flush_timed(AppContext *app) {
     DEBUG_PRINT("[ %sDEBUG%s ]: [%sTimed Tee Flush%s] %sProcessing Payload%s\n",
 	lt_pl, nml, cy, nml, yl, nml);
 
+    /* Tee collection and AutoReply are deliberately separate functions:
+     *   - Tee ON + AutoReply OFF: capture and save terminal data only.
+     *   - Tee ON + AutoReply ON: capture, save, and send the data to AI.
+     *
+     * The accumulator must still be flushed when Tee is enabled by itself,
+     * otherwise terminal history never reaches the database.  What caused
+     * the regression was making that flush unconditional AI work. */
+    if (!app->sys.autoreply_enabled) {
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTimed Tee Flush%s] %sAutoReply OFF: saving terminal data only%s\n",
+            lt_pl, nml, cy, nml, gr, nml);
+
+        save_tee_to_history(local_out, NULL, "terminal");
+        g_free(local_out);
+        g_atomic_int_set(&app->sys.is_processing, 0);
+        update_status_label(app, "Ready");
+
+        g_free(lt_pl);
+        g_free(cy);
+        g_free(yl);
+        g_free(gr);
+        g_free(red);
+        g_free(nml);
+        return;
+    }
+
     update_status_label(app, "AI is analyzing (Background)...");
 
     // Package data for the background thread
     TeeResponseData *trd = g_malloc0(sizeof(TeeResponseData));
     trd->app = app;
+    trd->history_role = g_strdup("terminal");
     char *clean_local = strip_blank_lines(local_out);
     trd->terminal_output = xml_wrap_with_type(app, clean_local, TAG_LOG_DUMP);
     g_free(clean_local);
+    g_free(local_out);
 
     // START BACKGROUND THREAD: This is what stops the terminal from hanging!
     g_thread_unref(g_thread_new("tee_background_worker", (GThreadFunc)tee_ai_thread_func, trd));
 
+    g_free(lt_pl);
     g_free(cy);
     g_free(yl);
     g_free(gr);
@@ -164,6 +193,7 @@ static gpointer tee_ai_thread_func(gpointer data) {
         g_atomic_int_set(&app->sys.is_processing, 0);
         g_idle_add(reset_ai_status_idle, app);
         g_free(trd->terminal_output);
+        g_free(trd->history_role);
         g_free(trd);
     }
 
@@ -174,6 +204,9 @@ static gpointer tee_ai_thread_func(gpointer data) {
 // GUI UPDATE CALLBACK:
 // Safely runs on the Main UI Thread to update GTK widgets.
 static gboolean update_tee_ui(gpointer data) {
+    TeeResponseData *trd = (TeeResponseData *)data;
+    if (!trd || !trd->app) return FALSE;
+
     char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
     char *cy      = g_strdup(global_app->ansi.cyan);
     char *yl      = g_strdup(global_app->ansi.yellow);
@@ -181,28 +214,37 @@ static gboolean update_tee_ui(gpointer data) {
     char *red     = g_strdup(global_app->ansi.red);
     char *nml     = g_strdup(global_app->ansi.normal);
 
-    TeeResponseData *trd = (TeeResponseData *)data;
-    if (!trd || !trd->app) return FALSE;
-
     DEBUG_PRINT("[%sMEMDBG%s ]: [%sTEE_UI%s] %strd=[%s%p%s] terminal=[%s%p%s] response=[%s%p%s]%s\n",
 	lt_pl, nml, cy, nml, yl,
         red, (void*)trd, yl,
         red, (void*)trd->terminal_output, yl,
 	red, (void*)trd->response_text, yl, nml);
     char *ai_text = extract_ai_text(trd->response_text);
-    DEBUG_PRINT("[MEMDBG ]: [TEE_UI] extract_ai_text -> %p\n", (void*)ai_text);
+    DEBUG_PRINT("[%sMEMDBG %s]: [%sTEE_UI%s] %sextract_ai_text -> [%s%p%s]%s\n",
+	lt_pl, nml, cy, nml, gr,
+	red,  (void*)ai_text, gr, nml);
 
     if (ai_text) {
         // Display in AI Pane
         write_to_ai_pane(trd->app, "AI (Auto-Reply): ", ai_text, "user_tag", "ai_tag");
 
         // SAVE TO DATABASE: Ensure automated insights are in the 100-msg history
-        DEBUG_PRINT("[MEMDBG ]: [TEE_UI] BEFORE save_tee_to_history terminal=%p ai=%p\n",
-                    (void*)trd->terminal_output, (void*)ai_text);
-        save_tee_to_history(trd->terminal_output, ai_text);
-        DEBUG_PRINT("[MEMDBG ]: [TEE_UI] AFTER save_tee_to_history ai=%p\n", (void*)ai_text);
+        DEBUG_PRINT("[%sMEMDBG %s]: [%sTEE_UI%s] %sBEFORE save_tee_to_history terminal=[%s%p%s] ai=[%s%p%s]%s\n",
+		lt_pl, nml, cy, nml, gr,
+                red, (void*)trd->terminal_output, gr,
+		red, (void*)ai_text, gr, nml);
 
-        DEBUG_PRINT("[MEMDBG ]: [TEE_UI] FREE ai_text=%p\n", (void*)ai_text);
+        save_tee_to_history(trd->terminal_output, ai_text,
+                            trd->history_role ? trd->history_role : "terminal");
+
+        DEBUG_PRINT("[%sMEMDBG %s]: [%sTEE_UI%s] %sAFTER save_tee_to_history ai=[%s%p%s]%s\n",
+		lt_pl, nml, cy, nml, gr, 
+		red, (void*)ai_text, gr, nml);
+
+        DEBUG_PRINT("[%sMEMDBG %s]: [%sTEE_UI%s] %sFREE ai_text=[%s%p%s]%s\n", 
+		lt_pl, nml, cy, nml, gr, 
+		red, (void*)ai_text, gr, nml);
+
         g_free(ai_text);
     } else {
         write_to_ai_pane(trd->app, "System: ", "Tee Analysis failed to return text.", "cmd_tag", "cmd_tag");
@@ -213,13 +255,24 @@ static gboolean update_tee_ui(gpointer data) {
     g_atomic_int_set(&trd->app->sys.is_processing, 0);
 
     // Final memory cleanup
-    DEBUG_PRINT("[MEMDBG ]: [TEE_UI] FREE response_text=%p\n", (void*)trd->response_text);
+    DEBUG_PRINT("[%sMEMDBG %s]: [%sTEE_UI%s] %sFREE response_text=[%s%p%s]%s\n",
+	lt_pl, nml, cy, nml, gr, 
+	red, (void*)trd->response_text, gr, nml);
+
     if (trd->response_text) g_free(trd->response_text);
-    DEBUG_PRINT("[MEMDBG ]: [TEE_UI] FREE terminal_output=%p\n", (void*)trd->terminal_output);
+    DEBUG_PRINT("[%sMEMDBG %s]: [%sTEE_UI%s] %sFREE terminal_output=[%s%p%s]%s\n",
+	lt_pl, nml, cy, nml, gr,
+	red,  (void*)trd->terminal_output, gr, nml);
+
     if (trd->terminal_output) g_free(trd->terminal_output);
-    DEBUG_PRINT("[MEMDBG ]: [TEE_UI] FREE trd=%p\n", (void*)trd);
+    if (trd->history_role) g_free(trd->history_role);
+    DEBUG_PRINT("[%sMEMDBG %s]: [%sTEE_UI%s] %sFREE trd=[%s%p%s]%s\n", 
+	lt_pl, nml, cy, nml, gr,
+	red, (void*)trd, gr, nml);
+
     g_free(trd);
 
+    g_free(lt_pl);
     g_free(cy);
     g_free(yl);
     g_free(gr);
@@ -231,13 +284,31 @@ static gboolean update_tee_ui(gpointer data) {
 
 void tee_handle_input(AppContext *app, const char *text) {
     if (!text || !app->aiterm_runtime.tee_accumulator) return;
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     char *clean_text = strip_blank_lines(text);
-    DEBUG_PRINT("[ DEBUG ]: TEE_HANDLE_INPUT: Locked buffer mutex\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_HANDLE_INPUT%s] %sLocked buffer mutex%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
     g_mutex_lock(&app->access.buffer_mutex);
     g_string_append(app->aiterm_runtime.tee_accumulator, clean_text);
     g_mutex_unlock(&app->access.buffer_mutex);
     g_free(clean_text);
-    DEBUG_PRINT("[ DEBUG ]: TEE_HANDLE_INPUT: Unlocked buffer mutex\n");
+    DEBUG_PRINT("[%s DEBUG%s ]: [%sTEE_HANDLE_INPUT%s] %sUnlocked buffer mutex%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 void tee_handle_output(AppContext *app, const char *text_in) {
@@ -248,16 +319,27 @@ void tee_handle_output(AppContext *app, const char *text_in) {
     g_free(blank_clean);
     if (!text) return;
 
-    DEBUG_PRINT("[ DEBUG ]: [Tee Handler] %s\n", text);
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTee Handler%s] %s%s%s\n", 
+	lt_pl, nml, cy, nml, gr, text, nml);
 
     g_mutex_lock(&app->access.buffer_mutex);
-    DEBUG_PRINT("[ DEBUG ]: TEE_HANDLE_OUTPUT: Locked buffer mutex\n");
+    DEBUG_PRINT("[ %sEBUG%s ]: [%sTEE_HANDLE_OUTPUT%s] %sLocked buffer mutex%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
+
     // Delta Upgrade: If AI is already busy, ignore heavy stream chatter
     // to protect context integrity and memory.
     if (g_atomic_int_get(&app->sys.is_processing) && app->aiterm_runtime.tee_accumulator->len > 51200) {
         g_mutex_unlock(&app->access.buffer_mutex);
         g_free(text);
-	DEBUG_PRINT("[ DEBUG ]: TEE_HANDLE_OUTPUT: Unlocked buffer mutex\n");
+	DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_HANDLE_OUTPUT%s] %sUnlocked buffer mutex%s\n",
+	    lt_pl, nml, cy, nml, gr, nml);
         return;
     }
     char *clean_text = strip_blank_lines(text);
@@ -277,7 +359,15 @@ void tee_handle_output(AppContext *app, const char *text_in) {
     g_mutex_unlock(&app->access.buffer_mutex);
     g_free(clean_text);
     g_free(text);
-    DEBUG_PRINT("[ DEBUG ]: TEE_HANDLE_OUTPUT: Unlocked buffer mutex\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_HANDLE_OUTPUT%s] %sUnlocked buffer mutex%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
 }
 
 // Process C-level SNMP poller data and send to Gemini/OpenAI off the main UI thread
@@ -307,6 +397,7 @@ void pipe_snmp_to_gemini(AppContext *app, const char *raw_snmp_data) {
     // threads never race on the shared app->xml.type field.
     TeeResponseData *trd = g_malloc0(sizeof(TeeResponseData));
     trd->app = app;
+    trd->history_role = g_strdup("snmp");
     trd->terminal_output = xml_wrap_with_type(app, formatted_prompt, TAG_LOG_DUMP);
 
     g_free(formatted_prompt);
@@ -315,6 +406,7 @@ void pipe_snmp_to_gemini(AppContext *app, const char *raw_snmp_data) {
     if (!g_atomic_int_compare_and_exchange(&app->sys.is_processing, 0, 1)) {
         DEBUG_PRINT("[ DEBUG ]: [SNMP Pipe] AI became busy before reservation; dropping tick.\n");
         g_free(trd->terminal_output);
+        g_free(trd->history_role);
         g_free(trd);
         return;
     }
@@ -349,6 +441,7 @@ static gpointer snmp_ai_thread_func(gpointer data) {
         g_atomic_int_set(&app->sys.is_processing, 0);
         g_idle_add(reset_ai_status_idle, app);
         g_free(trd->terminal_output);
+        g_free(trd->history_role);
         g_free(trd);
     }
 
@@ -377,6 +470,7 @@ void snmp_flush_to_gemini(AppContext *app) {
 
     TeeResponseData *trd = g_malloc0(sizeof(TeeResponseData));
     trd->app = app;
+    trd->history_role = g_strdup("snmp");
     char *clean_telemetry = strip_blank_lines(telemetry_xml);
     trd->terminal_output = xml_wrap_with_type(app, clean_telemetry, TAG_LOG_DUMP);
     g_free(clean_telemetry);
