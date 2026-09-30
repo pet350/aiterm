@@ -59,6 +59,97 @@ void tee_handler_init(AppContext *app) {
 // ATOMIC SNAPSHOT (The 0.8.2 fix):
 // Grabs text and clears the buffer in one locked operation
 // to prevent splicing and duplication bugs.
+/*
+ * Return a snapshot of the pending Tee accumulator without consuming it.
+ * This is used when a human asks the AI a question after terminal output has
+ * arrived but before the timed Tee flush has persisted/forwarded it.
+ */
+char* tee_peek_for_ai(AppContext *app) {
+    if (!app || !app->aiterm_runtime.tee_accumulator) return NULL;
+
+    char *snapshot = NULL;
+    g_mutex_lock(&app->access.buffer_mutex);
+
+    if (app->aiterm_runtime.tee_accumulator->len > 0) {
+        snapshot = g_strdup(app->aiterm_runtime.tee_accumulator->str);
+    }
+
+    g_mutex_unlock(&app->access.buffer_mutex);
+
+    if (!snapshot || !*snapshot) {
+        g_free(snapshot);
+        return NULL;
+    }
+
+    char *clean = strip_blank_lines(snapshot);
+    g_free(snapshot);
+    return clean;
+}
+
+/*
+ * Return the newest persisted terminal TEE row for the current session.
+ *
+ * The manual AI path can arrive after the timed TEE flush has already moved
+ * the accumulator into MariaDB. In that case tee_peek_for_ai() is empty, but
+ * the newest terminal capture is still the most relevant context. Do not use
+ * the VTE widget snapshot in preference to this row because VTE scrollback
+ * can contain substantially older output and duplicate the capture.
+ */
+char* tee_get_latest_for_ai(AppContext *app) {
+    if (!app || !app->database.global_db_conn || !app->session.session_uuid)
+        return NULL;
+
+    MYSQL *db = app->database.global_db_conn;
+    const char *uuid = app->session.write_to_global
+                     ? GLOBAL_SESSION_UUID
+                     : app->session.session_uuid;
+
+    mysql_thread_init();
+    pthread_mutex_lock(&app->access.db_mutex);
+
+    char *escaped_uuid = g_malloc((strlen(uuid) * 2) + 1);
+    if (!escaped_uuid) {
+        pthread_mutex_unlock(&app->access.db_mutex);
+        mysql_thread_end();
+        return NULL;
+    }
+
+    unsigned long escaped_len = mysql_real_escape_string(
+        db, escaped_uuid, uuid, (unsigned long)strlen(uuid));
+    escaped_uuid[escaped_len] = '\0';
+
+    char *query = g_strdup_printf(
+        "SELECT content, sequence_id FROM aiterm_history "
+        "WHERE session_uuid = '%s' AND is_tee = 1 AND role = 'terminal' "
+        "ORDER BY id DESC LIMIT 1",
+        escaped_uuid);
+
+    char *snapshot = NULL;
+    if (query && mysql_query(db, query) == 0) {
+        MYSQL_RES *res = mysql_store_result(db);
+        if (res) {
+            MYSQL_ROW row = mysql_fetch_row(res);
+            if (row && row[0] && *row[0]) {
+                snapshot = g_strdup(row[0]);
+                DEBUG_PRINT(
+                    "[ TEE DB ] latest persisted terminal snapshot=%zu bytes sequence=%s\n",
+                    strlen(snapshot), row[1] ? row[1] : "?");
+            }
+            mysql_free_result(res);
+        }
+    } else if (query) {
+        DEBUG_PRINT("[ TEE DB ] latest snapshot query failed: %s\n",
+                    mysql_error(db));
+    }
+
+    g_free(query);
+    g_free(escaped_uuid);
+    pthread_mutex_unlock(&app->access.db_mutex);
+    mysql_thread_end();
+
+    return snapshot;
+}
+
 char* tee_extract_for_ai(AppContext *app) {
     if (!app || !app->aiterm_runtime.tee_accumulator) return NULL;
     char *snapshot = NULL;
@@ -75,7 +166,16 @@ char* tee_extract_for_ai(AppContext *app) {
 	lt_pl, nml, cy, nml, gr, nml);
     if (app->aiterm_runtime.tee_accumulator->len > 5) {
         snapshot = g_strdup(app->aiterm_runtime.tee_accumulator->str);
+        DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE_EXTRACT%s ] %sSnapshot=%s%zu%s bytes%s\n",
+		lt_pl, nml, cy, nml, gr,
+                red, snapshot ? strlen(snapshot) : 0UL,
+		gr, nml);
         g_string_assign(app->aiterm_runtime.tee_accumulator, "");
+    } else {
+        DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE_EXTRACT%s ] %saccumulator only %s%zu%s bytes; %snothing to flush%s\n",
+		lt_pl, nml, cy, nml, gr,
+                red, app->aiterm_runtime.tee_accumulator->len,
+		gr, red, nml);
     }
     g_mutex_unlock(&app->access.buffer_mutex);
     DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_EXTRACT_FOR_AI%s]: %sUnlocked buffer mutex%s\n",
@@ -94,6 +194,23 @@ char* tee_extract_for_ai(AppContext *app) {
 // THREADED FLUSH (The 0.8.3 fix):
 // This returns INSTANTLY to the UI thread, spawning a background
 // worker to handle the network latency of the AI API.
+void tee_flush_pending_to_history(AppContext *app) {
+    if (!app || !app->aiterm_runtime.tee_accumulator)
+        return;
+
+    char *local_out = tee_extract_for_ai(app);
+    if (!local_out || !*local_out) {
+        g_free(local_out);
+        DEBUG_PRINT("[ TEE FLUSH ] No pending TEE data to persist.\n");
+        return;
+    }
+
+    DEBUG_PRINT("[ TEE FLUSH ] Persisting %zu bytes without AI dispatch.\n",
+                strlen(local_out));
+    save_tee_to_history(local_out, NULL, "terminal");
+    g_free(local_out);
+}
+
 void tee_flush_timed(AppContext *app) {
     if (!app) return;
     if (!g_atomic_int_compare_and_exchange(&app->sys.is_processing, 0, 1))
@@ -148,8 +265,8 @@ void tee_flush_timed(AppContext *app) {
     trd->app = app;
     trd->history_role = g_strdup("terminal");
     char *clean_local = strip_blank_lines(local_out);
-    trd->terminal_output = xml_wrap_with_type(app, clean_local, TAG_LOG_DUMP);
-    g_free(clean_local);
+    trd->terminal_output = clean_local;
+    trd->context_type = TAG_LOG_DUMP;
     g_free(local_out);
 
     // START BACKGROUND THREAD: This is what stops the terminal from hanging!
@@ -171,18 +288,17 @@ static gpointer tee_ai_thread_func(gpointer data) {
     TeeResponseData *trd = (TeeResponseData*)data;
     AppContext *app = trd->app;
 
-    char *final_prompt = g_strdup_printf(
-        "Analyze this terminal snippet concisely. Focus on hardware IDs, "
-        "network configurations, or error messages.\n\n"
-        "TERMINAL OUTPUT:\n%s", trd->terminal_output
-    );
+    /* Terminal/SNMP data is supplied separately as typed XML context. Keep the
+     * instruction itself small so the source payload is not duplicated. */
+    char *final_prompt = g_strdup(
+        "Analyze the supplied terminal context concisely. Focus on hardware IDs, "
+        "network configurations, errors, and other actionable evidence.");
 
-    char *wrapped_prompt = NULL;
     char *clean_prompt = strip_blank_lines(final_prompt);
-    wrapped_prompt = xml_wrap_with_type(app, clean_prompt, TAG_LOG_DUMP);
+    TagType context_type = trd->context_type ? trd->context_type : TAG_LOG_DUMP;
+    char *response = ai_provider_send_with_context_types(
+        app, clean_prompt, trd->terminal_output, TAG_USER, context_type);
     g_free(clean_prompt);
-
-    char *response = ai_provider_send(app, wrapped_prompt);
 
     if (response) {
         trd->response_text = strip_blank_lines(response);
@@ -319,12 +435,12 @@ void tee_handle_output(AppContext *app, const char *text_in) {
     g_free(blank_clean);
     if (!text) return;
 
-    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
-    char *cy      = g_strdup(global_app->ansi.cyan);
-    char *yl      = g_strdup(global_app->ansi.yellow);
-    char *gr      = g_strdup(global_app->ansi.green);
-    char *red     = g_strdup(global_app->ansi.red);
-    char *nml     = g_strdup(global_app->ansi.normal);
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
 
     DEBUG_PRINT("[ %sDEBUG%s ]: [%sTee Handler%s] %s%s%s\n", 
 	lt_pl, nml, cy, nml, gr, text, nml);
@@ -374,9 +490,17 @@ void tee_handle_output(AppContext *app, const char *text_in) {
 void pipe_snmp_to_gemini(AppContext *app, const char *raw_snmp_data) {
     if (!app || !raw_snmp_data || strlen(raw_snmp_data) < 5) return;
 
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     // Don't stack requests if the AI API is already processing an active prompt
     if (g_atomic_int_get(&app->sys.is_processing)) {
-        DEBUG_PRINT("[ DEBUG ]: [SNMP Pipe] AI is busy, skipping SNMP tick.\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSNMP Pipe%s] %sAI is busy, skipping SNMP tick.%s\n",
+		lt_pl, nml, cy, nml, yl, nml);
         return;
     }
 
@@ -384,7 +508,8 @@ void pipe_snmp_to_gemini(AppContext *app, const char *raw_snmp_data) {
     char *clean_snmp = strip_blank_lines(raw_snmp_data);
     if (!clean_snmp || strlen(clean_snmp) == 0) return;
 
-    DEBUG_PRINT("[ DEBUG ]: [SNMP Pipe] Packaging SNMP data for AI analysis...\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSNMP Pipe%s] %sPackaging SNMP data for AI analysis...%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
 
     // Format an explicit system prompt directing the AI to analyze network metrics
     char *formatted_prompt = g_strdup_printf(
@@ -398,13 +523,13 @@ void pipe_snmp_to_gemini(AppContext *app, const char *raw_snmp_data) {
     TeeResponseData *trd = g_malloc0(sizeof(TeeResponseData));
     trd->app = app;
     trd->history_role = g_strdup("snmp");
-    trd->terminal_output = xml_wrap_with_type(app, formatted_prompt, TAG_LOG_DUMP);
-
-    g_free(formatted_prompt);
+    trd->terminal_output = formatted_prompt;
+    trd->context_type = TAG_SNMP;
 
     // Set non-blocking UI status
     if (!g_atomic_int_compare_and_exchange(&app->sys.is_processing, 0, 1)) {
-        DEBUG_PRINT("[ DEBUG ]: [SNMP Pipe] AI became busy before reservation; dropping tick.\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSNMP Pipe%s] %sAI became busy before reservation;%s dropping tick.%s\n", 
+		lt_pl, nml, cy, nml, gr, red, nml);
         g_free(trd->terminal_output);
         g_free(trd->history_role);
         g_free(trd);
@@ -415,6 +540,14 @@ void pipe_snmp_to_gemini(AppContext *app, const char *raw_snmp_data) {
 
     // Dispatch payload directly to your existing tee thread worker!
     g_thread_unref(g_thread_new("snmp_ai_worker", (GThreadFunc)tee_ai_thread_func, trd));
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 // Dedicated SNMP Background Thread Worker
@@ -422,17 +555,52 @@ static gpointer snmp_ai_thread_func(gpointer data) {
     TeeResponseData *trd = (TeeResponseData*)data;
     AppContext *app = trd->app;
 
-    char *final_prompt = g_strdup_printf(
-        "Analyze the following SNMP telemetry metrics. Identify any offline devices, "
-        "timeouts, abnormal metric values, or network interface anomalies:\n\n%s", 
-        trd->terminal_output
-    );
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
+    char *final_prompt = g_strdup(
+        "Analyze the supplied SNMP telemetry. Identify offline devices, timeouts, "
+        "abnormal metric values, and network interface anomalies.");
 
     char *clean_prompt = strip_blank_lines(final_prompt);
-    char *wrapped_prompt = xml_wrap_with_type(app, clean_prompt, TAG_LOG_DUMP);
-    g_free(clean_prompt);
+    TagType context_type = trd->context_type ? trd->context_type : TAG_SNMP;
 
-    char *response = ai_provider_send(app, wrapped_prompt);
+    DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE%s] %s========================================%s\n", 
+	lt_pl, nml, cy, nml, red, nml);
+
+    DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE%s] %sSending Tee request to AI provider%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
+
+    DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE%s] %sProvider=[%s%s%s]%s\n",
+	lt_pl, nml, cy, nml, gr,
+        red, app->provider_config.provider ? app->provider_config.provider : "(null)", 
+	gr, nml);
+
+    DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE%s] %smodel=[%s%s%s]%s\n",
+	lt_pl, nml, cy, nml, gr,
+        red, app->provider_config.model ? app->provider_config.model : "(null)",
+	gr, nml);
+
+    DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE%s] %sSNMP context length=[%s%zu%s]%s\n",
+	lt_pl, nml, cy, nml, gr,
+        red, trd->terminal_output ? strlen(trd->terminal_output) : 0UL,
+	gr, nml);
+
+    if (trd->terminal_output) {
+        DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE%s] %sSNMP context:\n%s%.4000s%s\n",
+            lt_pl, nml, cy, nml, gr, lt_pl, trd->terminal_output, nml);
+    }
+
+DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE%s] %s========================================%s\n",
+	lt_pl, nml, cy, nml, red, nml);
+
+    char *response = ai_provider_send_with_context_types(
+        app, clean_prompt, trd->terminal_output, TAG_USER, context_type);
+    g_free(clean_prompt);
 
     if (response) {
         trd->response_text = strip_blank_lines(response);
@@ -446,6 +614,14 @@ static gpointer snmp_ai_thread_func(gpointer data) {
     }
 
     g_free(final_prompt);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     return NULL;
 }
 
@@ -453,6 +629,13 @@ static gpointer snmp_ai_thread_func(gpointer data) {
 void snmp_flush_to_gemini(AppContext *app) {
     if (!app || g_atomic_int_get(&app->sys.is_processing)) return;
     if (!app->SnmpContext.enable_gemini_feed) return;
+
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
 
     // Grab XML telemetry payload using snmp_manager helper
     char *telemetry_xml = snmp_format_telemetry_payload(app);
@@ -462,7 +645,8 @@ void snmp_flush_to_gemini(AppContext *app) {
     }
 
     if (!g_atomic_int_compare_and_exchange(&app->sys.is_processing, 0, 1)) {
-        DEBUG_PRINT("[ DEBUG ]: [SNMP Flush] AI became busy before reservation; deferring.\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSNMP Flush%s] %sAI became busy before reservation; %sdeferring.%s\n",
+		lt_pl, nml, cy, nml, gr, red, nml);
         g_free(telemetry_xml);
         return;
     }
@@ -472,12 +656,20 @@ void snmp_flush_to_gemini(AppContext *app) {
     trd->app = app;
     trd->history_role = g_strdup("snmp");
     char *clean_telemetry = strip_blank_lines(telemetry_xml);
-    trd->terminal_output = xml_wrap_with_type(app, clean_telemetry, TAG_LOG_DUMP);
-    g_free(clean_telemetry);
+    trd->terminal_output = clean_telemetry;
+    trd->context_type = TAG_SNMP;
 
     g_free(telemetry_xml);
 
     // Spawn non-blocking background thread
     g_thread_unref(g_thread_new("snmp_gemini_worker", (GThreadFunc)snmp_ai_thread_func, trd));
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 

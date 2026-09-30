@@ -69,6 +69,7 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
 	    app->sys.debug_color = TRUE;
         } else if (strcmp(argv[i], "--bw") == 0) {
 	    app->sys.debug_color = FALSE;
+	    app->sys.force_bw = TRUE;
         } else if (strcmp(argv[i], "--list-models") == 0) {
             load_config(app);
             print_version(app);

@@ -31,6 +31,7 @@
 #include "provider_manager_gui.h"
 #include "print.h"
 #include "export.h"
+#include "provider_keys.h"
 
 // Memory clean up helper for signal hooks
 void free_menu_data(gpointer data, GClosure *closure) {
@@ -121,6 +122,12 @@ void on_clear(GtkWidget *widget, gpointer data) {
 void on_menu_exit(GtkWidget *widget, gpointer data) {
     gtk_main_quit();
 }
+
+void on_provider_api_keys(GtkWidget *widget, gpointer data) {
+    AppContext *app = (AppContext *)data;
+    provider_keys_show(app);
+}
+
 
 void on_help(GtkWidget *widget, gpointer data) {
     AppContext *app = (AppContext *)data;
@@ -691,6 +698,7 @@ GtkWidget* create_menu_bar(AppContext *app) {
     GtkWidget *tools_menu = gtk_menu_new();
     GtkWidget *tools_item = gtk_menu_item_new_with_label("Tools");
     GtkWidget *tee_flush  = gtk_menu_item_new_with_label("Flush Tee Buffer");
+    GtkWidget *key_item   = gtk_menu_item_new_with_label("Open api keys window");
     GtkWidget *pref_item  = gtk_menu_item_new_with_label("Preferences");
 
     // AI Root & Submenus
@@ -859,6 +867,7 @@ GtkWidget* create_menu_bar(AppContext *app) {
     g_signal_connect(G_OBJECT(menu_item_provider), "activate", G_CALLBACK(on_menu_provider_manager_activate), app);
     g_signal_connect(session_item, "activate", G_CALLBACK(on_menu_session_manager), app);
     g_signal_connect(tee_flush, "activate", G_CALLBACK(on_tee_flush), app);
+    g_signal_connect(key_item, "activate", G_CALLBACK(on_provider_api_keys), app);
     g_signal_connect(pref_item, "activate", G_CALLBACK(on_preferences), app);
     g_signal_connect(help_btn, "activate", G_CALLBACK(on_help), app);
     g_signal_connect(about_btn, "activate", G_CALLBACK(on_about), app);
@@ -890,6 +899,7 @@ GtkWidget* create_menu_bar(AppContext *app) {
     gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), menu_item_provider);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), tee_flush);
+    gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), key_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), pref_item);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(ai_main_menu), cfg_item);

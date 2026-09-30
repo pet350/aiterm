@@ -16,6 +16,7 @@
 #include "gemini.h"
 #include "update.h"
 #include "utils.h"
+#include "xml_tagging.h"
 
 char *get_cache_dir(void) {
     const char *user_cache = g_get_user_cache_dir();
@@ -255,7 +256,10 @@ char *gemini_cache_build_query_payload(AppContext *app, const char *new_prompt_t
 
     struct json_object *parts_arr = json_object_new_array();
     struct json_object *part_obj = json_object_new_object();
-    json_object_object_add(part_obj, "text", json_object_new_string(new_prompt_text));
+    char *wrapped_prompt = xml_wrap_with_type(app, new_prompt_text, TAG_USER);
+    json_object_object_add(part_obj, "text", json_object_new_string(
+        wrapped_prompt ? wrapped_prompt : new_prompt_text));
+    g_free(wrapped_prompt);
 
     json_object_array_add(parts_arr, part_obj);
     json_object_object_add(turn_obj, "parts", parts_arr);

@@ -15,6 +15,8 @@
 
 // Function prototypes
 char* perform_gemini_request(AppContext *app, const char *prompt, const char *terminal_context);
+char* perform_gemini_request_ex(AppContext *app, const char *prompt, const char *terminal_context, gboolean include_history);
+char* perform_gemini_request_ex_types(AppContext *app, const char *prompt, const char *terminal_context, gboolean include_history, TagType prompt_type, TagType context_type);
 char* send_to_gemini(AppContext *app, const char *prompt);
 char* gemini_list_models(AppContext *app);
 

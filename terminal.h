@@ -19,6 +19,8 @@ void on_vte_child_exited(VteTerminal *vte, gint status, gpointer user_data);
 void apply_terminal_transparency(AppContext *app);
 void apply_visual_settings(AppContext *app);
 char *terminal_capture_context(AppContext *app);
+/* Capture terminal output not yet moved into the TEE accumulator. GTK-thread only. */
+gboolean terminal_capture_pending_tee(AppContext *app);
 
 #endif
 

@@ -16,6 +16,13 @@ char *ai_provider_send(AppContext *app, const char *prompt);
  * that support it, notably Gemini. */
 char *ai_provider_send_with_context(AppContext *app, const char *prompt,
                                     const char *terminal_context);
+char *ai_provider_send_with_context_types(AppContext *app, const char *prompt,
+                                          const char *terminal_context,
+                                          TagType prompt_type, TagType context_type);
+
+char *provider_send_direct(AppContext *app, const char *prompt,
+                                  const char *terminal_context,
+                                  gboolean include_history);
 
 /* Extract assistant text from a provider response. */
 char *ai_provider_extract_text(const char *raw_json);
