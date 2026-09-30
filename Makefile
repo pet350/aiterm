@@ -30,7 +30,7 @@ CFLAGS += $(shell pkg-config --cflags $(PKGS)) -Wall -Wno-deprecated-declaration
 CFLAGS += -DAITERM_SQL_DIR_DEFAULT='"$(SQLDIR)"'
 LIBS   += $(shell pkg-config --libs $(PKGS)) -lpthread -lcurl -lcrypto -luuid -lnetsnmp
 
-OBJ = ai_provider.o provider_manager_gui.o ai_retry.o autoexec.o commands.o config.o crypto.o export.o gemini.o gemini_cache.o gui.o help.o \
+OBJ = ai_provider.o auto_chunk.o provider_manager_gui.o ai_retry.o autoexec.o commands.o config.o crypto.o export.o gemini.o gemini_cache.o gui.o help.o \
       history_manager_gui.o idle.o main.o menu.o noise_filter_manager_gui.o noisefilter.o openai.o \
       policy_dao.o policy_manager_gui.o print.o provider_keys.o ratelimit.o resources.o session_manager_gui.o \
       session_manager.o snmp_manager.o snmp_manager_gui.o status.o tee_handler.o terminal.o toggles.o \

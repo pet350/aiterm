@@ -2,6 +2,16 @@
 
 ## The AI-Augmented Terminal Emulator
 
+## 0.9.12-alpha
+
+- Reworked AutoChunk around a provider-aware single-request context budget.
+- History loading now obeys the same request budget instead of always loading up to 100 records.
+- OpenAI-compatible and Gemini requests no longer append every terminal chunk into one oversized request.
+- Large terminal captures remain preserved in MariaDB; only the bounded portion is sent in the current stateless API request.
+- Added final serialized JSON payload diagnostics for troubleshooting provider limits.
+- Fixed a NULL dereference and an early-return allocation leak in AutoChunk.
+
+
 **aiterm** is a Linux desktop terminal emulator written in C using GTK 3
 and VTE, with a dedicated AI pane alongside the terminal. It combines
 normal shell work, persistent MariaDB-backed sessions, AI-assisted
@@ -9,7 +19,7 @@ terminal analysis, optional automatic command execution, SNMP telemetry,
 provider abstraction, caching, noise filtering, rate limiting,
 export/printing, and session-aware configuration.
 
-> **Current source tree:** 0.9.11-alpha / September 2026\
+> **Current source tree:** 0.9.12-alpha / September 27, 2026\
 > **Primary build system:** GNU Make\
 > **Primary configuration file:** `/etc/aiterm.conf`
 
@@ -2749,6 +2759,15 @@ It supersedes the older README content that referenced earlier
 The source tree should be treated as the authoritative reference for
 behavior when this document and older historical notes disagree.
 
+
+
+### 0.9.12-alpha context/history fixes
+
+- Fresh terminal output is harvested before a manual AI request, so output that arrived between TEE timer cycles is available immediately.
+- Fresh TEE data is placed ahead of older VTE scrollback when building manual AI context.
+- Provider Manager opening synchronizes pending terminal output and persists the TEE accumulator without launching an AI request.
+- API conversation history now includes only non-TEE `user` and `assistant` rows and excludes `API_ERROR:` responses, preventing terminal/SNMP telemetry and provider failures from masquerading as conversation turns.
+- Recent history ordering uses sequence and database row order so paired user/assistant turns remain chronological.
 
 ## 0.9.11-alpha Provider Credentials
 

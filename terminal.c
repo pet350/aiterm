@@ -21,6 +21,75 @@
 extern void add_terminal_tab(AppContext *app);
 extern void execute_next_queued_command(AppContext *app);
 
+gboolean terminal_capture_pending_tee(AppContext *app) {
+    if (!app || !app->gui.terminal_view ||
+        !VTE_IS_TERMINAL(app->gui.terminal_view) ||
+        !app->aiterm_runtime.tee_accumulator) {
+        return FALSE;
+    }
+
+    if (!app->sys.tee_enabled && !app->sys.autoreply_enabled)
+        return FALSE;
+
+    long cur_row = 0, cur_col = 0;
+    VteTerminal *vte = VTE_TERMINAL(app->gui.terminal_view);
+    vte_terminal_get_cursor_position(vte, &cur_col, &cur_row);
+
+    if (cur_row <= app->database.last_processed_row)
+        return FALSE;
+
+    char *new_text = vte_terminal_get_text_range(
+        vte,
+        app->database.last_processed_row, 0,
+        cur_row, cur_col,
+        NULL, NULL, NULL
+    );
+
+    if (!new_text || strlen(new_text) <= 1) {
+        g_free(new_text);
+        return FALSE;
+    }
+
+    app->database.last_processed_row = cur_row;
+
+    char *cleaned = strip_blank_lines(new_text);
+    g_free(new_text);
+    if (!cleaned || !*cleaned) {
+        g_free(cleaned);
+        return FALSE;
+    }
+
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
+
+
+    g_mutex_lock(&app->access.buffer_mutex);
+    g_string_append(app->aiterm_runtime.tee_accumulator, cleaned);
+    gsize accumulator_len = app->aiterm_runtime.tee_accumulator->len;
+    g_mutex_unlock(&app->access.buffer_mutex);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE SYNC%s] %scaptured=[%s%zu%s] bytes accumulator=[%s%zu%s] bytes%s\n",
+        lt_pl, nml, cy, nml, gr,
+	red, strlen(cleaned), gr,
+	red, accumulator_len, gr, nml);
+
+    g_free(cleaned);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
+    return TRUE;
+}
+
 char *terminal_capture_context(AppContext *app) {
     if (!app || !app->gui.terminal_view || !VTE_IS_TERMINAL(app->gui.terminal_view))
         return g_strdup("None");
@@ -192,46 +261,24 @@ static gboolean throttled_delta_check(gpointer user_data) {
 
         // Trigger after ~2 seconds of silence
         if (app->database.silence_ticks == 8) {
-            // VTE access is performed on the GTK thread. Do not hold the
-            // accumulator mutex while querying or processing the terminal.
-            char *new_text = vte_terminal_get_text_range(
-                VTE_TERMINAL(app->gui.terminal_view),
-                app->database.last_processed_row, 0,
-                cur_row, cur_col,
-                NULL, NULL, NULL
-            );
+            /* Keep the normal timer path, but use the same GTK-thread-safe
+             * capture helper as manual AI requests and manager opens. */
+            gboolean captured = terminal_capture_pending_tee(app);
 
-            if (new_text && strlen(new_text) > 1) {
-                app->database.last_processed_row = cur_row;
-                char *cleaned_text = strip_blank_lines(new_text);
-                g_free(new_text);
-                new_text = cleaned_text;
-
-                if (new_text && (app->sys.tee_enabled || app->sys.autoreply_enabled)) {
-                    g_mutex_lock(&app->access.buffer_mutex);
-                    g_string_append(app->aiterm_runtime.tee_accumulator, new_text);
-                    g_mutex_unlock(&app->access.buffer_mutex);
-                }
-            }
-
-            if (new_text) {
-		if ((app->sys.tee_enabled || app->sys.autoreply_enabled) &&
-    			strlen(new_text) > 1) {
-		    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE ACCUMULATOR%s] %sFlushing tee data%s\n",
-			lt_pl, nml, cy, nml, gr, nml);		
-                    tee_flush_timed(app);
-                }
-                g_free(new_text);
+            if (captured) {
+                DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE ACCUMULATOR%s] %sFlushing tee data%s\n",
+                            lt_pl, nml, cy, nml, gr, nml);
+                tee_flush_timed(app);
             }
         }
     }
 
+    g_free(lt_pl);
     g_free(cy);
     g_free(yl);
     g_free(gr);
     g_free(red);
     g_free(nml);
-
 
     return TRUE;
 }

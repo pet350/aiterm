@@ -19,17 +19,34 @@
 enum { COLUMN_CURRENT, COLUMN_UUID, COLUMN_DESC, COLUMN_COUNT, NUM_COLS };
 
 void refresh_session_list(AppContext *app, GtkListStore *store) {
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     if (store == NULL || !GTK_IS_LIST_STORE(store)) {
-        DEBUG_PRINT("[ DEBUG ]: REFRESH_SESSION_LIST: ERROR: Invalid list store provided to refresh_session_list!\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sREFRESH_SESSION_LIST%s]: %sERROR%s: Invalid list store provided to refresh_session_list!%s\n",
+		lt_pl, nml, cy, nml, red, yl, nml);
+
+        g_free(lt_pl);
+        g_free(cy);
+        g_free(yl);
+        g_free(gr);
+        g_free(red);
+        g_free(nml);
         return;
     }
 
     gtk_list_store_clear(store);
     pthread_mutex_lock(&app->access.db_mutex);
-    DEBUG_PRINT("[ DEBUG ]: REFRESH_SESSION_LIST: Locked DB mutex\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sREFRESH_SESSION_LIST%s]:%s Locked DB mutex%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
 
     char *query = "SELECT uuid, description, (SELECT COUNT(*) FROM aiterm_history WHERE session_uuid = s.uuid) FROM sessions s";
-    DEBUG_PRINT("[ DEBUG ]: REFRESH_SESSION_LIST: Running Query %s\n", query);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sREFRESH_SESSION_LIST%s]: %sRunning Query %s%s%s\n", 
+	lt_pl, nml, cy, nml, gr, red, query, nml);
 
     if (mysql_query(app->database.global_db_conn, query) == 0) {
         MYSQL_RES *res = mysql_store_result(app->database.global_db_conn);
@@ -60,55 +77,129 @@ void refresh_session_list(AppContext *app, GtkListStore *store) {
         g_print("Error fetching sessions: %s\n", mysql_error(app->database.global_db_conn));
     }
     pthread_mutex_unlock(&app->access.db_mutex);
-    DEBUG_PRINT("[ DEBUG ]: REFRESH_SESSION_LIST: Unlocked DB mutex\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sREFRESH_SESSION_LIST%s]: %sUnlocked DB mutex%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
+
 }
 
 gboolean refresh_list_callback(gpointer data) {
     AppContext *app = (AppContext *)data;
+
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     if (app && app->session.session_list_store) {
-        DEBUG_PRINT("[ DEBUG ]: Refresh list callback: storing list\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sRefresh list callback%s]:%s storing list%s\n", 
+		lt_pl, nml, cy, nml, gr, nml);
         gtk_list_store_clear(app->session.session_list_store);
         refresh_session_list(app, app->session.session_list_store);
     }
     else {
-        DEBUG_PRINT("[ DEBUG ]: Refresh list callback: Nothing to store!\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sRefresh list callback%s]: %sNothing to store%s!\n",
+	    lt_pl, nml, cy, nml, gr, nml);
     }
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     return FALSE;
 }
 
 gboolean timed_refresh_list_callback(gpointer data) {
     AppContext *app = (AppContext *)data;
+
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     gboolean RV = TRUE;
     if (app && app->session.session_list_store) {
-        DEBUG_PRINT("[ DEBUG ]: Timed Refresh list callback: storing list\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTimed Refresh list callback%s]: %sstoring list%s\n",
+	   lt_pl, nml, cy, nml, gr, nml);
         gtk_list_store_clear(app->session.session_list_store);
         refresh_session_list(app, app->session.session_list_store);
     }
     else {
-        DEBUG_PRINT("[ DEBUG ]: Timed Refresh list callback: Nothing to store!\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTimed Refresh list callback%s]:%s Nothing to store!%s\n",
+	    lt_pl, nml, cy, nml, gr, nml);
         RV = FALSE;
     }
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     return RV;
 }
 
 void on_menu_session_manager(GtkMenuItem *item, gpointer data) {
     AppContext *app = (AppContext *)data;
-    DEBUG_PRINT("[ DEBUG ]: Session Manager menu item clicked!\n");
+
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSession Manager%s]%s menu item clicked!%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
     open_session_manager_window(app);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 /* FIX #1: Extract the tree model from user_data and trigger an immediate refresh */
 void on_add_clicked(GtkButton *btn, gpointer user_data) {
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     if (user_data == NULL) {
-        DEBUG_PRINT("[ DEBUG ]: on_add_clicked: user_data is NULL!\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%son_add_clicked%s]:%s user_data is %sNULL!%s\n",
+	    lt_pl, nml, cy, nml, gr, red, nml);
         return;
     }
     if (global_app->database.global_db_conn == NULL) {
-        DEBUG_PRINT("ERROR: global_app->database.global_db_conn is NULL\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sERROR%s]: %sglobal_app->database.global_db_conn is %sNULL%s\n",
+	    lt_pl, nml, red, nml, yl, red, nml);
         return;
     }
 
-    DEBUG_PRINT("[ DEBUG ]: UI: Triggering CMD_SESSION_NEW\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sUI%s]: %sTriggering CMD_SESSION_NEW%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
     cmd_session_new(global_app, "New Session");
 
     // Re-fetch model from the incoming TreeView widget argument safely
@@ -117,6 +208,14 @@ void on_add_clicked(GtkButton *btn, gpointer user_data) {
     if (model && GTK_IS_LIST_STORE(model)) {
         refresh_session_list(global_app, GTK_LIST_STORE(model));
     }
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 void on_load_clicked(GtkButton *btn, gpointer user_data) {

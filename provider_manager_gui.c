@@ -10,6 +10,7 @@
 #include "openai.h"
 #include "gemini.h"
 #include "terminal.h"
+#include "tee_handler.h"
 #include "provider_manager_gui.h"
 #include "ai_provider.h"
 #include "config.h"
@@ -54,7 +55,7 @@ static void fill_from_provider(ProviderManagerDialog *dlg, const char *name) {
         kind = PROVIDER_KIND_GEMINI_GENERATE;
         key_in_query = TRUE;
     } else if (strcasecmp(name, "groq") == 0) {
-        model = "llama-3.3-70b-versatile";
+        model = "openai/gpt-oss-120b";
         base_url = "https://api.groq.com/openai/v1";
     } else if (strcasecmp(name, "openrouter") == 0) {
         model = "openai/gpt-oss-20b:free";
@@ -202,6 +203,15 @@ static GtkWidget *make_labeled_entry(GtkWidget *grid, int row, const char *label
 
 void open_provider_manager_window(AppContext *app) {
     if (!app) return;
+
+    /* Provider Manager is a synchronization point for terminal/TEE state.
+     * Capture any VTE delta the periodic timer has not harvested, then persist
+     * the pending TEE accumulator without dispatching anything to the AI.
+     * This lives here rather than only in a menu callback so the command
+     * interface gets exactly the same behavior. */
+    terminal_capture_pending_tee(app);
+    tee_flush_pending_to_history(app);
+
     if (app->manager.provider) {
         gtk_window_present(GTK_WINDOW(app->manager.provider));
         return;
