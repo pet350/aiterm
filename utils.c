@@ -35,6 +35,7 @@
 #include "gemini.h"
 #include "ai_provider.h"
 #include "snmp_manager.h"
+#include "xml_tagging.h"
 
 // Added 0.9.10-zeta
 void check_for_root(void) {
@@ -206,7 +207,7 @@ int init_db_from_directory(MYSQL *conn, const char *dirpath) {
 // Added 0.9.9-beta
 void init_colors(AppContext *app) {
     check_debug_tty(app);
-    if (app->sys.debug_color && app->sys.debug_tty) {
+    if (app->sys.debug_color && app->sys.debug_tty && !app->sys.force_bw) {
         app->ansi.red		= g_strdup(ANSI_RED);
         app->ansi.yellow	= g_strdup(ANSI_YELLOW);
         app->ansi.green		= g_strdup(ANSI_GREEN);
@@ -344,6 +345,7 @@ void initialize_booleans(AppContext *app) {
     // 1. Set initial variables to their needed defaults
 
     // Booleans set to FALSE on startup
+    app->sys.force_bw = FALSE;
     app->sys.debug_tty = FALSE;
     app->sys.debug_mode = FALSE;
     app->sys.mysql_busy = FALSE;
@@ -569,7 +571,7 @@ void init_provider_config(AppContext *app) {
 
         /* These providers use the OpenAI Chat Completions wire format. */
         if (strcasecmp(name, "groq") == 0) {
-            provider_replace_string(&provider->model, model ? model : "llama-3.3-70b-versatile");
+            provider_replace_string(&provider->model, model ? model : "openai/gpt-oss-120b");
             provider_replace_string(&provider->base_url, "https://api.groq.com/openai/v1");
         } else if (strcasecmp(name, "openrouter") == 0) {
             provider_replace_string(&provider->model, model ? model : "openai/gpt-oss-20b:free");
@@ -887,7 +889,7 @@ void* db_worker_thread(void *arg) {
             DEBUG_PRINT("[%sMEMDBG %s]: [%sWORKER%s]%s query alloc=%s%p%s size=%s%zu%s\n",
                 lt_pl, nml, cy, nml, yl,
 		red, (void*)query, yl,
-		red, query_len, yl);
+		red, query_len, nml);
 
             if (query) {
                 /* Both rows are one tee event and must use the UUID captured
@@ -1208,74 +1210,85 @@ void extract_and_save_keywords(AppContext *app, const char *text) {
 
 // Updated load_history_to_gemini
 // 0.7.4-delta modified to use global mysql connection
-void load_history_to_gemini(AppContext *app, struct json_object *contents_array, const char *current_prompt) {
-    if (!app->database.global_db_conn) return;
-    int count=0;
+void load_history_to_gemini(AppContext *app, struct json_object *contents_array,
+                             const char *current_prompt, gsize max_bytes) {
+    (void)current_prompt;
+    if (!app || !contents_array || !app->database.global_db_conn || max_bytes == 0)
+        return;
+
+    int count = 0;
+    gsize used_bytes = 0;
     mysql_thread_init();
 
-    char *lt_pl   = g_strdup(app->ansi.lt_purple);
-    char *cy      = g_strdup(app->ansi.cyan);
-    char *yl      = g_strdup(app->ansi.yellow);
-    char *gr      = g_strdup(app->ansi.green);
-    char *red     = g_strdup(app->ansi.red);
-    char *nml     = g_strdup(app->ansi.normal);
+    char *lt_pl = g_strdup(app->ansi.lt_purple);
+    char *cy = g_strdup(app->ansi.cyan);
+    char *yl = g_strdup(app->ansi.yellow);
+    char *gr = g_strdup(app->ansi.green);
+    char *red = g_strdup(app->ansi.red);
+    char *nml = g_strdup(app->ansi.normal);
 
     pthread_mutex_lock(&app->access.db_mutex);
-    DEBUG_PRINT("[%s DEBUG %s]: [%sLOAD_HISTORY_TO_GEMINI%s]:%s Locked DB Mutex%s\n",
-	lt_pl, nml, cy, nml, yl, nml);
-    char *uuid_filter = get_uuid_filter(global_app);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sLOAD_HISTORY_TO_GEMINI%s]: %sLocked DB Mutex%s\n",
+                lt_pl, nml, cy, nml, yl, nml);
 
-    const char *query = g_strdup_printf(
-        "  SELECT role, content FROM aiterm_history "
-        "  WHERE session_uuid %s"
-        "  ORDER BY created_at DESC LIMIT 100", uuid_filter);
+    char *uuid_filter = get_uuid_filter(global_app);
+    char *query = g_strdup_printf(
+        "SELECT role, content, created_at FROM aiterm_history "
+        "WHERE session_uuid %s "
+        "ORDER BY created_at DESC LIMIT 100", uuid_filter);
 
     DEBUG_PRINT("[%s DEBUG %s]: [%sLOAD_HISTORY_TO_GEMINI%s]: %sQuery %s%s%s\n",
-	lt_pl, nml, cy,nml, yl, gr, query, nml);
+                lt_pl, nml, cy, nml, yl, gr, query, nml);
+
     if (mysql_query(app->database.global_db_conn, query) == 0) {
         MYSQL_RES *res = mysql_store_result(app->database.global_db_conn);
         MYSQL_ROW row;
+
         while ((row = mysql_fetch_row(res))) {
-            count++;
+            const char *content = row[1] ? row[1] : "";
+            const char *timestamp = row[2] ? row[2] : NULL;
+            gsize row_bytes = strlen(content) + 160; /* JSON/XML/API overhead allowance. */
+
+            if (used_bytes > 0 && used_bytes + row_bytes > max_bytes)
+                break;
+
             struct json_object *item = json_object_new_object();
             struct json_object *parts_array = json_object_new_array();
             struct json_object *part = json_object_new_object();
 
-            const char* role = strcmp(row[0], "assistant") == 0 ? "model" : "user";
+            const char *role = (row[0] && strcmp(row[0], "assistant") == 0)
+                                   ? "model" : "user";
 
-            // Apply noise filter to the data being loaded from the database
-            char *data = noise_filter_apply(app, row[1]);
+            char *data = noise_filter_apply(app, content);
 
-            // Choose the XML tag locally. Do not modify the shared
-            // app->xml.type field from an AI worker thread.
-            TagType row_type;
-            if (strcmp(role, "model") == 0) {
-               row_type = TAG_HISTORY;
-            } else if (strcmp(role, "user") == 0) {
-               row_type = TAG_MEMORY;
-            } else {
-               row_type = TAG_LOG_DUMP;
-            }
-            char *wrapped_content = xml_wrap_with_type(app, data, row_type);
+            TagType row_type = (strcmp(role, "model") == 0)
+                                   ? TAG_HISTORY : TAG_MEMORY;
+            char *wrapped_content = xml_wrap_with_type_timestamp(app, data, row_type, timestamp);
             g_free(data);
-
-            // Old tag code
-            //g_strdup_printf("<history session_uuid=\"%s\">\n%s\n</history>",app->session.session_uuid, data);
 
             json_object_object_add(part, "text", json_object_new_string(wrapped_content));
             json_object_array_add(parts_array, part);
             json_object_object_add(item, "role", json_object_new_string(role));
             json_object_object_add(item, "parts", parts_array);
             json_object_array_add(contents_array, item);
-	    g_free(wrapped_content);
+            g_free(wrapped_content);
+
+            used_bytes += row_bytes;
+            count++;
         }
+
         mysql_free_result(res);
     }
-    DEBUG_PRINT("[%s DEBUG %s]: [%sLOAD_HISTORY_TO_GEMINI%s]:%s Sent [%s%d%s] rows to AI%s\n",
-	lt_pl, nml, cy, nml, yl, red, count, yl, nml);
+
+    DEBUG_PRINT("[%s DEBUG %s]: [%sLOAD_HISTORY_TO_GEMINI%s]: %sSelected [%s%d%s] row(s), approx [%s%zu%s] bytes, budget=[%s%zu%s]\n",
+                lt_pl, nml, cy, nml, yl, red, count, yl, red, used_bytes, yl,
+                red, max_bytes, yl);
+
+    g_free(query);
+    g_free(uuid_filter);
     pthread_mutex_unlock(&app->access.db_mutex);
-    DEBUG_PRINT("[%s DEBUG %s]: [%sLOAD_HISTORY_TO_GEMINI%s]:%s Unlocked DB Mutex%s\n",
-	lt_pl, nml, cy, nml, yl, nml);
+    DEBUG_PRINT("[%s DEBUG %s]: [%sLOAD_HISTORY_TO_GEMINI%s]: %sUnlocked DB Mutex%s\n",
+                lt_pl, nml, cy, nml, yl, nml);
 
     g_free(lt_pl);
     g_free(cy);
@@ -1283,7 +1296,6 @@ void load_history_to_gemini(AppContext *app, struct json_object *contents_array,
     g_free(gr);
     g_free(red);
     g_free(nml);
-
     mysql_thread_end();
 }
 
@@ -1556,38 +1568,89 @@ void save_tee_to_history(const char *terminal_text, const char *ai_analysis, con
 
 
 // updated 0.7.4-delta to use global mysql connection
-void load_history_to_api(struct json_object *messages_array) {
-    extern AppContext *global_app;
-    if (!global_app || !global_app->database.global_db_conn) return;
+void load_history_to_api(AppContext *app, struct json_object *messages_array, gsize max_bytes) {
+    if (!app || !messages_array || !app->database.global_db_conn || max_bytes == 0)
+        return;
 
     mysql_thread_init();
-    pthread_mutex_lock(&global_app->access.db_mutex);
+    pthread_mutex_lock(&app->access.db_mutex);
+
+    gsize used_bytes = 0;
+    guint count = 0;
+    guint skipped = 0;
+    struct json_object *history_messages = json_object_new_array();
 
     DEBUG_PRINT("[ DEBUG ] LOAD_HISTORY_TO_API: Locked DB Mutex\n");
-    char *uuid_filter = get_uuid_filter(global_app);
-    const char *query = g_strdup_printf(
-        "SELECT role, content FROM ("
-        "  SELECT role, content FROM aiterm_history "
-        "  WHERE session_uuid %s AND is_tee = 0 AND sequence_id > %d"
-        "  ORDER BY sequence_id DESC LIMIT 100"
-        ") AS sub ORDER BY created_at ASC", uuid_filter, global_app->session.last_sent_db_id);
+    char *uuid_filter = get_uuid_filter(app);
+    char *query = g_strdup_printf(
+        "SELECT id, role, content, sequence_id, created_at FROM aiterm_history "
+        "WHERE session_uuid %s "
+        "  AND sequence_id > %d "
+        "  AND is_tee = 0 "
+        "  AND role IN ('user','assistant') "
+        "  AND content NOT LIKE 'API_ERROR:%%' "
+        "ORDER BY sequence_id DESC, id DESC LIMIT 100", uuid_filter,
+        app->session.last_sent_db_id);
 
+    DEBUG_PRINT("[ DEBUG ]: LOAD_HISTORY_TO_API: history_budget=%zu bytes\n", max_bytes);
     DEBUG_PRINT("[ DEBUG ]: LOAD_HISTORY_TO_API: Query %s\n", query);
 
-    if (mysql_query(global_app->database.global_db_conn, query) == 0) {
-        MYSQL_RES *res = mysql_store_result(global_app->database.global_db_conn);
+    if (mysql_query(app->database.global_db_conn, query) == 0) {
+        MYSQL_RES *res = mysql_store_result(app->database.global_db_conn);
         MYSQL_ROW row;
 
-        while ((row = mysql_fetch_row(res))) {
+        if (res) while ((row = mysql_fetch_row(res))) {
+            const char *content = row[2] ? row[2] : "";
+            gsize row_bytes = strlen(content) + 96; /* JSON/API overhead allowance. */
+
+            /* Walk newest-to-oldest so the request budget protects the most
+             * recent conversation. Oversized individual rows are skipped rather
+             * than terminating the entire history load. */
+            if (row_bytes > max_bytes || used_bytes + row_bytes > max_bytes) {
+                skipped++;
+                continue;
+            }
+
             struct json_object *msg = json_object_new_object();
-            json_object_object_add(msg, "role", json_object_new_string(row[0]));
-            json_object_object_add(msg, "content", json_object_new_string(row[1]));
-            json_object_array_add(messages_array, msg);
+            const char *api_role =
+                (row[1] && strcmp(row[1], "assistant") == 0) ? "assistant" : "user";
+
+            char *clean_content = noise_filter_apply(app, content);
+            const char *timestamp = row[4] ? row[4] : NULL;
+            TagType row_type = (strcmp(api_role, "assistant") == 0)
+                             ? TAG_HISTORY : TAG_MEMORY;
+            char *wrapped_content = xml_wrap_with_type_timestamp(
+                app, clean_content ? clean_content : content, row_type, timestamp);
+            g_free(clean_content);
+
+            gsize wrapped_bytes = wrapped_content ? strlen(wrapped_content) : strlen(content);
+            json_object_object_add(msg, "role", json_object_new_string(api_role));
+            json_object_object_add(msg, "content", json_object_new_string(wrapped_content ? wrapped_content : content));
+            json_object_array_add(history_messages, msg);
+            g_free(wrapped_content);
+
+            used_bytes += wrapped_bytes + 32;
+            count++;
         }
         mysql_free_result(res);
     }
 
-    pthread_mutex_unlock(&global_app->access.db_mutex);
+    /* The database query is newest-first for budget priority. Put the selected
+     * rows back into chronological order before appending them to the API
+     * message array. */
+    for (gint i = (gint)json_object_array_length(history_messages) - 1; i >= 0; i--) {
+        struct json_object *msg = json_object_array_get_idx(history_messages, i);
+        json_object_get(msg);
+        json_object_array_add(messages_array, msg);
+    }
+    json_object_put(history_messages);
+
+    DEBUG_PRINT("[ DEBUG ] LOAD_HISTORY_TO_API: selected %u row(s), skipped %u row(s), approx %zu bytes, budget=%zu\n",
+                count, skipped, used_bytes, max_bytes);
+
+    g_free(query);
+    g_free(uuid_filter);
+    pthread_mutex_unlock(&app->access.db_mutex);
     DEBUG_PRINT("[ DEBUG ] LOAD_HISTORY_TO_API: Unlocked DB Mutex\n");
     mysql_thread_end();
 }

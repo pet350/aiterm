@@ -336,9 +336,56 @@ void on_input_activate(GtkEntry *entry, gpointer data) {
         return;
     }
 
-    // Capture VTE state while still on the GTK thread.  The AI worker must
-    // never call vte_terminal_* or otherwise touch GTK objects.
-    char *terminal_context = terminal_capture_context(app);
+    /*
+     * Build the AI terminal context in priority order:
+     *
+     *   1. Pending TEE accumulator, if output arrived since the last flush.
+     *   2. Newest persisted TEE row, if the timed flush already saved it.
+     *   3. VTE scrollback only as a last-resort fallback.
+     *
+     * Do NOT concatenate TEE with the VTE snapshot. The VTE snapshot can be
+     * much larger and can contain the exact same terminal output plus older
+     * scrollback. That was causing the provider to receive stale context even
+     * though the fresh TEE capture had already been saved successfully.
+     */
+    char *terminal_context = NULL;
+    const char *context_source = "none";
+
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
+    if (app->sys.tee_enabled || app->sys.autoreply_enabled) {
+        terminal_capture_pending_tee(app);
+
+        terminal_context = tee_peek_for_ai(app);
+        if (terminal_context && *terminal_context) {
+            context_source = "pending-tee";
+        } else {
+            g_free(terminal_context);
+            terminal_context = tee_get_latest_for_ai(app);
+            if (terminal_context && *terminal_context) {
+                context_source = "latest-db-tee";
+            } else {
+                g_free(terminal_context);
+                terminal_context = NULL;
+            }
+        }
+    }
+
+    if (!terminal_context) {
+        /* GTK/VTE access remains on the UI thread. */
+        terminal_context = terminal_capture_context(app);
+        context_source = "vte-fallback";
+    }
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE CONTEXT%s] %ssource=[%s%s%s] bytes=[%s%zu%s]%s\n",
+	lt_pl, nml, cy, nml, gr,
+        red, context_source, gr,
+        red, terminal_context ? strlen(terminal_context) : 0UL, gr, nml);
 
     /* Do not run command-policy/database work here for ordinary user input.
      * AI command execution is handled only after an AI response has produced
@@ -349,6 +396,14 @@ void on_input_activate(GtkEntry *entry, gpointer data) {
     write_to_ai_pane(app, "You: ", cleaned_text, "user_tag", NULL);
 
     AIThreadData *td = g_malloc0(sizeof(AIThreadData));
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     td->app = app;
     td->prompt = g_strdup(input_text);
     td->terminal_context = terminal_context;
@@ -356,6 +411,7 @@ void on_input_activate(GtkEntry *entry, gpointer data) {
     g_free(cleaned_text);
 
     gtk_entry_set_text(entry, "");
+
 }
 
 void update_status_label(AppContext *app, const char *status) {

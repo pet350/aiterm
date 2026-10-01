@@ -30,6 +30,7 @@
 #include "noisefilter.h"
 #include "commands.h"
 #include "ai_retry.h"
+#include "auto_chunk.h"
 #include "snmp_manager.h"
 #include "menu.h"
 
@@ -42,6 +43,7 @@ int main(int argc, char *argv[]) {
 
     // 1.1: Set initial variables to their needed defaults
     initialize_booleans(app);
+    auto_chunk_init(app);
 
     // 1.2: Check Environment Variables
     // Added 0.9.9-beta
@@ -254,6 +256,8 @@ int main(int argc, char *argv[]) {
     DEBUG_PRINT("[ %sDEBUG%s ]: [%sMAIN%s] %sBeginning orderly shutdown.%s\n",
         app->ansi.lt_purple, app->ansi.normal, app->ansi.yellow, app->ansi.normal,
         app->ansi.lt_purple, app->ansi.normal);
+
+    auto_chunk_shutdown(app);
 
     // Restore any temporarily suspended toggle states before the final DB
     // synchronization so an idle period is never persisted as a real user

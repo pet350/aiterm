@@ -23,6 +23,8 @@
 #include "session_manager.h"
 #include "noisefilter.h"
 #include "ai_retry.h"
+#include "auto_chunk.h"
+#include "xml_tagging.h"
 
 typedef struct {
     AppContext *app;
@@ -79,7 +81,7 @@ static char *gemini_http_single_attempt(const char *payload, long *out_http_code
 
 // --- 1. The Core API Logic ---
 // UI-neutral execution wrapped with AI Retry handler
-char* perform_gemini_request(AppContext *app, const char *prompt, const char *terminal_context) {
+char* perform_gemini_request_ex_types(AppContext *app, const char *prompt, const char *terminal_context, gboolean include_history, TagType prompt_type, TagType context_type) {
     char url[1024];
 
     char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
@@ -93,8 +95,9 @@ char* perform_gemini_request(AppContext *app, const char *prompt, const char *te
      * terminal context before launching this worker.  Never query VTE here. */
     const char *screen_text = terminal_context ? terminal_context : "None";
 
-    // Wrap the captured screen text in our session-aware XML tag
-    char *tee_chunk = session_create_tee_chunk(app, screen_text);
+    /* XML wrapping is applied at the final provider-payload boundary, after
+     * chunk selection, so every provider path receives the same metadata. */
+    char *tee_chunk = xml_wrap_with_type(app, screen_text, context_type);
 
     struct json_object *root = json_object_new_object();
     struct json_object *contents = json_object_new_array();
@@ -114,11 +117,34 @@ char* perform_gemini_request(AppContext *app, const char *prompt, const char *te
 		lt_pl, nml, cy, nml, gr, yl, red, yl, nml );
     }
 
-    // 2. Load History from Database (Only when not initializing)
-    if (!app->sys.is_initializing) {
+    // 2. Load history within the same total request budget used for the
+    // terminal/TEE payload.  Gamma-4 no longer gives history an independent
+    // 100-row allowance that can silently consume the provider context.
+    const gsize request_budget = auto_chunk_request_budget(app);
+    const gsize fixed_budget = strlen(prompt) + 1024;
+    gsize available_budget = request_budget > fixed_budget
+                           ? request_budget - fixed_budget : 0;
+    const gsize context_len = tee_chunk ? strlen(tee_chunk) : 0;
+    const gsize terminal_cap = (available_budget * 3) / 4;
+    gsize terminal_budget = context_len > terminal_cap ? terminal_cap : context_len;
+    gsize history_budget = available_budget > terminal_budget
+                         ? available_budget - terminal_budget : 0;
+    if (history_budget > 12000U)
+        history_budget = 12000U;
+    if (context_len < terminal_cap) {
+        gsize spare = terminal_cap - context_len;
+        gsize expanded = history_budget + spare;
+        history_budget = expanded > 12000U ? 12000U : expanded;
+    }
+
+    DEBUG_PRINT("[ AUTOCHUNK ] Gemini provider=%s request_budget=%zu fixed=%zu history_budget=%zu terminal_budget=%zu\n",
+                app->provider_config.provider ? app->provider_config.provider : "gemini",
+                request_budget, fixed_budget, history_budget, terminal_budget);
+
+    if (include_history && !app->sys.is_initializing) {
         DEBUG_PRINT("[ %sDEBUG%s ]: [%sPerform Gemini Request%s]%s Not Initializing, Loading History%s\n",
 		lt_pl, nml, cy, nml, yl, nml );
-        load_history_to_gemini(app, contents, prompt);
+        load_history_to_gemini(app, contents, prompt, history_budget);
     } else {
         DEBUG_PRINT("[ %sDEBUG%s ]: [%sInit Phase%s] %sBypassing history retrieval.%s\n",
 		lt_pl, nml, cy, nml, yl, nml);
@@ -140,37 +166,79 @@ char* perform_gemini_request(AppContext *app, const char *prompt, const char *te
         json_object_object_add(root, "cachedContent", json_object_new_string(app->gemini_cache.id));
     }
 
-    // 3. Append SINGLE Final User Turn (Terminal Screen + Prompt)
+    // 3. Append Final User Turn (Terminal Screen + Prompt)
+    // The complete terminal context is chunked before provider-specific JSON
+    // construction. Only the newest bounded chunk enters this request; additional
+    // chunks remain persisted in MariaDB rather than exceeding the API budget.
     struct json_object *user_msg = json_object_new_object();
     struct json_object *user_parts = json_object_new_array();
-    struct json_object *user_part = json_object_new_object();
 
-    char *full_prompt = g_strdup_printf("%s\n\nUSER INSTRUCTION: %s", tee_chunk, prompt);
+    GPtrArray *context_chunks = auto_chunk_payload_with_limit(app, tee_chunk, terminal_budget);
+    guint chunk_count = context_chunks ? context_chunks->len : 0;
 
-    /* Terminal context is part of the effective Gemini request.  Include the
-     * assembled prompt in the local cache key so a context-dependent question
-     * such as "summarize dmesg" cannot reuse a response produced without that
-     * terminal snapshot. */
-    char *prompt_hash = g_compute_checksum_for_string(G_CHECKSUM_SHA256, full_prompt, -1);
+    DEBUG_PRINT("[ AUTOCHUNK ] Gemini context requires %u chunk(s) at %zu-byte request budget.\n",
+                chunk_count, terminal_budget);
+
+    // Direct Gemini requests are bounded to one chunk. Oversized captures are
+    // orchestrated above this function as separate ingestion passes.
+    GString *cache_prompt = g_string_new(NULL);
+
+    if (context_chunks && context_chunks->len > 0) {
+        const char *chunk_text = g_ptr_array_index(context_chunks, 0);
+        if (chunk_text) {
+            g_string_append(cache_prompt, chunk_text);
+
+            struct json_object *chunk_part = json_object_new_object();
+            json_object_object_add(chunk_part, "text", json_object_new_string(chunk_text));
+            json_object_array_add(user_parts, chunk_part);
+        }
+    }
+
+    if (chunk_count > 1)
+        DEBUG_PRINT("[ AUTOCHUNK ] Direct Gemini request is bounded to chunk 1/%u; provider orchestration handles remaining chunks.\n",
+                    chunk_count);
+
+    g_string_append_printf(cache_prompt, "\n\nUSER INSTRUCTION: %s", prompt);
+
+    /* Terminal context is part of the effective Gemini request. Include the
+     * assembled logical prompt in the local cache key so a context-dependent
+     * question cannot reuse a response produced without that terminal snapshot. */
+    char *prompt_hash = g_compute_checksum_for_string(
+        G_CHECKSUM_SHA256, cache_prompt->str, -1);
 
     // Check local cache only after the terminal-aware prompt has been assembled.
     char *cached_res = gemini_cache_lookup(prompt_hash);
     if (cached_res != NULL) {
         g_free(prompt_hash);
+        g_string_free(cache_prompt, TRUE);
+        if (context_chunks)
+            g_ptr_array_unref(context_chunks);
         g_free(tee_chunk);
         json_object_put(root);
         return cached_res;
     }
 
-    json_object_object_add(user_part, "text", json_object_new_string(full_prompt));
-    json_object_array_add(user_parts, user_part);
+    struct json_object *instruction_part = json_object_new_object();
+    char *wrapped_prompt = xml_wrap_with_type(app, prompt, prompt_type);
+    char *instruction = g_strdup_printf("USER INSTRUCTION: %s", wrapped_prompt ? wrapped_prompt : prompt);
+    json_object_object_add(instruction_part, "text", json_object_new_string(instruction));
+    g_free(wrapped_prompt);
+    json_object_array_add(user_parts, instruction_part);
+    g_free(instruction);
+
     json_object_object_add(user_msg, "role", json_object_new_string("user"));
     json_object_object_add(user_msg, "parts", user_parts);
-    
+
     json_object_array_add(contents, user_msg);
     json_object_object_add(root, "contents", contents);
 
+    g_string_free(cache_prompt, TRUE);
+    if (context_chunks)
+        g_ptr_array_unref(context_chunks);
+
     const char *post_data = json_object_to_json_string(root);
+    DEBUG_PRINT("[ AUTOCHUNK ] Final Gemini JSON payload=%zu bytes (budget=%zu)\n",
+                post_data ? strlen(post_data) : 0UL, request_budget);
 
     ProviderConfig *provider = &app->provider_config;
     const char *base_url = provider->base_url ? provider->base_url : "https://generativelanguage.googleapis.com/v1beta";
@@ -228,7 +296,6 @@ char* perform_gemini_request(AppContext *app, const char *prompt, const char *te
     }
 
     g_free(prompt_hash);
-    g_free(full_prompt);
     g_free(tee_chunk);
 
     g_free(cy);
@@ -294,7 +361,7 @@ char* send_to_gemini(AppContext *app, const char *prompt) {
     char *output = g_strdup(noise_filter_apply(app, prompt));
     g_atomic_int_set(&app->sys.ai_busy, 1);
     DEBUG_PRINT("[ DEBUG ]: [SEND_TO_GEMINI] set ai_busy flag TRUE\n");
-    char *data = perform_gemini_request(app, output, NULL);
+    char *data = perform_gemini_request_ex(app, output, NULL, TRUE);
     g_atomic_int_set(&app->sys.ai_busy, 0);
     DEBUG_PRINT("[ DEBUG ]: [SEND_TO_GEMINI] Cleared ai_busy flag, returning response\n");
     g_free(output);
@@ -390,3 +457,12 @@ char* gemini_list_models(AppContext *app) {
     return g_string_free(model_output_str, FALSE); 
 }
 
+
+
+char* perform_gemini_request_ex(AppContext *app, const char *prompt, const char *terminal_context, gboolean include_history) {
+    return perform_gemini_request_ex_types(app, prompt, terminal_context, include_history, TAG_USER, TAG_LOG_DUMP);
+}
+
+char* perform_gemini_request(AppContext *app, const char *prompt, const char *terminal_context) {
+    return perform_gemini_request_ex_types(app, prompt, terminal_context, TRUE, TAG_USER, TAG_LOG_DUMP);
+}
