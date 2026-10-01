@@ -144,8 +144,8 @@ void set_provider_api_key(AppContext *app, const char *provider_name, const char
 char *provider_key_env_name(const char *provider_name);
 void initialize_booleans(AppContext *app);
 void append_to_view(GtkWidget *view, const char *prefix, const char *text);
-void load_history_to_gemini(AppContext *app, struct json_object *contents_array, const char *current_prompt);
-void load_history_to_api(struct json_object *messages_array);
+void load_history_to_gemini(AppContext *app, struct json_object *contents_array, const char *current_prompt, gsize max_bytes);
+void load_history_to_api(AppContext *app, struct json_object *messages_array, gsize max_bytes);
 void save_to_history(const char *user_text, const char *ai_text);
 void save_tee_to_history(const char *terminal_text, const char *ai_analysis, const char *history_role);
 void display_all_history(AppContext *app);

@@ -33,6 +33,32 @@
 #define AITERM_WM_CLASS "aiterm"
 #define AITERM_WM_ROLE  "terminal"
 
+// Added 0.9.11-gamma
+// Structure for auto_chunk
+typedef struct {
+    gboolean enabled;
+    gboolean initialized;
+
+    /* Configuration */
+    gsize max_chunk;
+    gsize overlap;
+
+    /* Current payload state */
+    gsize original_size;
+    gsize chunk_count;
+    gsize current_chunk;
+    gsize current_chunk_size;
+
+    /* Runtime status */
+    gboolean was_chunked;
+    gboolean processing;
+    gboolean complete;
+
+    /* Statistics */
+    gsize total_bytes;
+    gsize bytes_processed;
+} ChunkContext;
+
 // Added 0.9.9-beta
 // Structure for ansi colors to be used 
 // for the debug output to a console TTY
@@ -169,7 +195,9 @@ typedef enum {
     TAG_MEMORY,     // For DB-loaded User history
     TAG_LOG_DUMP,   // For real-time Tee data
     TAG_SYSTEM,	    // Meta-data. warninggs, system state
-    TAG_STATUS      // For UI labels/status bars (non-AI-fed)
+    TAG_STATUS,      // For UI labels/status bars (non-AI-fed)
+    TAG_USER,        // Current user instruction/input
+    TAG_SNMP         // SNMP telemetry payload
 } TagType;
 
 // Configuration of AI Provider
@@ -333,6 +361,7 @@ typedef struct {
     gboolean offline_override;		  // Added 0.9.9-beta
     gboolean debug_color;		  // Added 0.9.9-beta
     gboolean debug_tty;			  // Added 0.9.9-beta
+    gboolean force_bw;			  // Added 0.9.12-beta-2
 } SystemBooleans;
 
 // All main GUI related variable structure
@@ -435,6 +464,7 @@ typedef struct {
 // Gemini stated: `AppContext` root now exclusively acts as a "Table of Contents" for your sub-systems.
 typedef struct AppContext {
     ANSI_Color		ansi;				// colorize the debug messages
+    ChunkContext	chunk;				// autochunk for splitting large payloads
     ResourceControl	access;				// Control over multi-threaded DB resources
     RunTimeVariables	aiterm_runtime;			// Misc runtime buffers and command queues
     SQL_DataBase	database;			// MySQL database connection and counters

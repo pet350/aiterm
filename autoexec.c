@@ -14,7 +14,6 @@
 #include "gui.h"
 #include "autoexec.h"
 #include "policy_dao.h"
-#include "utils.h"
 #include "update.h"
 #include "commands.h"
 
@@ -23,6 +22,9 @@ typedef struct {
     AppContext *app;
     int slot_id;
 } DialogSlotContext;
+
+#define EXEC_RESPONSE_SHOW_QUEUE 1001
+#define EXEC_RESPONSE_CANCEL_ALL 1002
 
 /*
  * Find the VTE contained anywhere inside a notebook tab page.
@@ -56,17 +58,26 @@ static GtkWidget *find_vte_in_widget_tree(GtkWidget *widget)
     return NULL;
 }
 
-
+ 
 // Added 0.9.8-alpha
 void execute_next_queued_command(AppContext *app) {
     if (!app || app->aiterm_runtime.is_command_running) return;
+
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
 
     if (app->aiterm_runtime.pending_autoexec_queue && 
         !g_queue_is_empty(app->aiterm_runtime.pending_autoexec_queue)) {
         
         char *next_cmd = (char *)g_queue_pop_head(app->aiterm_runtime.pending_autoexec_queue);
         
-        DEBUG_PRINT("[AUTOEXEC DISPATCH]: Executing queued command: %s\n", next_cmd);
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOEXEC DISPATCH%s]: %sExecuting queued command: %s%s%s\n",
+		lt_pl, nml, cy, nml, gr,
+		red,  next_cmd, nml);
         
         // Lock execution flag
         app->aiterm_runtime.is_command_running = TRUE;
@@ -95,24 +106,44 @@ void execute_next_queued_command(AppContext *app) {
 
         if (active_terminal && VTE_IS_TERMINAL(active_terminal)) {
             char *formatted_cmd = g_strdup_printf("%s\n", next_cmd);
-            DEBUG_PRINT("[AUTOEXEC DISPATCH]: Current tab page #%d, VTE=%p\n",
-                        current_page, (void *)active_terminal);
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOEXEC DISPATCH%s]: %sCurrent tab page #%s%d%s, VTE=%s%p%s\n",
+		lt_pl, nml, cy, nml, gr,
+                red, current_page, gr, 
+                red, (void *)active_terminal, nml);
+
             vte_terminal_feed_child(VTE_TERMINAL(active_terminal), formatted_cmd, -1);
             g_free(formatted_cmd);
         } else {
-            DEBUG_PRINT("[AUTOEXEC DISPATCH]: No valid active VTE terminal found; command not sent: %s\n",
-                        next_cmd);
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOEXEC DISPATCH%s]: %sNo valid active VTE terminal found; command not sent: %s%s%s\n",
+		lt_pl, nml, cy, nml, gr,
+                red, next_cmd, nml);
         }
         
         g_free(next_cmd);
     } else {
-        DEBUG_PRINT("[AUTOEXEC]: Queue clear. Terminal ready for commands.\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOEXEC%s]: %sQueue clear. Terminal ready for commands.%s\n", 
+		lt_pl, nml, cy, nml, gr, nml);
     }
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 // Added 0.9.8-alpha
 void enqueue_autoexec_payload(AppContext *app, const char *raw_commands) {
     if (!app || !raw_commands) return;
+
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
 
     if (!app->aiterm_runtime.pending_autoexec_queue) {
         app->aiterm_runtime.pending_autoexec_queue = g_queue_new();
@@ -124,7 +155,9 @@ void enqueue_autoexec_payload(AppContext *app, const char *raw_commands) {
         char *trimmed = g_strstrip(lines[i]);
         if (strlen(trimmed) > 0) {
             g_queue_push_tail(app->aiterm_runtime.pending_autoexec_queue, g_strdup(trimmed));
-            DEBUG_PRINT("[AUTOEXEC QUEUE]: Enqueued command: %s\n", trimmed);
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOEXEC QUEUE%s]: %sEnqueued command: %s%s%s\n", 
+		lt_pl, nml, cy, nml, gr,
+		red, trimmed, nml);
         }
     }
     g_strfreev(lines);
@@ -133,6 +166,14 @@ void enqueue_autoexec_payload(AppContext *app, const char *raw_commands) {
     if (!app->aiterm_runtime.is_command_running) {
         execute_next_queued_command(app);
     }
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 // Returns index of next free slot in app->exec_dialog, or -1 if full
@@ -281,6 +322,155 @@ void process_auto_execution(AppContext *app, const char *ai_text) {
     // back to GTK rather than recursively consuming the entire queue.
     process_next_queued_command(app);
 }
+
+static void show_autoexec_queue_window(AppContext *app) {
+    if (!app) return;
+
+    GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_window_set_title(GTK_WINDOW(window), "Auto Execute Queue");
+    gtk_window_set_default_size(GTK_WINDOW(window), 700, 460);
+    gtk_window_set_transient_for(GTK_WINDOW(window), GTK_WINDOW(app->gui.window));
+    gtk_window_set_destroy_with_parent(GTK_WINDOW(window), TRUE);
+
+    GtkStyleContext *window_context = gtk_widget_get_style_context(window);
+    gtk_style_context_add_class(window_context, "aiterm-dialog");
+
+    GtkCssProvider *css_provider = gtk_css_provider_new();
+    const char *queue_css =
+        ".aiterm-dialog { background-color: #1e1e2e; color: #cdd6f4; }\n"
+        ".aiterm-dialog label { color: #cdd6f4; font-family: 'Monospace', monospace; }\n"
+        ".aiterm-dialog textview { background-color: #181825; color: #cdd6f4; }\n"
+        ".aiterm-dialog button { background-color: #313244; color: #a6e3a1; border: 1px solid #45475a; border-radius: 4px; padding: 6px 16px; font-weight: bold; }\n"
+        ".aiterm-dialog button:hover { background-color: #45475a; color: #ffffff; }\n";
+    gtk_css_provider_load_from_data(css_provider, queue_css, -1, NULL);
+    gtk_style_context_add_provider_for_screen(
+        gdk_screen_get_default(), GTK_STYLE_PROVIDER(css_provider),
+        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    g_object_unref(css_provider);
+
+    GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_container_set_border_width(GTK_CONTAINER(vbox), 14);
+    gtk_container_add(GTK_CONTAINER(window), vbox);
+
+    guint waiting = 0;
+    GString *text = g_string_new("=== Auto Execute Queue ===\n\n");
+
+    for (int i = 0; i < MAX_DLG; i++) {
+        if (app->exec_dialog[i].active && app->exec_dialog[i].command_text) {
+            waiting++;
+            g_string_append_printf(text,
+                "[APPROVAL HOLD slot %d] %s\n",
+                i, app->exec_dialog[i].command_text);
+        }
+    }
+
+    guint cmd_count = app->aiterm_runtime.cmd_queue
+        ? g_queue_get_length(app->aiterm_runtime.cmd_queue) : 0;
+    guint pending_count = app->aiterm_runtime.pending_autoexec_queue
+        ? g_queue_get_length(app->aiterm_runtime.pending_autoexec_queue) : 0;
+
+    g_string_append_printf(text,
+        "\nPolicy approval dialogs: %u\n"
+        "Security queue: %u pending\n"
+        "Legacy pending queue: %u pending\n"
+        "Total queued/held commands: %u\n\n",
+        waiting, cmd_count, pending_count,
+        waiting + cmd_count + pending_count);
+
+    if (app->aiterm_runtime.cmd_queue && !g_queue_is_empty(app->aiterm_runtime.cmd_queue)) {
+        g_string_append(text, "--- Security Queue ---\n");
+        guint n = 1;
+        for (GList *it = app->aiterm_runtime.cmd_queue->head; it; it = it->next) {
+            const char *cmd = it->data;
+            if (cmd) g_string_append_printf(text, "  [%u] %s\n", n++, cmd);
+        }
+        g_string_append_c(text, '\n');
+    }
+
+    if (app->aiterm_runtime.pending_autoexec_queue &&
+        !g_queue_is_empty(app->aiterm_runtime.pending_autoexec_queue)) {
+        g_string_append(text, "--- Pending AutoExecute Queue ---\n");
+        guint n = 1;
+        for (GList *it = app->aiterm_runtime.pending_autoexec_queue->head; it; it = it->next) {
+            const char *cmd = it->data;
+            if (cmd) g_string_append_printf(text, "  [%u] %s\n", n++, cmd);
+        }
+    }
+
+    if (waiting == 0 && cmd_count == 0 && pending_count == 0)
+        g_string_append(text, "Queue is empty.\n");
+
+    GtkWidget *scrolled = gtk_scrolled_window_new(NULL, NULL);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
+                                   GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    gtk_box_pack_start(GTK_BOX(vbox), scrolled, TRUE, TRUE, 0);
+
+    GtkWidget *view = gtk_text_view_new();
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(view), FALSE);
+    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(view), FALSE);
+    gtk_text_view_set_monospace(GTK_TEXT_VIEW(view), TRUE);
+    gtk_container_add(GTK_CONTAINER(scrolled), view);
+
+    GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(view));
+    gtk_text_buffer_set_text(buffer, text->str, -1);
+    g_string_free(text, TRUE);
+
+    GtkWidget *close_btn = gtk_button_new_with_label("Close");
+    gtk_widget_set_halign(close_btn, GTK_ALIGN_END);
+    gtk_box_pack_start(GTK_BOX(vbox), close_btn, FALSE, FALSE, 0);
+    g_signal_connect_swapped(close_btn, "clicked", G_CALLBACK(gtk_widget_destroy), window);
+
+    gtk_widget_show_all(window);
+}
+
+static void cancel_all_autoexec(AppContext *app) {
+    if (!app) return;
+
+    guint security_count = app->aiterm_runtime.cmd_queue
+        ? g_queue_get_length(app->aiterm_runtime.cmd_queue) : 0;
+    guint pending_count = app->aiterm_runtime.pending_autoexec_queue
+        ? g_queue_get_length(app->aiterm_runtime.pending_autoexec_queue) : 0;
+    guint dialog_count = app->aiterm_runtime.active_dialog_count;
+
+    if (app->aiterm_runtime.cmd_queue)
+        g_queue_clear_full(app->aiterm_runtime.cmd_queue, g_free);
+    if (app->aiterm_runtime.pending_autoexec_queue)
+        g_queue_clear_full(app->aiterm_runtime.pending_autoexec_queue, g_free);
+
+    /* Mark all dialog slots inactive before destroying their windows. This
+     * prevents a response callback from treating a cancelled slot as active. */
+    GtkWidget *dialogs[MAX_DLG] = {0};
+    for (int i = 0; i < MAX_DLG; i++) {
+        if (!app->exec_dialog[i].active)
+            continue;
+
+        dialogs[i] = app->exec_dialog[i].dialog;
+        DialogSlotContext *dialog_ctx = dialogs[i]
+            ? (DialogSlotContext *)g_object_get_data(G_OBJECT(dialogs[i]), "exec_ctx")
+            : NULL;
+        free_exec_dialog_slot(app, i);
+        if (dialog_ctx)
+            g_free(dialog_ctx);
+    }
+
+    for (int i = 0; i < MAX_DLG; i++) {
+        if (dialogs[i] && GTK_IS_WIDGET(dialogs[i]))
+            gtk_widget_destroy(dialogs[i]);
+    }
+
+    app->aiterm_runtime.is_command_running = FALSE;
+
+    char *msg = g_strdup_printf(
+        "[Auto-Execute]: Cancelled all pending execution. "
+        "Security queue=%u, pending queue=%u, approval dialogs=%u.\n",
+        security_count, pending_count, dialog_count);
+    append_ai_text(app, msg, "cmd_tag");
+    g_free(msg);
+
+    DEBUG_PRINT("[AUTOEXEC]: Cancel All cleared security=%u pending=%u dialogs=%u\n",
+                security_count, pending_count, dialog_count);
+}
+
 gboolean render_confirmation_dialog_idle(gpointer user_data) {
     DialogSlotContext *ctx = (DialogSlotContext *)user_data;
     if (!ctx || !ctx->app) return G_SOURCE_REMOVE;
@@ -300,6 +490,8 @@ gboolean render_confirmation_dialog_idle(gpointer user_data) {
         "Security Policy Confirmation",
         GTK_WINDOW(app->gui.window),
         GTK_DIALOG_DESTROY_WITH_PARENT,
+        "Show Queue", EXEC_RESPONSE_SHOW_QUEUE,
+        "Cancel All", EXEC_RESPONSE_CANCEL_ALL,
         "_Cancel", GTK_RESPONSE_REJECT,
         "_Submit", GTK_RESPONSE_ACCEPT,
         NULL
@@ -382,6 +574,7 @@ gboolean render_confirmation_dialog_idle(gpointer user_data) {
     g_object_set_data(G_OBJECT(dialog), "slot_id", GINT_TO_POINTER(slot_id));
 
     g_signal_connect(action_combo, "changed", G_CALLBACK(on_action_combo_changed), accept_btn);
+    g_object_set_data(G_OBJECT(dialog), "exec_ctx", ctx);
     g_signal_connect(dialog, "response", G_CALLBACK(on_confirmation_response), ctx);
 
     gtk_widget_show_all(dialog);
@@ -454,6 +647,13 @@ void on_confirmation_response(GtkDialog *dialog, gint response_id, gpointer user
     AppContext *app = ctx->app;
     int slot_id = ctx->slot_id;
 
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     if (slot_id < 0 || slot_id >= MAX_DLG || !app->exec_dialog[slot_id].active) {
         g_free(ctx);
         gtk_widget_destroy(GTK_WIDGET(dialog));
@@ -463,6 +663,31 @@ void on_confirmation_response(GtkDialog *dialog, gint response_id, gpointer user
     }
 
     exe_dlg *dlg = &app->exec_dialog[slot_id];
+
+    /* These actions intentionally leave the approval dialog itself open. */
+    if (response_id == EXEC_RESPONSE_SHOW_QUEUE) {
+        show_autoexec_queue_window(app);
+        g_free(lt_pl);
+        g_free(cy);
+        g_free(yl);
+        g_free(gr);
+        g_free(red);
+        g_free(nml);
+        return;
+    }
+
+    if (response_id == EXEC_RESPONSE_CANCEL_ALL) {
+        cancel_all_autoexec(app);
+        g_free(lt_pl);
+        g_free(cy);
+        g_free(yl);
+        g_free(gr);
+        g_free(red);
+        g_free(nml);
+        /* cancel_all_autoexec() destroyed this dialog along with every other
+         * pending approval window. */
+        return;
+    }
 
     // Retrieve child widget references attached to the dialog object
     GtkWidget *remember_check = GTK_WIDGET(g_object_get_data(G_OBJECT(dialog), "remember_check"));
@@ -484,13 +709,21 @@ void on_confirmation_response(GtkDialog *dialog, gint response_id, gpointer user
                     .risk = 0
                 };
                 set_command_policy(app, &rec);
-                DEBUG_PRINT("[AUTOEXEC]: Persisted policy rule: %s -> %s", binary, chosen_action);
+                DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOEXEC%s]: %sPersisted policy rule: %s%s%s -> %s%s%s", 
+			lt_pl, nml, cy, nml, gr,
+			red, binary, gr,
+			red, chosen_action, nml);
+
                 g_free(binary);
             }
         }
 
         if (action_idx == 0) { // Execute option
-            DEBUG_PRINT("[AUTOEXEC]: User confirmed execution for slot %d: %s", slot_id, dlg->command_text);
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOEXEC%s]: %sUser confirmed execution for slot %s%d%s: %s%s%s\n",
+		lt_pl, nml, cy, nml, gr,
+		red,  slot_id, gr,
+		red,  dlg->command_text, nml);
+
             feed_command_to_vte(app, dlg->command_text);
         } else {
             append_ai_text(app, "[Policy Blocked]: Command blocked and saved to policy by user.\n", "cmd_tag");
@@ -507,6 +740,14 @@ void on_confirmation_response(GtkDialog *dialog, gint response_id, gpointer user
 
     // Resume queue processing for all remaining commands in app->aiterm_runtime.cmd_queue
     process_next_queued_command(app);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 void show_exec_confirmation_dialog(AppContext *app, const char *cmd, int pane_id) {

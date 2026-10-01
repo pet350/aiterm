@@ -16,6 +16,7 @@ typedef struct {
     char *response_text;
     char *terminal_output;
     char *history_role;       /* terminal or snmp */
+    TagType context_type;     /* XML type used for the AI context payload */
 } TeeResponseData;
 
 // Function prototypes defines in updare.c
