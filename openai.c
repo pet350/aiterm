@@ -16,8 +16,90 @@
 #include "utils.h"
 #include "auto_chunk.h"
 #include "xml_tagging.h"
+#include "ai_provider.h"
 
-char* send_to_openai_ex_types(AppContext *app, const char *prompt, const char *terminal_context, gboolean include_history, TagType prompt_type, TagType context_type) {
+extern const char *GENERAL_DIRECTIVES;
+#include "ai_retry.h"
+
+typedef struct {
+    AppContext *app;
+    const char *url;
+} OpenAIHttpData;
+
+/*
+ * Execute exactly one OpenAI-compatible HTTP request.
+ * The retry subsystem owns the retry loop.  This callback only performs
+ * one attempt and returns the provider's raw response body.
+ */
+static char *openai_http_single_attempt(const char *payload,
+                                        long *out_http_code,
+                                        void *user_data) {
+    OpenAIHttpData *data = (OpenAIHttpData *)user_data;
+    if (!data || !data->app || !data->url || !payload)
+        return NULL;
+
+    struct MemoryStruct chunk = { malloc(1), 0 };
+    CURL *curl_handle = curl_easy_init();
+
+    if (!curl_handle) {
+        if (out_http_code)
+            *out_http_code = 0;
+        return chunk.memory;
+    }
+
+    struct curl_slist *headers = NULL;
+    const ProviderConfig *provider = ai_provider_current_config(data->app);
+
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    if (provider->api_key && provider->auth_header) {
+        char auth_header[1024];
+
+        if (provider->auth_scheme && strlen(provider->auth_scheme) > 0) {
+            snprintf(auth_header, sizeof(auth_header), "%s: %s %s",
+                     provider->auth_header,
+                     provider->auth_scheme,
+                     provider->api_key);
+        } else {
+            snprintf(auth_header, sizeof(auth_header), "%s: %s",
+                     provider->auth_header,
+                     provider->api_key);
+        }
+
+        headers = curl_slist_append(headers, auth_header);
+    }
+
+    long http_code = 0;
+
+    curl_easy_setopt(curl_handle, CURLOPT_URL, data->url);
+    curl_easy_setopt(curl_handle, CURLOPT_POSTFIELDS, payload);
+    curl_easy_setopt(curl_handle, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
+    curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl_handle, CURLOPT_TCP_KEEPALIVE, 1L);
+
+    CURLcode res = curl_easy_perform(curl_handle);
+
+    if (res == CURLE_OK) {
+        curl_easy_getinfo(curl_handle, CURLINFO_RESPONSE_CODE, &http_code);
+    } else {
+        DEBUG_PRINT("[ DEBUG ]: CURL OpenAI-compatible Error: %s\n",
+                    curl_easy_strerror(res));
+        http_code = 0;
+    }
+
+    if (out_http_code)
+        *out_http_code = http_code;
+
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl_handle);
+
+    return chunk.memory;
+}
+
+static char* send_to_openai_ex_types_internal(AppContext *app, const char *prompt, const char *terminal_context, gboolean include_history, TagType prompt_type, TagType context_type, gboolean include_directives) {
     if (!app || !prompt) return NULL;
 
     char *lt_pl   = g_strdup(app->ansi.lt_purple);
@@ -27,10 +109,7 @@ char* send_to_openai_ex_types(AppContext *app, const char *prompt, const char *t
     char *red     = g_strdup(app->ansi.red);
     char *nml     = g_strdup(app->ansi.normal);
 
-    ProviderConfig *provider = &app->provider_config;
-    CURL *curl_handle;
-    CURLcode res;
-    struct MemoryStruct chunk = { malloc(1), 0 };
+    const ProviderConfig *provider = ai_provider_current_config(app);
 
     const char *base_url = provider->base_url ? provider->base_url : "https://api.openai.com/v1";
     const char *endpoint = provider->endpoint ? provider->endpoint : "chat/completions";
@@ -41,10 +120,16 @@ char* send_to_openai_ex_types(AppContext *app, const char *prompt, const char *t
 
     struct json_object *messages_array = json_object_new_array();
 
-    // System message
+    // System message. GENERAL_DIRECTIVES are included only for the explicit
+    // initialization/provider-change directive request. Normal requests keep
+    // the lightweight provider system message and do not resend directives.
     struct json_object *sys_msg = json_object_new_object();
     json_object_object_add(sys_msg, "role", json_object_new_string("system"));
-    json_object_object_add(sys_msg, "content", json_object_new_string("You are a Linux Expert."));
+    if (include_directives && GENERAL_DIRECTIVES && GENERAL_DIRECTIVES[0] != '\0') {
+        json_object_object_add(sys_msg, "content", json_object_new_string(GENERAL_DIRECTIVES));
+    } else {
+        json_object_object_add(sys_msg, "content", json_object_new_string("You are a Linux Expert."));
+    }
     json_object_array_add(messages_array, sys_msg);
 
     /*
@@ -79,7 +164,7 @@ char* send_to_openai_ex_types(AppContext *app, const char *prompt, const char *t
 
     DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOCHUNK%s] %sprovider=[%s%s%s] request_budget=[%s%zu%s] fixed=[%s%zu%s] history_budget=[%s%zu%s] terminal_budget=[%s%zu%s]%s\n",
 		lt_pl, nml, cy, nml, gr,
-                red, app->provider_config.provider ? app->provider_config.provider : "openai", gr,
+                red, ai_provider_current_config(app)->provider ? ai_provider_current_config(app)->provider : "openai", gr,
                 red, request_budget, gr, 
 		red, fixed_budget, gr, 
 		red, history_budget, gr, 
@@ -132,7 +217,8 @@ char* send_to_openai_ex_types(AppContext *app, const char *prompt, const char *t
         if (context_chunks)
             g_ptr_array_unref(context_chunks);
     } else {
-        DEBUG_PRINT("[ OPENAI ] terminal_context=0 bytes or no remaining request budget\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sOPENAI%s] %sterminal_context=[%s0%s] bytes or no remaining request budget%s\n",
+		lt_pl, nml, cy, nml, gr, red, gr, nml);
     }
 
     // Current user prompt
@@ -145,41 +231,34 @@ char* send_to_openai_ex_types(AppContext *app, const char *prompt, const char *t
 
     json_object_object_add(root, "messages", messages_array);
     const char *payload = json_object_to_json_string(root);
-    DEBUG_PRINT("[ AUTOCHUNK ] Final OpenAI-compatible JSON payload=%zu bytes (budget=%zu)\n",
-                payload ? strlen(payload) : 0UL, request_budget);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOCHUNK%s] %sFinal OpenAI-compatible JSON payload=[%s%zu%s] bytes (budget=%s%zu%s)%s\n",
+		lt_pl, nml, cy, nml, gr,
+                red, payload ? strlen(payload) : 0UL, gr,
+		red, request_budget, gr, nml);
 
-    curl_handle = curl_easy_init();
-    if(curl_handle) {
-        struct curl_slist *headers = NULL;
-        headers = curl_slist_append(headers, "Content-Type: application/json");
+    /*
+     * OpenAI-compatible providers such as Groq share the same retry engine
+     * as Gemini.  This is important for provider-side 429/TPM responses:
+     * return the raw final response, but retry transient rate-limit failures
+     * before exposing them to the caller.
+     */
+    OpenAIHttpData http_data = {
+        .app = app,
+        .url = url
+    };
 
-        if (provider->api_key && provider->auth_header) {
-            char auth_header[1024];
-            if (provider->auth_scheme && strlen(provider->auth_scheme) > 0) {
-                snprintf(auth_header, sizeof(auth_header), "%s: %s %s",
-                         provider->auth_header, provider->auth_scheme, provider->api_key);
-            } else {
-                snprintf(auth_header, sizeof(auth_header), "%s: %s",
-                         provider->auth_header, provider->api_key);
-            }
-            headers = curl_slist_append(headers, auth_header);
-        }
+    long final_http_code = 0;
+    char *raw_response = ai_retry_execute_with_retry(
+        app,
+        openai_http_single_attempt,
+        payload,
+        &http_data,
+        &final_http_code
+    );
 
-        curl_easy_setopt(curl_handle, CURLOPT_URL, url);
-        curl_easy_setopt(curl_handle, CURLOPT_POSTFIELDS, payload);
-        curl_easy_setopt(curl_handle, CURLOPT_HTTPHEADER, headers);
-        curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
-        curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
-        curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10L);
-        curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 30L);
-
-        res = curl_easy_perform(curl_handle);
-        if (res != CURLE_OK) {
-            DEBUG_PRINT("[ DEBUG ]: CURL OpenAI Error: %s\n", curl_easy_strerror(res));
-        }
-
-        curl_easy_cleanup(curl_handle);
-        curl_slist_free_all(headers);
+    if (raw_response) {
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sOPENAI%s] %sFinal HTTP status=[%s%ld%s]%s\n",
+                    lt_pl, nml, cy, nml, gr, red, final_http_code, gr, nml);
     }
 
     g_free(url);
@@ -192,14 +271,47 @@ char* send_to_openai_ex_types(AppContext *app, const char *prompt, const char *t
     g_free(nml);
 
     json_object_put(root);
-    return chunk.memory;
+    return raw_response;
 }
 
+
+char* send_to_openai_ex_types(AppContext *app, const char *prompt, const char *terminal_context, gboolean include_history, TagType prompt_type, TagType context_type) {
+    return send_to_openai_ex_types_internal(
+        app, prompt, terminal_context, include_history, prompt_type, context_type, FALSE);
+}
+
+char* send_to_openai_send_directives(AppContext *app) {
+    if (!app || !GENERAL_DIRECTIVES || GENERAL_DIRECTIVES[0] == '\0')
+        return NULL;
+
+    return send_to_openai_ex_types_internal(
+        app, "Acknowledge these AITerm directives in one short sentence.",
+        NULL, FALSE, TAG_SYSTEM, TAG_NONE, TRUE);
+}
 
 char* send_to_openai_ex(AppContext *app, const char *prompt, const char *terminal_context, gboolean include_history) {
     return send_to_openai_ex_types(app, prompt, terminal_context, include_history, TAG_USER, TAG_LOG_DUMP);
 }
 
 char* send_to_openai(AppContext *app, const char *prompt, const char *terminal_context) {
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSend to OpenAI%s] %sPrompt=[%s%ld%s] Bytes, Terminal=[%s%ld%s] Bytes.%s\n",
+	lt_pl, nml, cy, nml, gr,
+	red, strlen(prompt), gr,
+	red, strlen(terminal_context), gr, nml);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     return send_to_openai_ex_types(app, prompt, terminal_context, TRUE, TAG_USER, TAG_LOG_DUMP);
 }

@@ -17,6 +17,7 @@ size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *user
 char* send_to_openai(AppContext *app, const char *prompt, const char *terminal_context);
 char* send_to_openai_ex(AppContext *app, const char *prompt, const char *terminal_context, gboolean include_history);
 char* send_to_openai_ex_types(AppContext *app, const char *prompt, const char *terminal_context, gboolean include_history, TagType prompt_type, TagType context_type);
+char* send_to_openai_send_directives(AppContext *app);
 
 #define OPENAI_MODEL "gpt-5-nano"
 

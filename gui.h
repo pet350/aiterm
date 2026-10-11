@@ -315,6 +315,13 @@ typedef struct {
     int min_token_floor;       // Threshold required before triggering cache
     long min_token_threshold;  // Minimum token count boundary
     gboolean is_valid;         // Active valid cache flag
+
+    /* Gemini Interactions API parent used to persist GENERAL_DIRECTIVES.
+     * This is deliberately separate from the legacy explicit content cache. */
+    char *directive_interaction_id;
+    char *directive_model;
+    time_t directive_created_at;
+    gboolean directive_active;
 } GeminiCacheState;
 
 
@@ -479,6 +486,10 @@ typedef struct AppContext {
     NoiseFilter		noise;				// Active noise filter rules loaded from DB
     PrintConfig		print_opts;			// GTK printer configurations
     ProviderConfig	provider_config;		// AI backend API parameters (Gemini / OpenAI)
+    GMutex		provider_mutex;		// Protects short provider-config snapshots only
+    GCond		provider_cond;		// Coordinates worker-side directive ordering
+    gboolean		provider_directives_pending;
+    guint64		provider_generation;	// Changes whenever active provider configuration changes
     AIRetryConfig	retry_config;			// Backoff/retry settings for API calls
     AIRetryState	retry_state;			// Runtime execution counters for API retries
     SecurityConfig	security;			// Encrypted keys and security master tokens
@@ -530,6 +541,7 @@ void on_notebook_double_click(GtkGestureMultiPress *gesture, gint n_press, gdoub
 void on_tab_close_clicked(GtkButton *button, gpointer user_data);
 void add_terminal_tab(AppContext *app);
 void update_snmp_ticker_payload(AppContext *app, const char *payload_summary);
+void on_send_button_clicked(GtkButton *button, gpointer user_data);
 
 // Boolean function Prototypes
 gboolean scroll_ai_pane_to_bottom(AppContext *app);

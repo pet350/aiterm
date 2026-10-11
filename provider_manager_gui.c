@@ -115,7 +115,21 @@ static gboolean apply_provider(ProviderManagerDialog *dlg, gboolean save) {
         return FALSE;
     }
 
+    ai_provider_config_lock(app);
+
     ProviderConfig *p = &app->provider_config;
+
+    /* Capture whether the selected provider configuration actually changed.
+     * GENERAL_DIRECTIVES are sent only after a real provider/configuration
+     * change, not every time the dialog is opened or applied unchanged. */
+    gboolean provider_changed =
+        !p->provider || strcmp(p->provider, name) != 0 ||
+        !p->model || strcmp(p->model, model) != 0 ||
+        !p->base_url || strcmp(p->base_url, base_url) != 0 ||
+        !p->endpoint || strcmp(p->endpoint, endpoint) != 0 ||
+        p->kind != ((protocol && strcmp(protocol, "Gemini generateContent") == 0)
+                    ? PROVIDER_KIND_GEMINI_GENERATE : PROVIDER_KIND_OPENAI_CHAT);
+
     free_provider_config(p);
     p->provider = g_strdup(name);
     p->name = g_strdup(name);
@@ -132,6 +146,8 @@ static gboolean apply_provider(ProviderManagerDialog *dlg, gboolean save) {
 
     /* 0.9.11-alpha: keep a separate credential in SecurityConfig for every provider. */
     set_provider_api_key(app, name, api_key);
+    if (provider_changed)
+        app->provider_generation++;
     g_free(app->aiterm_runtime.model);
     app->aiterm_runtime.model = g_strdup(model);
 
@@ -142,6 +158,24 @@ static gboolean apply_provider(ProviderManagerDialog *dlg, gboolean save) {
     } else {
         gtk_label_set_text(GTK_LABEL(dlg->status_label), "Provider applied.");
     }
+
+    gboolean directive_queued = TRUE;
+    if (provider_changed) {
+        /* Invalidate the old Gemini interaction and queue a replacement.
+         * Provider workers take immutable snapshots, so an active request can
+         * continue using the old provider without blocking this GTK callback. */
+        ai_provider_invalidate_directives(app);
+        directive_queued = ai_provider_send_directives_async_locked(app, NULL, NULL);
+    }
+
+    ai_provider_config_unlock(app);
+
+    if (provider_changed) {
+        DEBUG_PRINT("[ DEBUG ]: [PROVIDER] Configuration changed to [%s]; asynchronous directive refresh %s.\n",
+                    app->provider_config.provider ? app->provider_config.provider : "unknown",
+                    directive_queued ? "queued" : "failed to queue");
+    }
+
     return TRUE;
 }
 
@@ -149,32 +183,60 @@ static void on_apply_clicked(GtkWidget *button, gpointer user_data) {
     apply_provider(user_data, TRUE);
 }
 
-static void on_test_clicked(GtkWidget *button, gpointer user_data) {
-    ProviderManagerDialog *dlg = user_data;
-    if (!apply_provider(dlg, FALSE)) return;
+typedef struct {
+    GtkWidget *status_label;
+} ProviderTestAsyncData;
 
-    gtk_label_set_text(GTK_LABEL(dlg->status_label), "Testing provider connection...");
-    while (gtk_events_pending()) gtk_main_iteration();
-
-    char *raw = ai_provider_send(dlg->app,
-        "Reply with exactly: AITerm provider connection OK");
-    if (!raw) {
-        gtk_label_set_text(GTK_LABEL(dlg->status_label),
-                           "Provider test failed. Check endpoint, model, key, and network.");
+static void provider_test_complete(AppContext *app, char *raw_response, gpointer user_data) {
+    (void)app;
+    ProviderTestAsyncData *td = user_data;
+    if (!td) {
+        if (raw_response) free(raw_response);
         return;
     }
 
-    char *text = ai_provider_extract_text(raw);
-    if (text && *text) {
-        char *status = g_strdup_printf("Connection OK: %s", text);
-        gtk_label_set_text(GTK_LABEL(dlg->status_label), status);
-        g_free(status);
+    if (!raw_response) {
+        gtk_label_set_text(GTK_LABEL(td->status_label),
+                           "Provider test failed. Check endpoint, model, key, and network.");
     } else {
-        gtk_label_set_text(GTK_LABEL(dlg->status_label),
-                           "HTTP request succeeded, but no assistant text was returned.");
+        char *text = ai_provider_extract_text(raw_response);
+        if (text && *text) {
+            char *status = g_strdup_printf("Connection OK: %s", text);
+            gtk_label_set_text(GTK_LABEL(td->status_label), status);
+            g_free(status);
+        } else {
+            gtk_label_set_text(GTK_LABEL(td->status_label),
+                               "HTTP request succeeded, but no assistant text was returned.");
+        }
+        g_free(text);
+        free(raw_response);
     }
-    g_free(text);
-    g_free(raw);
+
+    g_object_unref(td->status_label);
+    g_free(td);
+}
+
+static void on_test_clicked(GtkWidget *button, gpointer user_data) {
+    (void)button;
+    ProviderManagerDialog *dlg = user_data;
+    if (!apply_provider(dlg, FALSE)) return;
+
+    gtk_label_set_text(GTK_LABEL(dlg->status_label), "Testing provider connection asynchronously...");
+
+    ProviderTestAsyncData *td = g_malloc0(sizeof(*td));
+    td->status_label = g_object_ref(dlg->status_label);
+
+    if (!ai_provider_send_with_context_async(
+            dlg->app,
+            "Reply with exactly: AITerm provider connection OK",
+            NULL,
+            provider_test_complete,
+            td)) {
+        gtk_label_set_text(GTK_LABEL(dlg->status_label),
+                           "Unable to start provider test worker.");
+        g_object_unref(td->status_label);
+        g_free(td);
+    }
 }
 
 static void on_dialog_destroy(GtkWidget *widget, gpointer user_data) {

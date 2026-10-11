@@ -2,32 +2,65 @@
 
 ## The AI-Augmented Terminal Emulator
 
-## 0.9.12-alpha
-
-- Reworked AutoChunk around a provider-aware single-request context budget.
-- History loading now obeys the same request budget instead of always loading up to 100 records.
-- OpenAI-compatible and Gemini requests no longer append every terminal chunk into one oversized request.
-- Large terminal captures remain preserved in MariaDB; only the bounded portion is sent in the current stateless API request.
-- Added final serialized JSON payload diagnostics for troubleshooting provider limits.
-- Fixed a NULL dereference and an early-return allocation leak in AutoChunk.
-
-
 **aiterm** is a Linux desktop terminal emulator written in C using GTK 3
 and VTE, with a dedicated AI pane alongside the terminal. It combines
 normal shell work, persistent MariaDB-backed sessions, AI-assisted
 terminal analysis, optional automatic command execution, SNMP telemetry,
-provider abstraction, caching, noise filtering, rate limiting,
+a provider abstraction, caching, noise filtering, rate limiting,
 export/printing, and session-aware configuration.
 
-> **Current source tree:** 0.9.12-alpha / September 27, 2026\
+> **Current source tree:** 0.9.12-gamma / October 2026\
 > **Primary build system:** GNU Make\
-> **Primary configuration file:** `/etc/aiterm.conf`
+> **Configuration file:** searched in several locations, falling back to
+> `/etc/aiterm.conf` (see [Configuration](#configuration))
 
-The project is designed around a simple principle:
+The project is built around one principle:
 
 > The terminal remains a normal terminal. AI assistance is an additional
 > layer that can observe selected terminal activity, analyze it,
 > maintain context, and optionally act on explicitly enabled workflows.
+
+------------------------------------------------------------------------
+
+## What's New in 0.9.12
+
+### 0.9.12-gamma
+
+- **Per-tab Tee capture.** Terminal capture now works in every open tab,
+  not just the newest one. Each VTE keeps its own row counters and its
+  own 250 ms watcher timer. Captures are stamped `[tab pts/N]`, and a
+  manual AI question uses only the focused tab's text (see
+  [Tee Capture and Tabs](#tee-capture-and-tabs)).
+- Provider-specific encrypted API keys (`OPENAI_KEY`, `GEMINI_KEY`, ...)
+  and an **API Keys** reference window (`Tools → Open api keys window`).
+- `--provider` and `--bw` command-line options.
+- Config file lookup across several locations, plus the `AITERM_CONFIG`
+  environment variable.
+- Environment overrides for provider, model, and transport settings.
+- `make install` / `make uninstall` targets and SQL-script-driven schema
+  initialization.
+
+### 0.9.12-alpha / beta
+
+- **AutoChunk** reworked around a provider-aware single-request context
+  budget (see [AutoChunk and Context Budget](#autochunk-and-context-budget)).
+- History loading obeys the same request budget instead of always loading
+  up to 100 records.
+- OpenAI-compatible and Gemini requests no longer append every terminal
+  chunk into one oversized request. Large captures stay preserved in
+  MariaDB; only the bounded portion is sent in the current stateless API
+  request.
+- Final serialized JSON payload diagnostics for troubleshooting provider
+  limits.
+- Fresh terminal output is harvested before a manual AI request, so
+  output that arrived between Tee timer cycles is available immediately.
+- API conversation history includes only non-TEE `user` and `assistant`
+  rows and excludes `API_ERROR:` responses, so terminal/SNMP telemetry
+  and provider failures cannot masquerade as conversation turns.
+- Opening the Provider Manager synchronizes pending terminal output and
+  persists the Tee accumulator without launching an AI request.
+- Fixed a NULL dereference and an early-return allocation leak in
+  AutoChunk.
 
 ------------------------------------------------------------------------
 
@@ -38,44 +71,47 @@ The project is designed around a simple principle:
 3.  [System Requirements](#system-requirements)
 4.  [Build Dependencies](#build-dependencies)
 5.  [Building from Source](#building-from-source)
-6.  [Installing and Running](#installing-and-running)
+6.  [Installing](#installing)
 7.  [Configuration](#configuration)
 8.  [Encrypted Credentials](#encrypted-credentials)
 9.  [AI Providers](#ai-providers)
-10. [Provider Manager](#provider-manager)
-11. [MariaDB Database](#mariadb-database)
-12. [Terminal and AI Workflow](#terminal-and-ai-workflow)
-13. [System Toggles](#system-toggles)
-14. [Idle Suspension](#idle-suspension)
-15. [Automatic Execution and
-    Policies](#automatic-execution-and-policies)
-16. [Noise Filtering](#noise-filtering)
-17. [Smart Cache](#smart-cache)
-18. [Rate Limiting](#rate-limiting)
-19. [AI Retry](#ai-retry)
-20. [SNMP Monitoring](#snmp-monitoring)
-21. [Sessions and Persistent Context](#sessions-and-persistent-context)
-22. [History Manager](#history-manager)
-23. [Exporting Sessions](#exporting-sessions)
-24. [Printing](#printing)
-25. [Multi-Tab Terminal](#multi-tab-terminal)
-26. [Command Reference](#command-reference)
-27. [Command-Line Options](#command-line-options)
-28. [Environment Variables](#environment-variables)
-29. [Configuration Reference](#configuration-reference)
-30. [Troubleshooting](#troubleshooting)
-31. [Development Notes](#development-notes)
-32. [Project File Map](#project-file-map)
-33. [Security Notes](#security-notes)
-34. [Known Limitations and Source-Tree
-    Caveats](#known-limitations-and-source-tree-caveats)
-35. [License](#license)
+10. [Provider Manager and API Keys Window](#provider-manager-and-api-keys-window)
+11. [AutoChunk and Context Budget](#autochunk-and-context-budget)
+12. [MariaDB Database](#mariadb-database)
+13. [Terminal and AI Workflow](#terminal-and-ai-workflow)
+14. [Tee Capture and Tabs](#tee-capture-and-tabs)
+15. [Menus](#menus)
+16. [System Toggles](#system-toggles)
+17. [Idle Suspension](#idle-suspension)
+18. [Automatic Execution and Policies](#automatic-execution-and-policies)
+19. [Noise Filtering](#noise-filtering)
+20. [Smart Cache](#smart-cache)
+21. [Rate Limiting](#rate-limiting)
+22. [AI Retry](#ai-retry)
+23. [SNMP Monitoring](#snmp-monitoring)
+24. [Sessions and Persistent Context](#sessions-and-persistent-context)
+25. [History Manager](#history-manager)
+26. [Exporting Sessions](#exporting-sessions)
+27. [Printing](#printing)
+28. [Multi-Tab Terminal](#multi-tab-terminal)
+29. [Other GUI Features](#other-gui-features)
+30. [XML Payload Tagging](#xml-payload-tagging)
+31. [Debugging](#debugging)
+32. [Command Reference](#command-reference)
+33. [Command-Line Options](#command-line-options)
+34. [Environment Variables](#environment-variables)
+35. [Configuration Reference](#configuration-reference)
+36. [Troubleshooting](#troubleshooting)
+37. [Development Notes](#development-notes)
+38. [Project File Map](#project-file-map)
+39. [Security Notes](#security-notes)
+40. [Known Limitations and Source-Tree Caveats](#known-limitations-and-source-tree-caveats)
+41. [Recommended First-Run Procedure](#recommended-first-run-procedure)
+42. [License](#license)
 
 ------------------------------------------------------------------------
 
 # Architecture at a Glance
-
-aiterm is composed of several cooperating subsystems:
 
 ``` text
                     +----------------------+
@@ -90,18 +126,22 @@ aiterm is composed of several cooperating subsystems:
         | Multi-tab shell |         | GTK Text View   |
         +--------+--------+         +--------+--------+
                  |                           |
-                 |                           |
         +--------v---------------------------v--------+
         |            Application Context              |
         |                 AppContext                  |
         +----+-----------+-----------+-----------+----+
              |           |           |           |
         +----v---+   +---v----+  +---v----+  +---v----+
-        |  Tee   |   | Session|  |  SNMP  |  | Auto  |
+        |  Tee   |   | Session|  |  SNMP  |  | Auto   |
         | Engine |   | / DB   |  | Poller |  | Exec   |
         +----+---+   +---+----+  +---+----+  +---+----+
              |           |           |           |
              +-----------+-----------+-----------+
+                         |
+                   +-----v------+
+                   | AutoChunk  |
+                   | (budget)   |
+                   +-----+------+
                          |
                    +-----v------+
                    | AI Provider|
@@ -117,16 +157,13 @@ aiterm is composed of several cooperating subsystems:
        +------------+          +------------+
 ```
 
-The provider abstraction currently distinguishes Gemini's
-`generateContent` protocol from OpenAI-compatible Chat Completions
-providers.
+The provider abstraction distinguishes Gemini's `generateContent`
+protocol from OpenAI-compatible Chat Completions providers.
 
 GTK is event-driven, and aiterm uses GTK/GLib timers, signals, and event
-handlers for the GUI, ticker, idle watchdog, and other asynchronous
-operations. GTK's official documentation describes this event-driven
-model and the `pkg-config` build mechanism used by the project.\
-See the [GTK 3 API documentation](https://docs.gtk.org/gtk3/) and [GTK
-compilation documentation](https://docs.gtk.org/gtk3/compiling.html).
+handlers for the GUI, the per-tab Tee watchers, the SNMP ticker, the idle
+watchdog, and other asynchronous operations. All AI and SQL transactions
+run on worker threads and report back to the GTK main thread.
 
 ------------------------------------------------------------------------
 
@@ -134,147 +171,97 @@ compilation documentation](https://docs.gtk.org/gtk3/compiling.html).
 
 ## Dual-pane interface
 
-The main window contains:
-
--   A VTE-backed terminal pane.
--   An AI conversation/output pane.
+-   A VTE-backed terminal pane with multi-tab support.
+-   An AI conversation/output pane with an input line.
 -   A token/status area.
 -   An optional SNMP ticker.
--   Multi-tab terminal support.
 
-The terminal remains usable as a normal shell while AI features are
-selectively enabled.
+The terminal remains a normal shell while AI features are selectively
+enabled.
 
 ## AI provider abstraction
 
-The AI request layer is centralized in `ai_provider.c`.
-
-Supported provider names in the current source:
+The request layer is centralized in `ai_provider.c`. Built-in provider
+names:
 
 ``` text
-openai
-gemini
-groq
-openrouter
-mistral
-ollama
-custom
+openai   gemini   groq   openrouter   mistral   ollama   custom
 ```
 
-Gemini uses its own `generateContent` protocol. The other built-in
-providers use the OpenAI-compatible request path.
+Gemini uses its own `generateContent` protocol. All other providers use
+the OpenAI-compatible Chat Completions path. Each provider has its own
+encrypted API key.
 
 ## Persistent sessions
 
-Sessions use UUIDs and are stored in MariaDB. Sessions can be:
-
--   Created.
--   Listed.
--   Loaded.
--   Renamed/described.
--   Deleted.
--   Marked as the default session.
--   Used to restore selected configuration values.
+Sessions use UUIDs and are stored in MariaDB. Sessions can be created,
+listed, loaded, described, deleted, marked as the default session, and
+used to restore selected configuration values.
 
 ## Terminal capture / Tee
 
-Tee mode captures terminal activity for AI analysis. It can operate
-together with Auto Reply so terminal output can be analyzed
-automatically.
+Tee captures terminal activity for AI analysis and for the database
+history. It works with Auto Reply so captured output can be analyzed
+automatically. Capture runs per tab.
 
 ## Automatic execution
 
-AI-generated command payloads can be placed into an execution queue. The
-application includes a policy system and confirmation dialogs around
-command execution.
+AI-generated commands can be placed in an execution queue. A policy
+system (ALLOW / BLOCK / APPROVE per command) and confirmation dialogs
+govern what actually runs.
 
 ## SNMP telemetry
 
-The SNMP subsystem can:
+Polls configured targets and OIDs, shows a scrolling ticker, optionally
+sends telemetry to the AI, and provides a GUI and command interface for
+managing targets.
 
--   Poll configured targets.
--   Track configured OIDs.
--   Display the most recent values.
--   Send accumulated SNMP data to the AI.
--   Display a scrolling SNMP ticker.
--   Force an immediate AI payload flush.
--   Manage targets through a GUI or commands.
+## AutoChunk
 
-## Smart Cache
+Provider-aware context budgeting keeps each stateless API request within
+a safe size while the full capture history stays in MariaDB.
 
-The Gemini cache subsystem can maintain reusable context/cache
-information and invalidate or rebuild it when required.
+## Smart Cache, noise filtering, rate limiting, AI Retry
 
-## Noise filtering
-
-A database-backed noise filter can suppress repetitive terminal output
-before it reaches downstream AI/telemetry processing.
-
-## Rate limiting
-
-A request-per-minute limiter is available to prevent excessive AI
-request frequency.
-
-## AI Retry
-
-Failed AI operations can optionally be retried with configurable:
-
--   Enable/disable state.
--   Maximum retry count.
--   Delay between attempts.
+Described in their own sections below.
 
 ## Export and printing
 
-The active session can be exported as:
-
--   Plain text.
--   HTML.
--   JSON.
--   XML.
-
-The application also contains a print workflow.
+Export the active session as Plain Text, HTML, JSON, or XML. A GTK print
+workflow is also provided.
 
 ## Encrypted credentials
 
-The configuration writer encrypts the AI API key and MariaDB password
-using the project's AES-256-CBC crypto functions.
+Provider API keys and the MariaDB password are encrypted in the config
+file with AES-256-CBC (OpenSSL).
 
 ------------------------------------------------------------------------
 
 # System Requirements
 
-The current source tree is intended for Linux.
+Linux only. A graphical session is required (aiterm is a GTK desktop
+application). The program also requires at least one non-loopback IPv4
+network interface at startup; otherwise it exits (see
+[Known Limitations](#known-limitations-and-source-tree-caveats)).
 
-Recommended baseline:
+Required to build:
 
--   64-bit Linux.
--   GCC or another C compiler compatible with the source.
--   GNU Make.
--   GTK 3.
--   VTE 2.91.
--   GLib 2.x.
--   libcurl.
--   json-c.
--   MariaDB/MySQL client development libraries.
--   OpenSSL/libcrypto.
--   UUID development library.
--   Net-SNMP development libraries.
--   `pkg-config`.
--   `glib-compile-resources`.
+-   GCC or a compatible C compiler, GNU Make, `pkg-config`
+-   GTK 3, VTE 2.91, GLib 2.x
+-   libcurl, json-c
+-   MariaDB/MySQL client development libraries
+-   OpenSSL (libcrypto), libuuid, Net-SNMP
+-   `glib-compile-resources` (GLib tools)
+-   `uuidgen` (used to generate the build ID)
 
-A graphical Linux session is required because aiterm creates a GTK
-desktop application.
+A running MariaDB/MySQL server is needed for sessions, history, noise
+filters, policies, and SNMP targets.
 
 ------------------------------------------------------------------------
 
 # Build Dependencies
 
 ## Debian / Ubuntu
-
-The primary Makefile automatically detects either `libmariadb` or
-`mariadb` through `pkg-config`.
-
-A practical development installation is:
 
 ``` bash
 sudo apt update
@@ -295,14 +282,15 @@ sudo apt install \
     libsnmp-dev
 ```
 
-If your distribution packages MariaDB development files differently,
-verify the available pkg-config module:
+The Makefile auto-detects the MariaDB pkg-config module
+(`libmariadb`, then `mariadb`, then `mysqlclient`). Check what your
+system provides:
 
 ``` bash
 pkg-config --list-all | grep -Ei 'mariadb|mysql'
 ```
 
-Then verify the major dependencies:
+Verify the main dependencies:
 
 ``` bash
 pkg-config --modversion gtk+-3.0
@@ -312,110 +300,55 @@ pkg-config --modversion libcurl
 pkg-config --modversion json-c
 ```
 
-The primary Makefile also links against:
-
-``` text
-pthread
-curl
-crypto
-uuid
-netsnmp
-```
+The Makefile links with: `pthread curl crypto uuid netsnmp`.
 
 ## openSUSE
 
-Install the corresponding development packages for:
+Install the development packages for: `gtk3`, `vte`, `glib2`, `libcurl`,
+`json-c`, `mariadb-connector-c`, `openssl`, `libuuid`, `net-snmp`,
+`pkg-config`, `make`, `gcc`. This source tree was most recently built and
+tested on openSUSE.
 
-``` text
-gtk3
-vte
-glib
-libcurl
-json-c
-mariadb-connector-c
-openssl
-libuuid
-net-snmp
-pkg-config
-make
-gcc
-```
-
-The repository includes `Makefile.opensuse`, but the primary `Makefile`
-is the most complete build definition in this source tree.
+The code includes `<mariadb/mysql.h>` and the Makefile may add
+`-I/usr/include/mysql/` on some distributions. If `mysql.h` cannot be
+found, confirm the MariaDB Connector/C development package is installed.
 
 ------------------------------------------------------------------------
 
 # Building from Source
 
-Change into the source directory:
-
 ``` bash
 cd /path/to/aiterm
-```
-
-Generate and build:
-
-``` bash
 make
 ```
 
-For a clean rebuild:
+Clean rebuild:
 
 ``` bash
 make clean
 make -j"$(nproc)"
 ```
 
-The default `Makefile` builds the full object list, including the
-current idle subsystem:
+`make clean` removes the objects, the `aiterm` binary, the generated
+`resources.c`, and the generated `build_id.h`.
 
-``` text
-idle.o
-```
+The build generates:
 
-The build also generates `resources.c` from:
+-   `resources.c`, from `resources.xml` and `aiterm-icon.png`, using
+    `glib-compile-resources`.
+-   `build_id.h`, containing a UUID build ID (`uuidgen`) and a build
+    timestamp.
 
-``` text
-resources.xml
-aiterm-icon.png
-```
+If `uuidgen` is missing on Debian/Ubuntu: `sudo apt install uuid-runtime`.
 
-using `glib-compile-resources`.
-
-## Build ID generation
-
-The Makefile generates `build_id.h` with:
-
--   A UUID build ID.
--   A build timestamp.
-
-The Makefile invokes:
-
-``` bash
-uuidgen
-```
-
-If `uuidgen` is missing on Debian/Ubuntu:
-
-``` bash
-sudo apt install uuid-runtime
-```
-
-If you already have a generated `build_id.h`, `make clean` removes it
-and the next build regenerates it.
+> **Clock skew:** if `make` warns that a file has "a modification time in
+> the future", your system clock is behind the file timestamps (common in
+> VMs). Run `make clean && make`, or `touch *.c *.h`, or fix the clock.
 
 ## Verify the build
 
-After a successful build:
-
 ``` bash
 ./aiterm --version
-```
-
-You can also inspect:
-
-``` bash
 ./aiterm --features
 ./aiterm --help
 ./aiterm --provider
@@ -423,270 +356,343 @@ You can also inspect:
 
 ------------------------------------------------------------------------
 
-# Installing and Running
+# Installing
 
-The source tree does not currently provide a complete `make install`
-target.
-
-For development/testing, run directly:
+The Makefile provides install targets:
 
 ``` bash
-./aiterm
+sudo make install
 ```
 
-Because the application currently uses `/etc/aiterm.conf` as its
-configuration location, an installation intended for normal use should
-place the executable somewhere on the user's `PATH` and create the
-configuration file with appropriate permissions.
+| Target            | Action                                                       |
+|-------------------|--------------------------------------------------------------|
+| `make install`    | Builds, then runs `install-bin` and `install-db`             |
+| `make install-bin`| Installs `aiterm` to `$(DESTDIR)$(PREFIX)/bin` (mode 0755)   |
+| `make install-db` | Installs `db/*.sql` to `$(DESTDIR)$(DATADIR)/aiterm/db`      |
+| `make uninstall`  | Removes only what install placed                             |
 
-For example:
+Defaults: `PREFIX=/usr/local`, `DATADIR=/usr/share`, so the binary goes to
+`/usr/local/bin/aiterm` and the SQL scripts to `/usr/share/aiterm/db`.
 
 ``` bash
-sudo install -m 0755 aiterm /usr/local/bin/aiterm
+make install PREFIX=/opt/aiterm            # relocate the binary
+make install DATADIR=/opt/aiterm/share     # relocate the SQL scripts
+make install DESTDIR=/tmp/stage            # staging root for packaging
 ```
 
-Then create:
+`DESTDIR` is used only by the install/uninstall recipes. It is *not*
+compiled into the binary. The final `SQLDIR` is baked into the binary as
+`AITERM_SQL_DIR_DEFAULT`, so if you override `DATADIR` you must build with
+the same value. You can also override the location at run time with
+`AITERM_SQL_DIR`.
 
-``` text
-/etc/aiterm.conf
-```
+> **Note:** `install-db` copies `db/*.sql`. If there is no `db/` directory
+> it prints a warning and skips the schema install. The source archive
+> reviewed for this README does not contain a `db/` directory (see
+> [MariaDB Database](#mariadb-database)).
 
-A system-wide configuration containing encrypted credentials should be
-protected appropriately.
+For development you can also run `./aiterm` directly from the build
+directory.
 
 ------------------------------------------------------------------------
 
 # Configuration
 
-The application configuration file is:
+## Config file location
 
-``` text
-/etc/aiterm.conf
-```
+At startup aiterm looks for its configuration file in this order and uses
+the first one that exists:
 
-The repository contains:
+1.  The path in the `AITERM_CONFIG` environment variable
+2.  `/etc/.<UID>.aiterm.conf` (per-user file in `/etc`, where `<UID>` is
+    the numeric user id)
+3.  `~/.config/aiterm.conf`
+4.  `~/.aiterm.conf`
+5.  `/etc/aiterm.conf` (default if nothing else is found)
 
-``` text
-aiterm.conf.example
-```
+Run with `--debug` to see which file was chosen.
 
-The example file is intentionally minimal. The running application's
-`save_config()` function writes the complete configuration format.
+When aiterm runs as root it forces `HOME=/root` and related XDG variables
+to `/root/...` before the lookup.
+
+The repository contains `aiterm.conf.example`, a minimal starting file.
+The running application's `save_config()` writes the full format.
 
 ## Important configuration behavior
 
-When the application saves configuration, it writes:
+Saved configuration begins with:
 
 ``` text
 # WARNING: Any changes made to this file will be overwritten
 ```
 
-Therefore:
-
--   Manual changes can be overwritten by `save_config()`.
--   Use the application's configuration/provider controls where
-    practical.
--   Back up the configuration before major changes.
+-   Manual edits can be overwritten whenever the app saves its config
+    (for example `Configuration → Save to Conf File` or `/save config`).
+-   Prefer the Provider Manager and the toggle menus where practical.
+-   Back up the file before major changes.
+-   `save_config()` rewrites the file in its own format; comments you add
+    are lost.
+-   `save_config()` does not write the legacy `api_key=` line any more.
 
 ## Creating the initial configuration
 
-Start with the supplied example:
-
 ``` bash
-sudo cp aiterm.conf.example /etc/aiterm.conf
-sudo chmod 600 /etc/aiterm.conf
+cp aiterm.conf.example ~/.config/aiterm.conf     # or /etc/aiterm.conf
+chmod 600 ~/.config/aiterm.conf
 ```
 
-Then edit the non-secret values:
+Then edit the values:
 
 ``` ini
 provider=gemini
 model=gemini-flash-latest
 
+GEMINI_KEY=<encrypted Gemini key>
+
 db_host=127.0.0.1
 db_user=aiterm
+db_pass=<encrypted DB password>
 db_name=aiterm_db
 ```
 
-Do **not** put plaintext API keys or database passwords into the file.
-The current configuration loader expects encrypted values.
+Do **not** put plaintext API keys or database passwords in the file. The
+loader expects encrypted values.
+
+If `provider=` is absent from the file, the loader defaults to `openai`.
 
 ------------------------------------------------------------------------
 
 # Encrypted Credentials
 
-aiterm uses the project's crypto functions to encrypt:
+aiterm encrypts, using AES-256-CBC with a master key:
 
--   AI API key.
--   MariaDB database password.
+-   Each provider's API key (`OPENAI_KEY`, `GEMINI_KEY`, `GROQ_KEY`,
+    `OPENROUTER_KEY`, `MISTRAL_KEY`, `OLLAMA_KEY`, `CUSTOM_KEY`).
+-   The MariaDB password (`db_pass`).
 
-The encryption workflow uses a master key.
-
-## Supply the master key on the command line
+## Supply the master key
 
 ``` bash
 ./aiterm --master='YOUR_MASTER_KEY'
 ```
 
-## Or use an environment variable
+or
 
 ``` bash
 export AITERM_MASTER_KEY='YOUR_MASTER_KEY'
 ./aiterm
 ```
 
-If neither is supplied, the application prompts for the master key.
+If neither is supplied, the application prompts for it
+(`Enter Master Encryption Key:`).
 
-## Encrypt a password or API key
+## Encrypt a key or password
 
 ``` bash
 ./aiterm --master='YOUR_MASTER_KEY' --crypt-pw='PLAINTEXT_SECRET'
 ```
 
-The program prints an encrypted string.
-
-Place that encrypted value into the appropriate configuration field:
+The program prints the encrypted string. Put it in the matching field:
 
 ``` ini
-api_key=ENCRYPTED_VALUE
-```
-
-or:
-
-``` ini
+GEMINI_KEY=ENCRYPTED_VALUE
 db_pass=ENCRYPTED_VALUE
 ```
 
 ## Inspect decrypted credentials
 
-The source provides:
-
 ``` bash
 ./aiterm --master='YOUR_MASTER_KEY' --decrypt-pw
 ```
 
-This prints the decrypted AI key and database password.
+This prints the decrypted value of every provider key
+(`OPENAI_KEY` ... `CUSTOM_KEY`) and the database password.
 
-**Use this command carefully.** The output is plaintext and should not
-be redirected into logs, shell history, screenshots, or shared terminal
-recordings.
+**Use this command carefully.** The output is plaintext. Do not redirect
+it to logs, shell history, screenshots, or shared terminal recordings.
+
+## Legacy single-key configs
+
+Older 0.9.x files with a single `api_key=` line are still accepted. The
+value is migrated into the configured provider's key slot after the file
+is parsed. New configurations should use the provider-specific keys.
 
 ------------------------------------------------------------------------
 
 # AI Providers
 
-The provider abstraction is implemented by:
+Implemented in `ai_provider.c`, `gemini.c`, `openai.c`, and
+`provider_manager_gui.c`.
 
-``` text
-ai_provider.c
-ai_provider.h
-provider_manager_gui.c
-provider_manager_gui.h
-```
+| Provider     | Protocol                  | Default base URL                                 | Default model                |
+|--------------|---------------------------|--------------------------------------------------|------------------------------|
+| `gemini`     | Gemini `generateContent`  | `https://generativelanguage.googleapis.com/v1beta` | `gemini-flash-latest`      |
+| `openai`     | OpenAI Chat Completions   | `https://api.openai.com/v1`                      | `gpt-5-nano`                 |
+| `groq`       | OpenAI-compatible         | `https://api.groq.com/openai/v1`                 | `openai/gpt-oss-120b`        |
+| `openrouter` | OpenAI-compatible         | `https://openrouter.ai/api/v1`                   | `openai/gpt-oss-20b:free`    |
+| `mistral`    | OpenAI-compatible         | `https://api.mistral.ai/v1`                      | `mistral-small-latest`       |
+| `ollama`     | OpenAI-compatible (local) | `http://127.0.0.1:11434/v1`                      | `llama3.2`                   |
+| `custom`     | OpenAI-compatible         | OpenAI defaults, overridden by saved/ENV values  | as configured                |
 
-## Built-in providers
+Notes:
 
-### Gemini
-
-Default Gemini configuration:
-
-``` ini
-provider=gemini
-model=gemini-flash-latest
-```
-
-Gemini uses:
-
-``` text
-generateContent
-```
-
-and normally supplies the API key as a query parameter.
-
-### OpenAI
-
-OpenAI uses the OpenAI-compatible Chat Completions path.
-
-### Groq
-
-The provider manager supplies a default OpenAI-compatible endpoint and
-model.
-
-### OpenRouter
-
-The provider manager includes a default OpenRouter-compatible endpoint.
-
-### Mistral
-
-The provider manager includes a default Mistral endpoint.
-
-### Ollama
-
-The provider manager includes a default local endpoint:
-
-``` text
-http://127.0.0.1:11434/v1
-```
-
-### Custom
-
-The provider manager also permits a custom provider configuration.
+-   Gemini supplies its API key as a query parameter (`key`) against
+    `models/<model>:generateContent`.
+-   OpenAI-compatible providers use `chat/completions` with an
+    `Authorization: Bearer <key>` header.
+-   Ollama sends no auth header (no API key required).
+-   Values saved by the Provider Manager (base URL, endpoint, auth header
+    and scheme, query key, key-in-query flag) override these defaults.
+-   Each provider uses only its own key. aiterm does **not** fall back
+    from one provider's credential to another's.
 
 ------------------------------------------------------------------------
 
-# Provider Manager
+# Provider Manager and API Keys Window
 
-Open:
+## Provider Manager
 
-``` text
-Managers → AI Provider Manager
-```
-
-or use:
+Open `Managers → AI Provider Manager`, or:
 
 ``` text
 /open provider manager
 ```
 
-The manager allows configuration of:
+It configures: provider name, model, base URL, endpoint, authentication
+header and scheme, API key, query-string key name, whether the key is sent
+in the query, and the protocol. Built-in templates fill sensible
+defaults.
 
--   Provider name.
--   Model.
--   Base URL.
--   Endpoint.
--   Authentication header.
--   Authentication scheme.
--   API key.
--   Query-string key name.
--   Whether the API key is supplied in the query.
--   Protocol selection.
+Opening the manager first captures pending terminal output and persists
+the Tee accumulator (without sending anything to the AI).
 
-The built-in provider templates populate sensible defaults.
+### Test the provider
 
-## Test the provider
+The manager includes a test operation that sends a small request and
+reports whether the provider returned assistant text. It is a quick check
+of connectivity, endpoint, model name, key, and protocol.
 
-The Provider Manager includes a test operation that sends a small test
-request and reports whether the provider returned assistant text.
+## API Keys window
 
-This is useful for validating:
+`Tools → Open api keys window`, or:
 
--   Network connectivity.
--   Endpoint.
--   Model name.
--   API key.
--   Protocol selection.
+``` text
+/open provider api keys
+```
+
+Shows a reference window of provider key-signup links (implemented in
+`provider_keys.c`). **Key values are never displayed** in this window.
+
+------------------------------------------------------------------------
+
+# AutoChunk and Context Budget
+
+`auto_chunk.c` / `auto_chunk.h` keep each stateless API request inside a
+provider-appropriate size.
+
+**Per-request context budgets** (bytes of context, chosen by provider):
+
+| Provider                     | Budget  |
+|------------------------------|---------|
+| Gemini (or Gemini protocol)  | 32768   |
+| OpenAI                       | 16000   |
+| Groq                         | 6000    |
+| Everything else              | 16000   |
+
+**How the budget is split:**
+
+-   The prompt plus about 1 KB of fixed overhead is subtracted first.
+-   Terminal/TEE context may use at most 3/4 of what remains.
+-   History gets the remainder, capped at 12000 bytes. Unused terminal
+    allowance is given back to history (still capped at 12000).
+-   Large captures are never lost: the full capture stays in MariaDB; only
+    the bounded portion goes into the current request.
+
+**Chunking defaults:** maximum chunk size 32768 bytes, overlap 1024
+bytes. Chunk boundaries are UTF-8-safe and prefer natural breaks.
+
+Debug mode (`--debug`) prints the budget calculation and the final
+serialized JSON payload size for troubleshooting provider limits.
+
+------------------------------------------------------------------------
+
+# MariaDB Database
+
+aiterm uses the MariaDB/MySQL C client and keeps **one** global
+connection (guarded by a mutex) shared by all subsystems.
+
+## What the application creates
+
+At startup, on a background thread, aiterm:
+
+1.  Connects to `db_host` as `db_user` (with `CLIENT_MULTI_STATEMENTS`).
+2.  Runs `CREATE DATABASE IF NOT EXISTS <db_name>` and selects it.
+3.  Executes every `*.sql` file in the SQL directory, in filename order
+    (`001_...sql`, `002_...sql`, ...). It stops at the first failing
+    script.
+
+## Where the SQL directory is
+
+-   `AITERM_SQL_DIR` environment variable, if set and it exists;
+    otherwise
+-   `AITERM_SQL_DIR_DEFAULT`, normally `/usr/share/aiterm/db`
+    (see [Installing](#installing)).
+
+## Tables used by the code
+
+The C source contains **no** `CREATE TABLE` statements. All tables must be
+created by the SQL scripts:
+
+| Table                | Used for                                           |
+|----------------------|----------------------------------------------------|
+| `aiterm_history`     | Conversation turns, TEE captures, SNMP rows        |
+| `sessions`           | Session UUIDs, descriptions, saved toggle states   |
+| `snmp_targets`       | SNMP target definitions                            |
+| `noise_filters`      | Noise filter patterns                              |
+| `command_policy`     | Auto-execute policies (`command_name`, `policy_type`, `risk_level`) |
+| `relevance_triggers` | Relevance trigger data                             |
+
+`aiterm_history` rows include at least: role, content, tee flag
+(`is_tee`), session UUID, sequence id, and a creation timestamp. Roles
+used include `user`, `assistant`, `terminal`, and `snmp`.
+
+> **Important:** the source archive reviewed for this README does **not**
+> include a `db/` directory or any `.sql` files. A fresh deployment needs
+> schema scripts that create the tables above with columns compatible with
+> the queries in the source. Without them, session, history, noise,
+> policy, and SNMP features will fail.
+
+## Database permissions
+
+The configured account must be able to connect, create/select the
+database (or you create it manually), run the schema scripts, and
+insert/update/delete/select rows in the application tables. If the account
+cannot create databases, create `aiterm_db` yourself and grant access:
+
+``` sql
+CREATE DATABASE aiterm_db;
+GRANT ALL PRIVILEGES ON aiterm_db.* TO 'aiterm'@'%' IDENTIFIED BY '...';
+```
+
+## Connection behavior
+
+Operations are mutex-protected. If the connection drops, run:
+
+``` text
+/reset db
+```
+
+and check the debug output.
 
 ------------------------------------------------------------------------
 
 # Terminal and AI Workflow
 
-The central workflow is:
-
 ``` text
 Shell command
      |
      v
-VTE terminal
+VTE terminal (one per tab)
      |
      +---- normal terminal use
      |
@@ -696,7 +702,10 @@ VTE terminal
         Noise filtering
                 |
                 v
-        Context/session logic
+        Context / session logic
+                |
+                v
+          AutoChunk budget
                 |
                 v
            AI provider
@@ -705,14 +714,9 @@ VTE terminal
              AI pane
 ```
 
-The user can interact directly with the AI pane input while
-independently using the terminal.
+You can type to the AI pane input while independently using the terminal.
 
 ## Tee mode
-
-Tee mode captures terminal activity for AI processing.
-
-Toggle:
 
 ``` text
 /tee on
@@ -720,13 +724,11 @@ Toggle:
 /tee status
 ```
 
-or use the Toggles menu.
+or use the Toggles menu. `Tools → Flush Tee Buffer` forces a flush.
 
 ## Auto Reply
 
-Auto Reply enables real-time analysis of captured terminal output.
-
-Toggle:
+Auto Reply enables real-time analysis of captured terminal output:
 
 ``` text
 /autoreply on
@@ -734,351 +736,293 @@ Toggle:
 /autoreply status
 ```
 
-## Tee and Auto Reply relationship
+## Tee and Auto Reply together
 
-The GUI logic intentionally couples these features:
+Tee and Auto Reply are separate functions:
 
--   Turning Tee off also turns Auto Reply off.
--   Turning Auto Reply on also turns Tee on.
+-   **Tee ON, Auto Reply OFF:** terminal data is captured and saved to
+    the database only.
+-   **Tee ON, Auto Reply ON:** captured data is saved *and* sent to the
+    AI for analysis.
 
-This prevents Auto Reply from being enabled without the terminal capture
-mechanism it depends on.
+In the GUI, turning Tee off also turns Auto Reply off, and turning Auto
+Reply on also turns Tee on.
+
+------------------------------------------------------------------------
+
+# Tee Capture and Tabs
+
+Capture is **per tab** as of 0.9.12-gamma.
+
+## How it works
+
+-   Every terminal tab keeps its own capture state: last cursor row/column,
+    last processed row, and a silence counter.
+-   Every tab has its own timer (250 ms). After about 2 seconds with no
+    cursor movement in that tab (8 ticks), its new output is appended to
+    the shared accumulator and flushed.
+-   A tab's timer stops automatically when the tab is closed.
+-   Each capture is stamped with its source tab, e.g.:
+
+    ``` text
+    [tab pts/3]
+    <captured text>
+    ```
+
+    The `pts/N` name matches the tab label.
+-   The accumulator is capped at 64 KB (oldest data is dropped).
+-   Flushed captures are saved to `aiterm_history` as `terminal` rows
+    (tee flag set). With Auto Reply on, they are also sent to the AI.
+
+## When you ask the AI a question
+
+1.  Output not yet harvested from the **focused tab** is captured first.
+2.  If the accumulator has pending data, that is used as terminal context
+    (source: pending-tee).
+3.  Otherwise the newest saved TEE row **for the focused tab** is used
+    (source: latest-db-tee). Rows are matched by their `[tab pts/N]`
+    stamp, so another tab's newest row is never substituted.
+
+If the focused tab has nothing saved, no TEE row is attached.
+
+## Things to know
+
+-   `--debug` output goes to stderr. If you start aiterm from a terminal
+    that is itself a tab inside another aiterm instance, that tab will
+    contain aiterm's own debug log and capturing it will send that log to
+    the AI.
+-   TEE rows saved before the `[tab ...]` stamp existed carry no tab tag
+    and will not be found by the per-tab lookup. Use fresh output when
+    testing.
+-   Background-tab captures are saved under whichever session UUID is
+    current when they flush (see
+    [Known Limitations](#known-limitations-and-source-tree-caveats)).
+
+------------------------------------------------------------------------
+
+# Menus
+
+## File
+System Status, Clear AI History, Print…, Export Session…, Exit
+
+## Edit
+Copy Terminal, Paste Terminal
+
+## Managers
+Session Manager, History Manager, Noise Filter Manager, Policy Manager,
+SNMP Manager, AI Provider Manager
+
+## Tools
+Flush Tee Buffer, Open api keys window, Preferences
+
+## AI Controls
+-   **System & Help:** Standard Help, Extended Help, Operational Status,
+    Feature Changelog, Hardware Analysis, Database History Logs,
+    Application Version, Clear AI Response Pane, Force Reset AI Async
+    States
+-   **Configuration:** Show Active Provider Info, Query Available Remote
+    Models, Reload from Conf File, Save to Conf File, Configure Requests
+    Per Minute (RPM), Force Re-establish Database Sockets
+-   **Toggles:** see [System Toggles](#system-toggles)
+-   **Sessions:** session commands (new, list, show, load, description,
+    default, no default, delete, read/write global)
+-   **Noise Filters:** List, Add, Delete
+-   **AI Retry Options:** Enable Auto-Retry, Set Max Retry Attempts…, Set
+    Retry Delay (Sec)…
+
+## Help
+Help Content, About
+
+Every menu action that runs a local command goes through the same command
+registry as the AI input line.
 
 ------------------------------------------------------------------------
 
 # System Toggles
 
-The **AI → Toggles** menu contains the current runtime switches.
+`AI Controls → Toggles` contains:
 
-The current source includes:
+| Toggle                                       | Purpose                                              |
+|----------------------------------------------|------------------------------------------------------|
+| Real-Time Prompt Analysis                    | Auto Reply: analyze captured terminal output         |
+| AI Payload Auto-Execution                    | Allow AI command payloads into the execution queue   |
+| Immediate Terminal Capturing (Tee)           | Capture terminal output                              |
+| Debug mode                                   | Verbose diagnostics on stderr                        |
+| XML Payload Tagging                          | Wrap payload sections in XML-style tags              |
+| Mitigation Noise Filters                     | Apply configured noise-filter patterns               |
+| Semantic Local Caching                       | Smart Cache                                          |
+| Active Rate Limiting Protection              | Requests-per-minute limiter                          |
+| Read from global database                    | Allow reading the global history/context             |
+| Write to global database                     | Write context to the global stream                   |
+| Send SNMP Payload to AI                      | Allow SNMP telemetry to reach the AI                 |
+| SNMP Ticker                                  | Scrolling SNMP display                               |
+| AI retry                                     | Automatic retry on failure                           |
+| Session config                               | Load saved settings per session                      |
 
-  -----------------------------------------------------------------------
-  Toggle                              Purpose
-  ----------------------------------- -----------------------------------
-  Real-Time Prompt Analysis           Enables automatic analysis of
-                                      relevant terminal/prompt activity
-
-  AI Payload Auto-Execution           Allows AI command payloads to enter
-                                      the execution workflow
-
-  Immediate Terminal Capturing / Tee  Captures terminal output for AI
-                                      processing
-
-  Debug                               Enables verbose diagnostic output
-
-  XML Payload Tagging                 Adds XML-style boundaries to AI
-                                      payload processing
-
-  Noise Filters                       Enables configured terminal-output
-                                      suppression rules
-
-  Smart Cache                         Enables the cache subsystem
-
-  Rate Limiting                       Enables request-per-minute
-                                      protection
-
-  Read from Global Database           Allows global history/context reads
-
-  Write to Global Database            Allows global session/context
-                                      writes
-
-  Send SNMP Payload to AI             Allows SNMP telemetry to be sent to
-                                      the AI
-
-  SNMP Ticker                         Enables the scrolling SNMP display
-
-  AI Retry                            Enables automatic retry handling
-
-  Session Config                      Enables session-based configuration
-                                      loading
-  -----------------------------------------------------------------------
-
-### Important
-
-`Auto All` exists as a command-level feature:
-
-``` text
-/auto all on
-/auto all off
-/auto all status
-```
-
-The current GUI Toggles menu does not expose `Auto All` as a separate
-check item.
+`/auto all on|off|status` toggles Tee, Auto Reply, and Auto Execute
+together. It exists as a command; the Toggles menu has no separate
+"Auto All" item.
 
 ------------------------------------------------------------------------
 
 # Idle Suspension
 
-The current source tree includes a dedicated:
-
-``` text
-idle.c
-idle.h
-```
-
-subsystem.
-
-Its purpose is to stop unattended runtime features from continuing
-indefinitely.
-
-## How it works
+Implemented in `idle.c` / `idle.h`. It stops unattended runtime features
+from running indefinitely.
 
 After the configured period without user activity, aiterm:
 
-1.  Saves the current state of the managed toggles.
-2.  Turns those managed runtime booleans off.
-3.  Updates the GUI toggle states.
-4.  Stops the SNMP ticker timer if it was active.
-5.  Leaves the application itself running.
-6.  Does not intentionally persist the temporary idle-off state as the
-    user's normal configuration.
+1.  Saves the state of the managed toggles.
+2.  Turns them off and updates the GUI check items.
+3.  Stops the SNMP ticker timer if it was active.
+4.  Keeps the application running.
+5.  Does not persist the temporary idle-off state as your configuration
+    (the state is restored before the final database sync at exit).
 
-When user activity resumes:
-
-1.  The previous toggle states are restored.
-2.  The SNMP ticker timer is recreated if it had been enabled.
-3.  The GUI is synchronized back to the previous state.
-
-This is especially useful for unattended SNMP-to-AI operation because
-the SNMP poller can remain alive while the AI-feed toggle is suspended.
+When activity resumes, the prior toggle states are restored and the
+ticker timer is recreated if it had been on.
 
 ## Configure the timeout
 
-The configuration key is:
-
 ``` ini
-idle_timeout_minutes=5
+idle_timeout_minutes=10
 ```
 
-The source accepts values from:
+The loader accepts 0 through 1440. In the current code a value of **0 is
+replaced by the default of 10 minutes**, so 0 does *not* disable idle
+suspension. Use a positive value.
 
-``` text
-0 through 1440 minutes
-```
+## What counts as activity
 
-For the current testing build, **5 minutes** is the recommended test
-value.
-
-## Important source behavior
-
-The current `idle_init()` implementation treats a zero timeout as the
-default timeout rather than as a permanent disable. Therefore, until
-that behavior is changed in the source, use a positive value when
-configuring idle behavior.
-
-## What counts as activity?
-
-The idle event handler watches for user-facing GTK events including:
-
--   Keyboard input.
--   Mouse button presses.
--   Double/triple clicks.
--   Pointer motion.
--   Scroll events.
--   Touch events.
--   Focus changes.
-
-Background events such as SNMP polling, AI responses, and normal timers
-are not intended to reset the user-activity clock.
+Keyboard input, mouse button presses (including double/triple click),
+pointer motion, scrolling, touch events, and focus changes. Background
+work (SNMP polling, AI responses, timers) does not reset the clock.
 
 ------------------------------------------------------------------------
 
 # Automatic Execution and Policies
 
-The Auto Execute subsystem is implemented in:
+Implemented in `autoexec.c`, `policy_dao.c`, and `policy_manager_gui.c`.
 
-``` text
-autoexec.c
-autoexec.h
-policy_dao.c
-policy_dao.h
-policy_manager_gui.c
-policy_manager_gui.h
-```
+## Flow
 
-AI-generated command payloads can be placed into an execution queue.
+1.  AI-generated command lines are placed in a FIFO queue.
+2.  For each line the binary name is extracted and validated as an
+    executable.
+3.  The policy for that binary is looked up in `command_policy`; if there
+    is none, the wildcard policy `*` is tried; if there is still none, the
+    result is **APPROVE**.
+4.  Action by policy type:
+    -   **ALLOW:** the command runs immediately and an
+        `[Auto-Execute ALLOW]` banner is shown.
+    -   **BLOCK** (or `DENY`): the command is refused.
+    -   **APPROVE:** the queue pauses and a confirmation dialog appears.
+5.  The dialog offers **ALLOW (Execute Command)** or **BLOCK (Deny
+    Execution)** and a checkbox *Remember policy choice for this binary*,
+    which writes the choice as a policy.
+6.  The next queued command is dispatched when the previous one finishes
+    (queue is advanced on VTE child exit).
 
-The execution workflow includes:
+Up to 16 confirmation dialogs (`MAX_DLG`) can be open; further commands are
+dropped.
 
--   Command validation.
--   Queueing.
--   Confirmation dialogs.
--   Policy lookup.
--   Risk/action handling.
--   Shell execution.
--   Queue inspection.
-
-## Enable Auto Execute
-
-Use:
+## Enable
 
 ``` text
 /autoexe on
 ```
 
-or the Toggles menu.
-
-## Show the execution queue
+or the Toggles menu. Show the pending queue:
 
 ``` text
 /show queue
 ```
 
-## Policy Manager
+## Policy Manager and commands
 
-Open:
-
-``` text
-Managers → Policy Manager
-```
-
-or:
+Open `Managers → Policy Manager` or `/open policy manager`.
 
 ``` text
-/open policy manager
+policy list
+policy find <command>
+policy add <command|*> <ALLOW|BLOCK|APPROVE> <LOW|MEDIUM|HIGH|CRITICAL>
+policy delete <command>
 ```
 
-Policy commands include:
+The verb is case-insensitive. Policies live in the `command_policy`
+table (columns `command_name`, `policy_type`, `risk_level`).
 
-``` text
-/policy list
-/policy find <command>
-/policy add <command> <type> <risk>
-/policy delete <command>
-```
-
-The policy database table is:
-
-``` text
-command_policies
-```
+> Auto Execute lets AI-generated text reach a real shell. Treat it as a
+> privileged feature. See [Security Notes](#security-notes).
 
 ------------------------------------------------------------------------
 
 # Noise Filtering
 
-Noise filtering is intended to keep repetitive terminal chatter from
-becoming AI context.
+Noise filtering keeps repetitive terminal chatter out of the Tee data and
+AI context.
 
-Examples of useful filter targets include:
-
--   Repeated prompts.
--   Shell redraw noise.
--   High-frequency status lines.
--   Known repetitive log messages.
+-   Patterns are stored in the `noise_filters` table and cached in memory.
+-   A line is dropped when it **contains** a stored pattern as a literal
+    substring. Patterns are *not* treated as regular expressions, even
+    though one menu label says "Regex".
+-   Typical targets: repeated prompts, shell redraw noise, status lines,
+    known log chatter.
 
 ## GUI
 
-Open:
-
-``` text
-Managers → Noise Filter Manager
-```
-
-or:
-
-``` text
-/open noise manager
-```
-
-The manager supports adding and deleting patterns.
+`Managers → Noise Filter Manager`, or `/open noise manager`. The manager
+lists, adds, and deletes patterns.
 
 ## Commands
 
 ``` text
-/noise filter on
-/noise filter off
-/noise filter status
-
+/noise filter on|off|status
 /noise add <pattern>
-/noise delete <pattern>
 /noise list
 /noise reload
+/noise delete <pattern>     (placeholder - not implemented yet)
 ```
 
-Patterns are stored through the database-backed noise filter subsystem.
+`/noise delete` currently prints a "to be announced" message. Delete
+patterns from the Noise Filter Manager instead.
 
 ------------------------------------------------------------------------
 
 # Smart Cache
 
-Smart Cache is implemented in:
+Implemented in `gemini_cache.c`. It provides cache-aware handling of AI
+context for Gemini and can be invalidated or rebuilt on demand.
 
 ``` text
-gemini_cache.c
-gemini_cache.h
-```
-
-It provides cache-aware handling for AI context.
-
-Commands:
-
-``` text
-/smart cache on
-/smart cache off
-/smart cache status
+/smart cache on|off|status
 /invalidate cache
 ```
 
-The cache subsystem can be useful when repeated context would otherwise
-produce unnecessary repeated provider work.
-
-The cache is initialized during application startup and can be
-invalidated manually.
+The cache is initialized at startup.
 
 ------------------------------------------------------------------------
 
 # Rate Limiting
 
-The rate limiter is implemented in:
-
-``` text
-ratelimit.c
-ratelimit.h
-```
-
-The default startup RPM value in `initialize_booleans()` is:
-
-``` text
-20 requests/minute
-```
-
-The configuration file can override this with:
+Implemented in `ratelimit.c`. The default is 20 requests per minute.
 
 ``` ini
 rpm=20
 ```
 
-Toggle protection:
-
 ``` text
-/ratelimit on
-/ratelimit off
-/ratelimit status
-```
-
-Change the RPM ceiling:
-
-``` text
+/ratelimit on|off|status
 /rpm 10
 ```
 
-The rate limiter is particularly useful with provider/developer tiers
-that enforce request limits.
+Useful with providers or tiers that enforce request limits.
 
 ------------------------------------------------------------------------
 
 # AI Retry
 
-AI Retry is configured through:
-
-``` text
-ai_retry.c
-ai_retry.h
-```
-
-Configuration:
+Implemented in `ai_retry.c`.
 
 ``` ini
 ai_retry_enabled=0
@@ -1086,527 +1030,249 @@ ai_retry_max_retries=3
 ai_retry_delay_sec=5
 ```
 
-The GUI provides:
-
 ``` text
-Toggle AI retry
-```
-
-and controls for:
-
--   Maximum retries.
--   Retry delay.
-
-Commands:
-
-``` text
-/autoretry on
-/autoretry off
-/autoretry status
-
+/autoretry on|off|status
 /retry times <number>
 /retry delay <seconds>
 ```
 
-The current source limits the menu-entered retry count to 1--10 and
-delay to 1--60 seconds.
+The GUI offers `AI Controls → AI Retry Options` with an enable item and
+dialogs for max attempts (1-10) and delay (1-60 seconds).
 
 ------------------------------------------------------------------------
 
 # SNMP Monitoring
 
-The SNMP subsystem is one of the larger subsystems in aiterm.
-
-Relevant files:
-
-``` text
-snmp_manager.c
-snmp_manager.h
-snmp_manager_gui.c
-snmp_manager_gui.h
-```
-
-It uses Net-SNMP.
+Implemented in `snmp_manager.c` and `snmp_manager_gui.c` using Net-SNMP.
 
 ## SNMP Target Manager
 
-Open:
-
-``` text
-Managers → SNMP Target Manager
-```
-
-or:
-
-``` text
-/open snmp manager
-```
-
-The GUI supports:
-
--   Add target.
--   Edit target.
--   Delete target.
--   Toggle target active state.
--   Refresh target list.
--   Multiple row selection.
--   Column sorting.
--   Poller delay adjustment.
-
-Target information includes:
-
--   ID.
--   Label.
--   IP address.
--   Community.
--   OID string.
--   Last value.
--   Active state.
+`Managers → SNMP Manager`, or `/open snmp manager`. Supports add, edit,
+delete, toggle active state, refresh, multi-row selection, column sorting,
+and poll-delay adjustment. Each target has an ID, label, IP address,
+community, OID string, last value, and active state.
 
 ## Poll interval
 
-The GUI slider supports approximately:
-
-``` text
-10 seconds through 3600 seconds
-```
-
-The configuration key is:
+The GUI slider covers roughly 10 to 3600 seconds.
 
 ``` ini
 snmp_poll_interval=60
 ```
 
-The actual value is stored in seconds.
-
-## Start/restart the poller
-
-``` text
-/snmp poller start
-/snmp poller restart
-```
-
-The source currently does not expose the old stop path because that code
-was intentionally disabled after being described in the source as
-glitchy.
-
-## List SNMP targets
+## Commands
 
 ``` text
 /snmp cmd list
-```
-
-## Add an SNMP target
-
-``` text
 /snmp cmd add <label> <ip> <community> <oid>
-```
-
-## Edit
-
-``` text
 /snmp cmd edit <id> <label> <ip> <community> <oid>
-```
-
-## Delete
-
-``` text
 /snmp cmd delete <id>
+
+/snmp poller start
+/snmp poller restart
+
+/snmp enable on|off|status      (send SNMP payload to AI)
+/snmp force                     (flush SNMP payload to AI now)
+/snmp dump                      (dump raw SNMP data to the AI pane)
+/snmp ticker on|off|status
 ```
 
-## Send SNMP to AI
+`/snmp poller stop` has been removed from the source (the old stop path
+was disabled as unreliable). `restart` only starts the poller if it is not
+already running.
 
-``` text
-/snmp enable on
-/snmp enable off
-/snmp enable status
-```
-
-## Force an SNMP flush
-
-``` text
-/snmp force
-```
-
-## Dump raw SNMP data
-
-``` text
-/snmp dump
-```
-
-## SNMP ticker
-
-``` text
-/snmp ticker on
-/snmp ticker off
-/snmp ticker status
-```
-
-The ticker scrolls SNMP values through the AI-side display.
+SNMP polling and sending SNMP to the AI are separate functions; both must
+be on (with at least one active target) for SNMP data to reach the AI.
 
 ------------------------------------------------------------------------
 
 # Sessions and Persistent Context
 
-Session handling is implemented through:
-
-``` text
-session_manager.c
-session_manager.h
-session_manager_gui.c
-session_manager_gui.h
-```
-
-Each session has a UUID.
-
-## Session commands
-
-Create:
+Implemented in `session_manager.c` and `session_manager_gui.c`. Each
+session has a UUID.
 
 ``` text
 /session new
-```
-
-List:
-
-``` text
 /session list
-```
-
-Show the current session:
-
-``` text
 /session show
-```
-
-Load:
-
-``` text
 /session load <UUID>
-```
-
-Set the default:
-
-``` text
 /session default <UUID>
-```
-
-Clear the default:
-
-``` text
 /session no default
-```
-
-Describe/rename:
-
-``` text
 /session description <text>
-```
-
-Delete:
-
-``` text
 /session delete <UUID>
-```
-
-Synchronize:
-
-``` text
 /session sync
+/session config on|off|status
+/session read from global on|off|status
+/session write to global on|off|status
 ```
 
 ## Session Manager GUI
 
-Open:
+`Managers → Session Manager`: create, load, set default, delete,
+rename/describe, refresh.
 
-``` text
-Managers → Session Manager
-```
+## Session-stored settings
 
-The GUI supports:
+Saved to the `sessions` row: debug, Tee, Auto Reply, Auto Execute, rate
+limiting, Smart Cache, noise filtering, XML payload tagging, global
+read/write, and session-config loading. `/session sync` writes the current
+values; they are also synced on exit.
 
--   Create.
--   Load.
--   Set default.
--   Delete.
--   Rename/describe.
--   Refresh.
+## Global vs strict session context
 
-## Session configuration
-
-The following settings can be associated with sessions:
-
--   Debug mode.
--   Tee.
--   Auto Reply.
--   Auto Execute.
--   Rate limiting.
--   Smart Cache.
--   Noise filtering.
--   XML payload tagging.
--   Global read/write behavior.
--   Session-config loading.
-
-Toggle:
-
-``` text
-/session config on
-/session config off
-/session config status
-```
-
-------------------------------------------------------------------------
-
-# Global vs Strict Session Context
-
-Two controls determine how history is shared:
-
-``` text
-/session read from global on
-/session read from global off
-
-/session write to global on
-/session write to global off
-```
-
-When global reading is disabled, the application uses stricter
-session-specific context.
-
-When global writing is disabled, the active session does not write its
-context into the global broadcast/history path.
-
-These settings are also available in the Toggles menu.
+When global reading is off, only the current session's context is used.
+When global writing is off, the session's context is not written to the
+global (all-zero UUID) stream.
 
 ------------------------------------------------------------------------
 
 # History Manager
 
-Open:
+`Managers → History Manager`. Displays stored history, can filter to the
+current session, and can delete or clear rows. Table: `aiterm_history`.
 
-``` text
-Managers → History Manager
-```
-
-The History Manager can:
-
--   Display stored history.
--   Filter to the current session.
--   Delete selected history.
--   Clear history.
-
-The underlying table is:
-
-``` text
-aiterm_history
-```
-
-History records contain fields including:
-
--   ID.
--   Role.
--   Content.
--   Tee flag.
--   Session UUID.
--   Sequence ID.
--   Creation timestamp.
+You can also print recent history with `/history` or
+`AI Controls → System & Help → Database History Logs`.
 
 ------------------------------------------------------------------------
 
 # Exporting Sessions
 
-Use:
+`File → Export Session…` offers a content choice (AI pane, terminal, or
+both) and four formats:
 
 ``` text
-File → Export Session…
+Plain Text (.txt)   HTML (.html)   JSON (.json)   XML (.xml)
 ```
 
-The export dialog supports selecting:
-
--   AI pane only.
--   Terminal only.
--   Both.
-
-Supported output formats:
-
-``` text
-Plain text
-HTML
-JSON
-XML
-```
-
-The export code obtains the active VTE scrollback and the AI text
-buffer, then serializes the selected content.
+The export reads the active tab's VTE scrollback and the AI text buffer.
 
 ------------------------------------------------------------------------
 
 # Printing
 
-Use:
-
-``` text
-File → Print
-```
-
-The print subsystem is implemented in:
-
-``` text
-print.c
-print.h
-```
-
-The application prepares the current session content for GTK printing.
+`File → Print…` prepares the current session content for GTK printing
+(`print.c`).
 
 ------------------------------------------------------------------------
 
 # Multi-Tab Terminal
 
-aiterm uses a GTK notebook for multiple terminal tabs.
+A `GtkNotebook` holds up to **32** terminal tabs (`MAX_TABS`).
 
-Features include:
+-   New tabs are labelled `pts/1`, `pts/2`, ... in creation order.
+-   Each tab has a **×** close button.
+-   **Double-clicking** the tab bar opens a new tab.
+-   **Right-click** in a terminal shows **New Tab / Copy / Paste**.
+-   Ctrl+Tab moves focus: AI input → active terminal → AI view.
+-   Fonts and transparency are applied to the newly selected tab.
+-   If you close the last tab, a fresh one is created.
+-   Each tab runs its own `/bin/bash`, and Tee captures each tab
+    separately (see [Tee Capture and Tabs](#tee-capture-and-tabs)).
 
--   Multiple terminal sessions.
--   Per-tab session UUID.
--   Per-tab system settings.
--   Tab switching.
--   Tab rename menu entry.
--   Tab close menu entry.
--   Double-click tab-bar behavior for creating a new tab.
--   Right-click terminal context menu.
+## Not wired up yet
 
-## Right-click terminal menu
-
-The terminal context menu provides:
-
--   New Tab.
--   Copy.
--   Tab management actions.
-
-## Keyboard shortcut
-
-The source handles:
-
-``` text
-Ctrl + Tab
-```
-
-for cycling focus between:
-
-``` text
-AI input → active terminal → AI view
-```
-
-The terminal also supports normal VTE copy/paste behavior.
+-   The per-tab flag array (`TabSettings`) exists, but the handler that
+    would copy a tab's toggles into the active settings when you switch
+    tabs is **disabled** in `gui.c`. Toggles such as Tee, Auto Reply, and
+    Auto Execute are effectively global across tabs.
+-   *Rename Tab* and *Close Tab* context-menu items are defined, but their
+    popup hook is not connected, and tab rename is still a TODO.
+-   Per-tab session UUIDs are not assigned.
 
 ------------------------------------------------------------------------
 
-# GUI Preferences
+# Other GUI Features
 
-The Tools/Preferences workflow provides controls for:
-
--   Terminal transparency.
--   AI pane transparency.
--   Terminal font.
--   AI font.
-
-Configuration fields:
+-   **Command recall:** Up/Down arrows in the AI input recall earlier
+    local commands.
+-   **File analysis:** the paperclip button opens a file chooser and sends
+    the file's text to the AI as a `FILE ANALYSIS` request.
+-   **Copy button:** copies the full AI string contents.
+-   **Preferences** (`Tools → Preferences`): terminal and AI pane
+    transparency and fonts.
 
 ``` ini
-term_transparency=0.8
-ai_transparency=0.8
+term_transparency=0.800000
+ai_transparency=0.800000
 terminal_font=Monospace 10
 ai_font=Monospace 10
 ```
 
-The actual transparency values are floating-point values.
-
-The application also enables GTK's dark-theme preference during startup.
+-   A dark GTK theme is forced for all windows.
+-   Token usage/status area and Operational Status (`/status`).
 
 ------------------------------------------------------------------------
 
 # XML Payload Tagging
 
-XML tagging can wrap AI payload boundaries in a more explicit structure.
-
-Toggle:
+Wraps payload sections in XML-style tags (for example `<tee>`,
+`<history>`, SNMP, user text) so the AI can tell sources apart.
 
 ``` text
-/xml tagging on
-/xml tagging off
-/xml tagging status
+/xml tagging on|off|status
 ```
-
-Configuration:
 
 ``` ini
 xml_tagging=1
 ```
 
-This is independent of the XML **export** format. Exporting a session as
-XML does not require the runtime payload-tagging feature to be enabled.
+This is independent of XML *export*.
 
 ------------------------------------------------------------------------
 
 # Debugging
 
-Enable debug mode:
-
 ``` bash
 ./aiterm --debug
+./aiterm --debug 2>aiterm-debug.log
 ```
 
-or:
+or at run time:
 
 ``` text
-/debug on
-/debug off
-/debug status
+/debug on|off|status
 ```
 
-Colorized debug output can be controlled with:
+Color control:
 
 ``` bash
 ./aiterm --color
 ./aiterm --bw
 ```
 
-or:
-
 ``` text
-/color on
-/color off
-/color status
+/color on|off|status
 ```
 
-Debug output is primarily written to stderr.
-
-For a terminal session:
-
-``` bash
-./aiterm --debug 2>aiterm-debug.log
-```
+Color is used only when stderr is a TTY. Debug output goes to stderr.
 
 ------------------------------------------------------------------------
 
 # Command Reference
 
-aiterm accepts local commands in the AI input path. A command may be
-entered with or without the leading `/`.
+Commands are typed in the AI input line. The leading `/` is optional.
+Matching is case-insensitive and by prefix against the command registry
+(first match wins), so keep the exact command words.
 
 ## Core
 
 ``` text
 /help
+/legacy help
 /extended help
 /features
 /version
 /status
 /hw
+/history
 /clear
+/directives
+/command line help
 /exit
 ```
 
-## AI control
+## Toggles
 
 ``` text
 /tee on|off|status
@@ -1622,33 +1288,35 @@ entered with or without the leading `/`.
 /xml tagging on|off|status
 ```
 
-## Provider
+## Provider and configuration
 
 ``` text
 /provider
 /list models
+/load config
+/save config
 /open provider manager
 /close provider manager
+/open provider api keys
 ```
 
-## Cache
+## Cache, state, database
 
 ``` text
 /invalidate cache
+/reset state
+/reset db
 ```
 
 ## Sessions
 
 ``` text
-/session new
-/session list
-/session show
+/session new | list | show | sync
 /session load <UUID>
 /session description <text>
 /session default <UUID>
 /session no default
 /session delete <UUID>
-/session sync
 /session config on|off|status
 /session read from global on|off|status
 /session write to global on|off|status
@@ -1657,23 +1325,12 @@ entered with or without the leading `/`.
 ## Managers
 
 ``` text
-/open session manager
-/close session manager
-
-/open history manager
-/close history manager
-
-/open noise manager
-/close noise manager
-
-/open policy manager
-/close policy manager
-
-/open snmp manager
-/close snmp manager
-
-/open provider manager
-/close provider manager
+/open session manager    /close session manager
+/open history manager    /close history manager
+/open noise manager      /close noise manager
+/open policy manager     /close policy manager
+/open snmp manager       /close snmp manager
+/open provider manager   /close provider manager
 ```
 
 ## Noise
@@ -1681,33 +1338,28 @@ entered with or without the leading `/`.
 ``` text
 /noise filter on|off|status
 /noise add <pattern>
-/noise delete <pattern>
 /noise list
 /noise reload
+/noise delete <pattern>      (not implemented)
 ```
 
 ## Policy
 
 ``` text
-/policy list
-/policy find <command>
-/policy add <command> <type> <risk>
-/policy delete <command>
+policy list
+policy find <command>
+policy add <command|*> <ALLOW|BLOCK|APPROVE> <LOW|MEDIUM|HIGH|CRITICAL>
+policy delete <command>
 ```
 
 ## SNMP
 
 ``` text
-/snmp cmd list
-/snmp cmd add <label> <ip> <community> <oid>
-/snmp cmd edit <id> <label> <ip> <community> <oid>
-/snmp cmd delete <id>
-
+/snmp cmd list|add|edit|delete ...
 /snmp enable on|off|status
 /snmp force
 /snmp dump
-/snmp poller start
-/snmp poller restart
+/snmp poller start|restart
 /snmp ticker on|off|status
 ```
 
@@ -1716,12 +1368,6 @@ entered with or without the leading `/`.
 ``` text
 /retry times <number>
 /retry delay <seconds>
-```
-
-## Database
-
-``` text
-/reset db
 ```
 
 ## Execution queue
@@ -1734,108 +1380,62 @@ entered with or without the leading `/`.
 
 # Command-Line Options
 
-Run:
-
-``` bash
-./aiterm --help
-```
-
-Current command-line options include:
-
-  Option                Purpose
-  --------------------- ------------------------------------------------
-  `--help`              Display command-line help
-  `--version`           Display version/build information
-  `--debug`             Enable debug logging
-  `--color`             Enable colorized debug output
-  `--bw`                Disable colorized debug output
-  `--features`          Display feature information
-  `--highlights`        Display application highlights
-  `--master=<key>`      Supply the configuration encryption master key
-  `--directives`        Display AI directives
-  `--list-models`       Query the Gemini model list
-  `--decrypt-pw`        Display decrypted credentials
-  `--crypt-pw=<text>`   Encrypt a plaintext secret
+| Option                | Purpose                                                    |
+|-----------------------|------------------------------------------------------------|
+| `--help`              | Show command-line help                                     |
+| `--version`           | Print version, build ID, build time                        |
+| `--debug`             | Verbose logging to stderr                                  |
+| `--color`             | Colorize debug output (if stderr is a TTY)                 |
+| `--bw`                | Force black-and-white debug output                         |
+| `--features`          | Show feature/changelog text                                |
+| `--highlights`        | Show application highlights                                |
+| `--directives`        | Show the AI directives                                     |
+| `--provider`          | Print the active provider, model, protocol, URL, endpoint  |
+| `--list-models`       | List available Gemini models (needs master key)            |
+| `--master=<key>`      | Supply the config-encryption master key                    |
+| `--crypt-pw=<text>`   | Encrypt a plaintext secret and print it                    |
+| `--decrypt-pw`        | Print all decrypted provider keys and the DB password      |
 
 Examples:
 
 ``` bash
 ./aiterm --version
-```
-
-``` bash
-./aiterm --features
-```
-
-``` bash
+./aiterm --provider
 ./aiterm --master='secret' --debug
-```
-
-``` bash
 ./aiterm --master='secret' --crypt-pw='database-password'
 ```
+
+Options are processed in order and several (`--version`, `--help`,
+`--provider`, `--features`, `--crypt-pw`, `--decrypt-pw`) exit
+immediately after printing.
 
 ------------------------------------------------------------------------
 
 # Environment Variables
 
-## Master encryption key
+| Variable                        | Purpose                                                       |
+|---------------------------------|---------------------------------------------------------------|
+| `AITERM_MASTER_KEY`             | Master key (fallback when `--master` is not given)            |
+| `AITERM_CONFIG`                 | Path of the config file (checked first)                       |
+| `AITERM_SQL_DIR`                | Directory of schema `*.sql` scripts                           |
+| `AITERM_DEBUG`                  | `1`/`0` - enable debug mode                                   |
+| `AITERM_COLOR`                  | `1`/`0` - colorized debug output                              |
+| `AITERM_PROVIDER`               | Override the provider name                                    |
+| `AITERM_MODEL`                  | Override the model                                            |
+| `AITERM_PROVIDER_BASE_URL`      | Provider transport override                                   |
+| `AITERM_PROVIDER_ENDPOINT`      | Provider transport override                                   |
+| `AITERM_PROVIDER_AUTH_HEADER`   | Provider transport override                                   |
+| `AITERM_PROVIDER_AUTH_SCHEME`   | Provider transport override                                   |
+| `AITERM_PROVIDER_QUERY_KEY`     | Provider transport override                                   |
+| `<NAME>_KEY` / `<NAME>_API_KEY` | API key fallback when the config has no key for that provider (e.g. `GEMINI_KEY` or `GEMINI_API_KEY`) |
 
-``` bash
-AITERM_MASTER_KEY
-```
-
-Example:
-
-``` bash
-export AITERM_MASTER_KEY='your-master-key'
-```
-
-## Debug mode
-
-The startup code also reads:
-
-``` bash
-AITERM_DEBUG
-```
-
-Example:
-
-``` bash
-AITERM_DEBUG=1 ./aiterm
-```
-
-## Debug color
-
-The startup code reads:
-
-``` bash
-AITERM_COLOR
-```
-
-Example:
-
-``` bash
-AITERM_COLOR=1 ./aiterm
-```
-
-## API key fallback
-
-If the configured encrypted API key is unavailable, startup checks:
-
-``` text
-GEMINI_API_KEY
-OPENAI_API_KEY
-```
-
-The provider-specific configuration remains the preferred mechanism.
+Saved Provider Manager values override the built-in defaults.
 
 ------------------------------------------------------------------------
 
 # Configuration Reference
 
-The following keys are written by the current `save_config()`
-implementation.
+Keys written by `save_config()`:
 
 ## General
 
@@ -1859,9 +1459,17 @@ provider_api_key_in_query=0
 ## Encrypted credentials
 
 ``` ini
-api_key=<AES-256-CBC encrypted value>
-db_pass=<AES-256-CBC encrypted value>
+OPENAI_KEY=<AES-256-CBC hex>
+GEMINI_KEY=<AES-256-CBC hex>
+GROQ_KEY=<AES-256-CBC hex>
+OPENROUTER_KEY=<AES-256-CBC hex>
+MISTRAL_KEY=<AES-256-CBC hex>
+OLLAMA_KEY=<AES-256-CBC hex>
+CUSTOM_KEY=<AES-256-CBC hex>
+db_pass=<AES-256-CBC hex>
 ```
+
+A legacy `api_key=` line is read but never written.
 
 ## Database
 
@@ -1874,8 +1482,8 @@ db_name=aiterm_db
 ## GUI
 
 ``` ini
-term_transparency=0.8
-ai_transparency=0.8
+term_transparency=0.800000
+ai_transparency=0.800000
 terminal_font=Monospace 10
 ai_font=Monospace 10
 ```
@@ -1898,568 +1506,191 @@ xml_tagging=0
 load_from_session=0
 ```
 
-## Rate limit
+## Rate limit, SNMP, retry, idle
 
 ``` ini
 rpm=20
-```
-
-## SNMP
-
-``` ini
 snmp_poll_interval=60
-```
-
-## AI retry
-
-``` ini
 ai_retry_enabled=0
 ai_retry_max_retries=3
 ai_retry_delay_sec=5
+idle_timeout_minutes=10
 ```
-
-## Idle
-
-``` ini
-idle_timeout_minutes=5
-```
-
-The current source accepts an idle timeout between 0 and 1440 minutes,
-although the current initialization code replaces zero with the default
-timeout.
-
-------------------------------------------------------------------------
-
-# MariaDB Database
-
-The application uses MariaDB/MySQL client APIs and connects to the
-configured database host during startup.
-
-The database initialization code automatically attempts to create the
-configured database:
-
-``` sql
-CREATE DATABASE IF NOT EXISTS <db_name>
-```
-
-It also automatically creates/migrates several structures.
-
-## Tables created or migrated by the current source
-
-The source explicitly creates:
-
-``` text
-aiterm_history
-relevance_triggers
-command_policies
-```
-
-and migrates:
-
-``` text
-sessions
-```
-
-The source also uses:
-
-``` text
-snmp_targets
-```
-
-for SNMP configuration.
-
-### Important
-
-The current source tree does **not** contain a `schema.sql` file.
-
-It also does not explicitly create the `sessions` or `snmp_targets`
-tables in the database initialization function. Therefore a fresh
-deployment must ensure those tables exist with a schema compatible with
-the source before using session/SNMP features.
-
-This is an important deployment requirement and should not be hidden
-behind a misleading claim that the application is completely
-self-initializing.
-
-## Database permissions
-
-The configured database account must have sufficient permissions for the
-operations aiterm performs.
-
-At minimum, normal operation requires the ability to:
-
--   Connect to the configured MariaDB server.
--   Select the application database.
--   Create/migrate the application's tables where applicable.
--   Insert/update/delete application records.
--   Read session/history/SNMP records.
-
-If the account cannot create databases, create `aiterm_db` manually and
-grant the application account access.
-
-------------------------------------------------------------------------
-
-# Database Connection Behavior
-
-The current source configures a short connection timeout and uses the
-global MariaDB connection shared by application subsystems.
-
-Database operations are protected by application mutexes in the areas
-that share the connection.
-
-If the database connection fails, run:
-
-``` text
-/reset db
-```
-
-and inspect debug output.
 
 ------------------------------------------------------------------------
 
 # Troubleshooting
 
-## `pkg-config` cannot find GTK
-
-Example:
-
-``` text
-Package gtk+-3.0 was not found
-```
-
-Install the GTK development package:
+## `pkg-config` cannot find GTK / VTE
 
 ``` bash
-sudo apt install libgtk-3-dev
-```
-
-Then verify:
-
-``` bash
+sudo apt install libgtk-3-dev libvte-2.91-dev
 pkg-config --modversion gtk+-3.0
-```
-
-GTK's documentation confirms that GTK applications use `pkg-config` to
-obtain compiler and linker flags.\
-See https://docs.gtk.org/gtk3/compiling.html
-
-## VTE is missing
-
-Verify:
-
-``` bash
 pkg-config --modversion vte-2.91
 ```
 
-On Debian/Ubuntu:
-
-``` bash
-sudo apt install libvte-2.91-dev
-```
-
 ## `uuidgen: command not found`
-
-Install:
 
 ``` bash
 sudo apt install uuid-runtime
 ```
 
-## Net-SNMP headers are missing
-
-Install the Net-SNMP development package, typically:
+## Net-SNMP headers missing
 
 ``` bash
 sudo apt install libsnmp-dev
 ```
 
-## MariaDB pkg-config module missing
+## Build error: implicit declaration of a function
 
-Check:
+Usually a stale or mismatched header. Run `make clean && make`. If a
+`make` warning mentions file timestamps in the future, fix the clock or
+`touch *.c *.h` first.
 
-``` bash
-pkg-config --list-all | grep -Ei 'mariadb|mysql'
-```
+## aiterm exits immediately at startup
 
-The primary Makefile checks for:
-
-``` text
-libmariadb
-mariadb
-mysqlclient
-```
+The startup network check requires a non-loopback IPv4 interface. With
+only `lo` configured, aiterm exits. Bring up a network interface (a
+virtual one is fine).
 
 ## API key errors
 
-Check:
-
 ``` bash
 ./aiterm --master='YOUR_MASTER_KEY' --decrypt-pw
+./aiterm --master='YOUR_MASTER_KEY' --provider
 ```
 
-Verify that:
-
--   The master key is correct.
--   `api_key=` contains a valid encrypted value.
--   The selected provider is correct.
--   The model name is valid.
--   The endpoint is reachable.
+Check that: the master key is correct, the key for the *selected*
+provider (e.g. `GEMINI_KEY`) exists, the model name is valid, and the
+endpoint is reachable. Use the Provider Manager's test button.
 
 ## Database errors
-
-Run with debug output:
 
 ``` bash
 ./aiterm --debug 2>aiterm-debug.log
 ```
 
-Look for:
+Look for `[DB]` lines. Confirm the host, user, encrypted password and
+database name, that the schema scripts exist in the SQL directory
+(`AITERM_SQL_DIR` or `/usr/share/aiterm/db`), and try `/reset db`.
 
-``` text
-[DB]
-```
+## Tee does not capture a tab
 
-messages.
+-   Confirm `/tee status` is ON.
+-   Output is flushed after about 2 seconds of silence in that tab.
+-   Use `Tools → Flush Tee Buffer` to force it.
+-   Remember a manual question uses the **focused** tab's data.
 
-Verify the configuration:
+## AI describes aiterm's own debug logs
 
-``` ini
-db_host=...
-db_user=...
-db_pass=<encrypted>
-db_name=...
-```
+Debug output (stderr) is appearing in a terminal tab that Tee is
+capturing. Redirect it (`2>file`) or ask from a different tab.
 
 ## SNMP does not produce AI traffic
 
-Check all three layers:
-
-``` text
-SNMP Poller
-SNMP Target
-Send SNMP Payload to AI
-```
-
-Useful commands:
+Check all three layers: poller running, at least one active target, and
+*Send SNMP Payload to AI* on.
 
 ``` text
 /snmp cmd list
-/snmp ticker status
 /snmp enable status
+/snmp ticker status
 /snmp poller start
 ```
 
-Remember that SNMP polling and sending SNMP data to the AI are separate
-functions.
+## Idle mode too aggressive / does not wake
 
-## Idle mode appears not to wake
-
-Activity is detected from GTK user events. Test with:
-
--   Keyboard input.
--   Mouse click.
--   Pointer movement.
--   Scroll.
--   Focus changes.
-
-If the application remains suspended, enable debug output and look for:
-
-``` text
-aiterm IDLE
-```
-
-messages.
-
-## Idle mode is too aggressive
-
-Increase:
-
-``` ini
-idle_timeout_minutes=15
-```
-
-or another positive value.
-
-Because the current implementation treats zero as the default timeout
-during initialization, do not use `0` expecting it to disable idle
-behavior.
+Raise `idle_timeout_minutes` (a positive number; 0 means the 10-minute
+default). With `--debug`, look for `aiterm IDLE` messages.
 
 ------------------------------------------------------------------------
 
 # Development Notes
 
-## Source language
-
-The project is written primarily in:
-
-``` text
-C
-```
-
-using GTK 3 and GLib.
-
-## Threading
-
-The application uses:
-
--   POSIX threads.
--   GTK/GLib main-loop callbacks.
--   Mutexes and condition variables.
--   Background database initialization.
--   Background AI/telemetry work.
-
-UI updates are generally scheduled back onto the GTK main thread.
-
-## Provider abstraction
-
-AI provider selection is intentionally centralized so that:
-
-``` text
-Tee
-SNMP
-AI worker
-```
-
-do not each need provider-specific dispatch logic.
-
-## Idle subsystem
-
-The idle subsystem intentionally changes runtime booleans directly
-rather than routing every temporary state change through the normal
-menu-command pipeline.
-
-This is important because normal toggle operations may synchronize state
-to the database. Idle suspension is intended to be temporary.
-
-The state flow is:
-
-``` text
-NORMAL
-  |
-  | no user activity for configured timeout
-  v
-SUSPENDED
-  |
-  | user activity
-  v
-NORMAL
-```
-
-The pre-idle states are stored individually so a mixed state such as:
-
-``` text
-Tee       ON
-AutoExec  OFF
-SNMP AI   ON
-Ticker    ON
-Debug     OFF
-Retry     ON
-```
-
-can be restored exactly.
+-   Written in C with GTK 3, GLib, POSIX threads, libcurl, and json-c.
+-   UI updates are scheduled back onto the GTK main thread; AI and SQL
+    work runs on worker threads.
+-   One global MariaDB connection, protected by a mutex.
+-   Provider selection is centralized so Tee, SNMP, and the AI worker do
+    not each need provider-specific dispatch.
+-   The idle subsystem changes runtime booleans directly (not through the
+    menu-command pipeline) so that suspension is never persisted as a
+    user choice.
+-   Tee capture state lives on each VTE widget (`g_object_set_data`), and
+    each tab's watcher timer holds a `GWeakRef` to its terminal so closing
+    a tab ends the timer safely.
+-   `mkpkg.sh` creates a source `.tar.gz` named from the parent directory
+    layout (`<project>-<version>.tar.gz`).
+-   `show-source.sh`, `aiterm-test.py`, and `aiterm-test2.py` are
+    development helpers.
 
 ------------------------------------------------------------------------
 
 # Project File Map
 
-  File                           Purpose
-  ------------------------------ -----------------------------------------------
-  `main.c`                       Application startup/shutdown
-  `main.h`                       Main application declarations
-  `gui.c`                        Main GTK interface
-  `gui.h`                        GUI/AppContext definitions
-  `terminal.c`                   VTE terminal handling
-  `terminal.h`                   Terminal declarations
-  `menu.c`                       GTK menus and menu actions
-  `menu.h`                       Menu declarations
-  `toggles.c`                    Toggle state routing
-  `toggles.h`                    Toggle definitions
-  `commands.c`                   Local command registry and handlers
-  `commands.h`                   Command declarations
-  `ai_provider.c`                Provider abstraction
-  `ai_provider.h`                Provider abstraction interface
-  `provider_manager_gui.c`       Provider configuration GUI
-  `provider_manager_gui.h`       Provider manager interface
-  `gemini.c`                     Gemini API implementation
-  `gemini.h`                     Gemini declarations
-  `openai.c`                     OpenAI-compatible API implementation
-  `openai.h`                     OpenAI declarations
-  `gemini_cache.c`               Smart cache
-  `gemini_cache.h`               Smart cache interface
-  `ai_retry.c`                   AI retry engine
-  `ai_retry.h`                   Retry configuration
-  `autoexec.c`                   AI command execution queue
-  `autoexec.h`                   Auto execution declarations
-  `policy_dao.c`                 Policy database access
-  `policy_dao.h`                 Policy DAO interface
-  `policy_manager_gui.c`         Policy Manager
-  `policy_manager_gui.h`         Policy Manager declarations
-  `tee_handler.c`                Terminal capture and AI feed
-  `tee_handler.h`                Tee declarations
-  `noisefilter.c`                Noise filtering engine
-  `noisefilter.h`                Noise filter interface
-  `noise_filter_manager_gui.c`   Noise filter GUI
-  `noise_filter_manager_gui.h`   Noise filter GUI declarations
-  `ratelimit.c`                  Request limiter
-  `ratelimit.h`                  Rate limiter declarations
-  `snmp_manager.c`               SNMP engine
-  `snmp_manager.h`               SNMP declarations
-  `snmp_manager_gui.c`           SNMP Target Manager
-  `snmp_manager_gui.h`           SNMP GUI declarations
-  `session_manager.c`            Session persistence
-  `session_manager.h`            Session declarations
-  `session_manager_gui.c`        Session Manager
-  `session_manager_gui.h`        Session GUI declarations
-  `history_manager_gui.c`        History Manager
-  `history_manager_gui.h`        History GUI declarations
-  `export.c`                     Session export
-  `export.h`                     Export declarations
-  `print.c`                      GTK printing
-  `print.h`                      Printing declarations
-  `crypto.c`                     Credential encryption/decryption
-  `crypto.h`                     Crypto declarations
-  `config.c`                     Configuration load/save
-  `config.h`                     Configuration declarations
-  `idle.c`                       Idle watchdog and temporary toggle suspension
-  `idle.h`                       Idle subsystem interface
-  `status.c`                     Runtime status reporting
-  `status.h`                     Status declarations
-  `update.c`                     Runtime/AI update processing
-  `update.h`                     Update declarations
-  `utils.c`                      Shared utilities and DB initialization
-  `utils.h`                      Utility declarations
-  `xml_tagging.c`                AI payload tagging
-  `xml_tagging.h`                XML tagging declarations
-  `help.c`                       Built-in help/features text
-  `help.h`                       Help declarations
-  `resources.xml`                GTK resource definition
-  `aiterm-icon.png`              Application icon
-  `Makefile`                     Primary build
-  `Makefile.debian`              Debian-oriented build file
-  `Makefile.opensuse`            openSUSE-oriented build file
-  `mkpkg.sh`                     Packaging helper
-  `show-source.sh`               Source display helper
-  `aiterm-test.py`               Test/helper script
-  `aiterm-test2.py`              Test/helper script
-
-------------------------------------------------------------------------
-
-# Testing and Diagnostics
-
-A practical development test sequence is:
-
-``` bash
-make clean
-make -j"$(nproc)"
-```
-
-Then:
-
-``` bash
-./aiterm --version
-```
-
-Start with debug output:
-
-``` bash
-./aiterm --debug
-```
-
-Test provider configuration:
-
-``` text
-/open provider manager
-```
-
-Test database-backed session functions:
-
-``` text
-/session new
-/session show
-/session list
-```
-
-Test Tee:
-
-``` text
-/tee on
-/tee status
-```
-
-Test Auto Reply:
-
-``` text
-/autoreply on
-/autoreply status
-```
-
-Test SNMP:
-
-``` text
-/open snmp manager
-/snmp cmd list
-/snmp ticker status
-/snmp enable status
-```
-
-Test idle suspension using:
-
-``` ini
-idle_timeout_minutes=5
-```
-
-Then leave the application untouched for five minutes.
-
-The expected test behavior is:
-
-``` text
-Before idle:
-    Enabled toggles remain enabled.
-
-After idle:
-    Managed toggles become OFF.
-    SNMP ticker timer is stopped.
-    Application remains open.
-
-After user activity:
-    Previous toggle states return.
-    SNMP ticker resumes if it was previously enabled.
-```
+| File                                         | Purpose                                         |
+|----------------------------------------------|-------------------------------------------------|
+| `main.c` / `main.h`                          | Startup, shutdown, version string               |
+| `gui.c` / `gui.h`                            | Main GTK window, tabs, `AppContext` definitions |
+| `terminal.c` / `terminal.h`                  | VTE setup, per-tab Tee capture and timers       |
+| `menu.c` / `menu.h`                          | Menu bar, preferences, file dialogs             |
+| `toggles.c` / `toggles.h`                    | Toggle routing                                  |
+| `commands.c` / `commands.h`                  | Command registry, CLI option parsing            |
+| `update.c` / `update.h`                      | AI request path, local commands, policy cmds    |
+| `ai_provider.c` / `.h`                       | Provider abstraction                            |
+| `provider_manager_gui.c` / `.h`              | Provider Manager window                         |
+| `provider_keys.c` / `.h`                     | API keys reference window                       |
+| `gemini.c` / `.h`                            | Gemini `generateContent` client                 |
+| `openai.c` / `.h`                            | OpenAI-compatible client                        |
+| `auto_chunk.c` / `.h`                        | Context budgeting and chunking                  |
+| `gemini_cache.c` / `.h`                      | Smart Cache                                     |
+| `ai_retry.c` / `.h`                          | AI retry engine                                 |
+| `ratelimit.c` / `.h`                         | Request limiter                                 |
+| `tee_handler.c` / `.h`                       | Tee accumulator, flush, AI dispatch             |
+| `noisefilter.c` / `.h`                       | Noise filtering engine                          |
+| `noise_filter_manager_gui.c` / `.h`          | Noise Filter Manager                            |
+| `autoexec.c` / `.h`                          | Execution queue and confirmation dialogs        |
+| `policy_dao.c` / `.h`                        | Policy database access                          |
+| `policy_manager_gui.c` / `.h`                | Policy Manager                                  |
+| `snmp_manager.c` / `.h`                      | SNMP engine                                     |
+| `snmp_manager_gui.c` / `.h`                  | SNMP Target Manager                             |
+| `session_manager.c` / `.h`                   | Session persistence                             |
+| `session_manager_gui.c` / `.h`               | Session Manager                                 |
+| `history_manager_gui.c` / `.h`               | History Manager                                 |
+| `idle.c` / `idle.h`                          | Idle watchdog                                   |
+| `export.c` / `.h`                            | Session export                                  |
+| `print.c` / `.h`                             | GTK printing                                    |
+| `crypto.c` / `.h`                            | AES-256-CBC credential encryption               |
+| `config.c` / `.h`                            | Config load/save                                |
+| `status.c` / `.h`                            | Runtime status report                           |
+| `xml_tagging.c` / `.h`                       | Payload tagging                                 |
+| `help.c` / `.h`                              | Help, features, CLI help text                   |
+| `utils.c` / `.h`                             | Utilities, DB init, provider config             |
+| `resources.xml`, `aiterm-icon.png`           | GResource definition and icon                   |
+| `build_id.h`, `resources.c`                  | Generated at build time                         |
+| `Makefile`                                   | Build and install                               |
+| `aiterm.conf.example`                        | Minimal config template                         |
+| `mkpkg.sh`, `show-source.sh`                 | Packaging / source listing helpers              |
+| `aiterm-test.py`, `aiterm-test2.py`          | Test/helper scripts                             |
 
 ------------------------------------------------------------------------
 
 # Security Notes
 
-## Protect `/etc/aiterm.conf`
+## Protect your config file
 
-The file contains encrypted credentials, but encryption is not a
-substitute for filesystem permissions.
-
-Recommended:
+Encryption is not a substitute for permissions.
 
 ``` bash
-sudo chmod 600 /etc/aiterm.conf
+chmod 600 ~/.config/aiterm.conf     # or /etc/aiterm.conf
 ```
 
-and ownership should be appropriate for the account running aiterm.
+aiterm does not set the mode when it saves; set it yourself.
 
 ## Protect the master key
 
-Avoid:
-
-``` bash
-history
-```
-
-entries containing the master key where possible.
-
-Instead of:
-
-``` bash
-./aiterm --master='secret'
-```
-
-consider:
+Avoid putting the key on the command line where shell history records it.
+Instead:
 
 ``` bash
 export AITERM_MASTER_KEY='secret'
@@ -2467,128 +1698,103 @@ export AITERM_MASTER_KEY='secret'
 unset AITERM_MASTER_KEY
 ```
 
-Shell history behavior varies by shell and configuration, so use the
-approach appropriate for your environment.
+Shell history behavior varies, so use what suits your environment.
 
 ## Auto Execute
 
-Auto Execute can cause commands generated by an AI system to enter a
-real shell execution workflow.
+Commands generated by an AI can enter a real shell. Use the Policy Manager
+and the confirmation dialog, prefer `BLOCK`/`APPROVE` as the default
+posture, and think twice about wildcard `*` ALLOW rules.
 
-Treat this as a privileged feature.
+## Terminal capture
 
-Use the Policy Manager and confirmation workflow rather than blindly
-enabling automatic execution for an environment where destructive
-commands are possible.
+Tee sends terminal text (including anything you type or display, such as
+secrets in command output) to the configured AI provider and stores it in
+the database. Disable Tee before handling sensitive data, and use noise
+filters where appropriate.
 
 ## SNMP community strings
 
-SNMP configuration can contain community strings. Treat them as
-credentials and restrict database access accordingly.
+They are credentials, stored in `snmp_targets`. Restrict database access.
 
-## Decrypt command
+## `--decrypt-pw`
 
-Never run:
-
-``` bash
-./aiterm --decrypt-pw
-```
-
-in a shared terminal, terminal recording session, CI log, or screenshot
+Never run it in a shared terminal, recorded session, CI log, or screenshot
 workflow.
 
 ------------------------------------------------------------------------
 
 # Known Limitations and Source-Tree Caveats
 
-This README intentionally documents the source tree as it exists rather
-than claiming functionality that is not present.
+This README documents the source as it exists rather than claiming
+functionality that is not present.
 
-## `sessions` schema
+## No bundled schema
 
-The source migrates the `sessions` table but does not create it in the
-visible database initialization sequence. A compatible existing table is
-therefore required for full session functionality.
+The C code has no `CREATE TABLE` statements and the reviewed source
+archive contains no `db/` directory or `.sql` files. You must provide
+schema scripts for `aiterm_history`, `sessions`, `snmp_targets`,
+`noise_filters`, `command_policy`, and `relevance_triggers`. Older README
+text that said the application creates these tables, or that referred to
+`schema.sql`, is obsolete.
 
-## `snmp_targets` schema
+## Per-tab settings are not wired
 
-The SNMP manager and command handlers use the `snmp_targets` table, but
-the visible initialization code does not create that table. A compatible
-schema must exist.
+Tee *capture* is per tab, but the toggle flags are global (the
+tab-switch handler that would swap them is disabled), per-tab session
+UUIDs are not assigned, and background-tab captures are saved under the
+session that is current when they flush. Captures from several tabs share
+one accumulator, distinguished only by the `[tab pts/N]` stamp.
 
-## No bundled `schema.sql`
+## Tab rename and tab context-menu items
 
-The current source tree does not contain a `schema.sql` file despite
-older README text referring to one.
+*Rename Tab* is a TODO and the *Rename/Close Tab* popup items are not
+connected. Use the × button to close a tab.
 
-That older documentation should not be followed literally.
+## `/noise delete`
 
-## Distro-specific Makefiles
+A placeholder. Use the Noise Filter Manager.
 
-The primary `Makefile` contains the most complete object list.
+## Noise patterns are substrings
 
-The included `Makefile.debian` and `Makefile.opensuse` are useful
-references but do not currently mirror the complete object list of the
-primary Makefile. If they fail to link, use the primary `Makefile`
-first.
+The menu text mentions "Regex", but matching is a plain substring test.
+
+## SNMP poller cannot be stopped from a command
+
+`/snmp poller stop` was removed; only `start`/`restart` (which starts the
+poller if it is not already running) exist.
 
 ## Idle timeout zero
 
-The configuration loader accepts zero, and the watchdog contains a
-zero-disabled branch, but `idle_init()` currently replaces zero with the
-default timeout.
+`idle_timeout_minutes=0` is accepted by the loader but replaced with the
+10-minute default.
 
-Therefore the current effective behavior is:
+## Auto All
 
-``` text
-idle_timeout_minutes > 0
-    configured timeout
+A command (`/auto all`) but not a separate GUI toggle.
 
-idle_timeout_minutes = 0
-    replaced with default timeout
-```
+## Network requirement at startup
 
-This should be corrected in a future cleanup if zero is intended to mean
-"disabled."
+aiterm exits at startup if no non-loopback IPv4 interface is found; there
+is no command-line option to override this.
 
-## `Auto All`
+## Distribution-specific Makefiles
 
-`TOGGLE_AUTO_ALL` exists in the toggle enumeration and `/auto all`
-exists in the command registry, but Auto All is not currently a separate
-checkbox in the GUI Toggles menu.
+Only the single `Makefile` is present. The old `Makefile.debian` and
+`Makefile.opensuse` are no longer part of the tree.
 
 ## Build verification
 
-The source tree should be built on the target Linux system because the
-required GTK/VTE/MariaDB/Net-SNMP development environment is external to
-the repository.
+Build on the target Linux system; the GTK/VTE/MariaDB/Net-SNMP
+development environment is external to the repository.
 
 ------------------------------------------------------------------------
 
 # Recommended First-Run Procedure
 
-For a new Linux installation:
-
 ### 1. Install development dependencies
 
-``` bash
-sudo apt update
-
-sudo apt install \
-    build-essential \
-    pkg-config \
-    uuid-runtime \
-    uuid-dev \
-    libgtk-3-dev \
-    libvte-2.91-dev \
-    libglib2.0-dev \
-    libcurl4-openssl-dev \
-    libjson-c-dev \
-    libssl-dev \
-    libmariadb-dev \
-    libmariadb-dev-compat \
-    libsnmp-dev
-```
+(See [Build Dependencies](#build-dependencies).)
 
 ### 2. Build
 
@@ -2597,80 +1803,53 @@ make clean
 make -j"$(nproc)"
 ```
 
-### 3. Create the configuration
+### 3. Prepare the database
+
+Create the MariaDB database/user and make sure your schema `*.sql` scripts
+are in `/usr/share/aiterm/db` (or point `AITERM_SQL_DIR` at them).
+
+### 4. Create the configuration
 
 ``` bash
-sudo cp aiterm.conf.example /etc/aiterm.conf
-sudo chmod 600 /etc/aiterm.conf
+cp aiterm.conf.example ~/.config/aiterm.conf
+chmod 600 ~/.config/aiterm.conf
 ```
 
-### 4. Generate encrypted credentials
+### 5. Generate encrypted credentials
 
 ``` bash
 ./aiterm --master='YOUR_MASTER_KEY' --crypt-pw='YOUR_API_KEY'
-```
-
-and:
-
-``` bash
 ./aiterm --master='YOUR_MASTER_KEY' --crypt-pw='YOUR_DB_PASSWORD'
 ```
 
-### 5. Configure the provider
-
-For example:
+### 6. Edit the config
 
 ``` ini
 provider=gemini
 model=gemini-flash-latest
-api_key=<encrypted API key>
-```
+GEMINI_KEY=<encrypted API key>
 
-### 6. Configure MariaDB
-
-``` ini
 db_host=127.0.0.1
 db_user=aiterm
 db_pass=<encrypted DB password>
 db_name=aiterm_db
 ```
 
-Make sure the required application tables exist.
-
-### 7. Configure idle protection
-
-For the current test build:
-
-``` ini
-idle_timeout_minutes=5
-```
-
-### 8. Start aiterm
+### 7. Start aiterm
 
 ``` bash
 ./aiterm --master='YOUR_MASTER_KEY'
-```
-
-or:
-
-``` bash
+# or
 export AITERM_MASTER_KEY='YOUR_MASTER_KEY'
 ./aiterm
 ```
 
-### 9. Verify the provider
+### 8. Verify the provider
 
-Open:
+Open `Managers → AI Provider Manager` and use the test operation, or run
+`./aiterm --provider`.
 
-``` text
-Managers → AI Provider Manager
-```
-
-and use its connection test.
-
-### 10. Verify the database
-
-Run:
+### 9. Verify the database
 
 ``` text
 /session new
@@ -2678,9 +1857,7 @@ Run:
 /session list
 ```
 
-### 11. Verify the runtime toggles
-
-Run:
+### 10. Verify the toggles
 
 ``` text
 /tee status
@@ -2692,83 +1869,26 @@ Run:
 /ratelimit status
 ```
 
-### 12. Test idle mode
+### 11. Test Tee across tabs
 
-Enable the features you want to test, then leave aiterm untouched for
-five minutes.
-
-Return to the application and perform a keyboard or mouse action.
-
-The previous runtime toggle states should return.
-
-------------------------------------------------------------------------
-
-# Development Philosophy
-
-aiterm has grown as a practical systems tool rather than as a minimal
-terminal emulator.
-
-The source therefore contains several overlapping layers:
-
-``` text
-Terminal
-    +
-AI
-    +
-Persistent Context
-    +
-Telemetry
-    +
-Automation
-    +
-Safety Controls
-    +
-Runtime Controls
-```
-
-The most important design boundary is that these layers remain
-individually controllable.
-
-The Toggles system, Provider Manager, Policy Manager, Noise Filter
-Manager, Session Manager, SNMP Manager, rate limiter, retry subsystem,
-and idle watchdog are all intended to let the operator decide how much
-automation is active at any given moment.
+1.  `/tee on`
+2.  Open a second tab and run a command; wait about 2 seconds or use
+    `Tools → Flush Tee Buffer`.
+3.  Switch back to the first tab, run another command, and ask the AI
+    "what do you see". It should describe the focused tab's output.
 
 ------------------------------------------------------------------------
 
 # License
 
-See:
-
-``` text
-LICENSE
-```
-
-for the license applicable to this project.
+See `LICENSE` for the license applicable to this project.
 
 ------------------------------------------------------------------------
 
 ## Project Status
 
-This README documents the source tree reviewed for the **0.9.10-gamma-3
-idle test build**.
+This README documents the source tree reviewed for **0.9.12-gamma**. The
+source tree is the authoritative reference for behavior when this
+document and older historical notes disagree.
 
-It supersedes the older README content that referenced earlier
-0.8.x/0.9.x feature sets and obsolete setup instructions.
-
-The source tree should be treated as the authoritative reference for
-behavior when this document and older historical notes disagree.
-
-
-
-### 0.9.12-alpha context/history fixes
-
-- Fresh terminal output is harvested before a manual AI request, so output that arrived between TEE timer cycles is available immediately.
-- Fresh TEE data is placed ahead of older VTE scrollback when building manual AI context.
-- Provider Manager opening synchronizes pending terminal output and persists the TEE accumulator without launching an AI request.
-- API conversation history now includes only non-TEE `user` and `assistant` rows and excludes `API_ERROR:` responses, preventing terminal/SNMP telemetry and provider failures from masquerading as conversation turns.
-- Recent history ordering uses sequence and database row order so paired user/assistant turns remain chronological.
-
-## 0.9.11-alpha Provider Credentials
-
-Each provider now has its own encrypted API key, using names such as `OPENAI_KEY`, `GEMINI_KEY`, `GROQ_KEY`, `OPENROUTER_KEY`, and `MISTRAL_KEY`.
+Project author: Peter Talbott. Source: <https://github.com/pet350/aiterm>

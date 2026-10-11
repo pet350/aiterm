@@ -382,6 +382,11 @@ void initialize_booleans(AppContext *app) {
     g_atomic_int_set(&app->sys.is_processing, 0);
     g_atomic_int_set(&app->sys.ai_busy, 0);
 
+    g_mutex_init(&app->provider_mutex);
+    g_cond_init(&app->provider_cond);
+    app->provider_directives_pending = FALSE;
+    app->provider_generation = 1;
+
     // Noise-filter patterns are copied into a non-GTK cache so background
     // workers never access the GTK ListStore.
     g_mutex_init(&app->noise.patterns_mutex);
@@ -915,7 +920,7 @@ void* db_worker_thread(void *arg) {
                 }
                 int qrc = mysql_query(global_app->database.global_db_conn, query);
                 if (qrc != 0) {
-                    DEBUG_PRINT("[MEMDBG ]: [WORKER] TEE INSERT FAILED: %s\n",
+                    DEBUG_PRINT("[DEBUG ]: [WORKER] TEE INSERT FAILED: %s\n",
                                 mysql_error(global_app->database.global_db_conn));
                 }
 
@@ -1484,13 +1489,13 @@ void save_tee_to_history(const char *terminal_text, const char *ai_analysis, con
     char *terminal_output = noise_filter_apply(global_app, terminal_text);
     if (!terminal_output) terminal_output = g_strdup("");
 
-    DEBUG_PRINT("[%sMEMDBG%s ]: [%sTEE_SAVE%s] %safter noise_filter terminal_output=%s%p%s\n", 
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_SAVE%s] %safter noise_filter terminal_output=%s%p%s\n", 
 	lt_pl, nml, cy, nml, yl, red, (void*)terminal_output, nml);
 
     char *cleaned_terminal_output = strip_blank_lines(terminal_output);
     char *cleaned_ai_analysis = ai_analysis ? strip_blank_lines(ai_analysis) : NULL;
 
-    DEBUG_PRINT("[%sMEMDBG%s ]: [%sTEE_SAVE%s] %scleaned terminal=%s%p%s ai=%s%p%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_SAVE%s] %scleaned terminal=%s%p%s ai=%s%p%s\n",
 	lt_pl, nml, cy, nml, yl,
 	red, (void*)cleaned_terminal_output, yl,
 	red, (void*)cleaned_ai_analysis, nml);
@@ -1507,7 +1512,8 @@ void save_tee_to_history(const char *terminal_text, const char *ai_analysis, con
 
     DBWorkerData *data = calloc(1, sizeof(*data));
     if (!data) {
-        DEBUG_PRINT("[ DEBUG ]: [TEE_SAVE] FATAL: Malloc failed for DBWorkerData\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_SAVE%s] %sFATAL: %sMalloc failed for DBWorkerData%s\n",
+		lt_pl, nml, cy, nml, red, yl, nml);
         g_free(cleaned_terminal_output);
         g_free(cleaned_ai_analysis);
         return;
@@ -1533,7 +1539,7 @@ void save_tee_to_history(const char *terminal_text, const char *ai_analysis, con
                                   : global_app->session.session_uuid;
     data->session_uuid = g_strdup(tee_target_uuid);
     data->sequence_id = global_app->database.sequence_id++;
-    DEBUG_PRINT("[%sMEMDBG%s ]: [%sTEE_SAVE%s]%s DBWorkerData=%s%p%s terminal=%s%p%s ai=%s%p%s uuid=%s%p%s seq=%s%d%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_SAVE%s]%s DBWorkerData=%s%p%s terminal=%s%p%s ai=%s%p%s uuid=%s%p%s seq=%s%d%s\n",
 		lt_pl, nml, cy, nml, yl,
                 red, (void*)data, yl,
 		red, (void*)data->terminal_output, yl,
@@ -1548,11 +1554,19 @@ void save_tee_to_history(const char *terminal_text, const char *ai_analysis, con
 
     pthread_t thread_id;
     if (pthread_create(&thread_id, NULL, db_worker_thread, data) != 0) {
-        DEBUG_PRINT("[ DEBUG ]: [TEE_SAVE] FATAL: pthread_create failed!\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_SAVE%s] %sFATAL: %spthread_create failed!%s\n",
+		lt_pl, nml, cy, nml, red, yl, nml);
         g_free(data->terminal_output);
         g_free(data->ai_analysis);
         g_free(data->session_uuid);
         g_free(data->history_role);
+
+        g_free(cy);
+        g_free(yl);
+        g_free(gr);
+        g_free(red);
+        g_free(nml);
+
         free(data);
         return;
     }
@@ -1575,12 +1589,20 @@ void load_history_to_api(AppContext *app, struct json_object *messages_array, gs
     mysql_thread_init();
     pthread_mutex_lock(&app->access.db_mutex);
 
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     gsize used_bytes = 0;
     guint count = 0;
     guint skipped = 0;
     struct json_object *history_messages = json_object_new_array();
 
-    DEBUG_PRINT("[ DEBUG ] LOAD_HISTORY_TO_API: Locked DB Mutex\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sLOAD_HISTORY_TO_API%s] %sLocked DB Mutex%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
     char *uuid_filter = get_uuid_filter(app);
     char *query = g_strdup_printf(
         "SELECT id, role, content, sequence_id, created_at FROM aiterm_history "
@@ -1592,8 +1614,13 @@ void load_history_to_api(AppContext *app, struct json_object *messages_array, gs
         "ORDER BY sequence_id DESC, id DESC LIMIT 100", uuid_filter,
         app->session.last_sent_db_id);
 
-    DEBUG_PRINT("[ DEBUG ]: LOAD_HISTORY_TO_API: history_budget=%zu bytes\n", max_bytes);
-    DEBUG_PRINT("[ DEBUG ]: LOAD_HISTORY_TO_API: Query %s\n", query);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sLOAD_HISTORY_TO_API%s] %shistory_budget=[%s%zu%s] bytes%s\n", 
+	lt_pl, nml, cy, nml, gr, 
+	red, max_bytes, gr, nml);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sLOAD_HISTORY_TO_API%s] %sQuery %s%s%s\n",
+	lt_pl, nml, cy, nml, gr,
+	yl,  query, nml);
 
     if (mysql_query(app->database.global_db_conn, query) == 0) {
         MYSQL_RES *res = mysql_store_result(app->database.global_db_conn);
@@ -1645,13 +1672,25 @@ void load_history_to_api(AppContext *app, struct json_object *messages_array, gs
     }
     json_object_put(history_messages);
 
-    DEBUG_PRINT("[ DEBUG ] LOAD_HISTORY_TO_API: selected %u row(s), skipped %u row(s), approx %zu bytes, budget=%zu\n",
-                count, skipped, used_bytes, max_bytes);
+    DEBUG_PRINT("[ %sDEBUG%s ] [%sLOAD_HISTORY_TO_API%s] %sSelected [%s%u%s] row(s), skipped [%s%u%s] row(s), approx [%s%zu%s] bytes, budget=[%s%zu%s]%s\n",
+		lt_pl, nml, cy, nml, gr,
+                red, count, gr,
+		red, skipped, gr,
+		red, used_bytes, gr, 
+		red, max_bytes, gr, nml);
 
     g_free(query);
     g_free(uuid_filter);
     pthread_mutex_unlock(&app->access.db_mutex);
-    DEBUG_PRINT("[ DEBUG ] LOAD_HISTORY_TO_API: Unlocked DB Mutex\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sLOAD_HISTORY_TO_API%s] %sUnlocked DB Mutex%s\n",
+		lt_pl, nml, cy, nml, gr, nml);
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     mysql_thread_end();
 }
 
@@ -1808,6 +1847,18 @@ void on_initialization_complete(AppContext *app) {
 }
 
 // Updated 0.9.6-omega
+static void startup_directive_complete(AppContext *app, char *raw_response, gpointer user_data) {
+    (void)user_data;
+
+    if (raw_response)
+        free(raw_response);
+
+    /* This callback is delivered by ai_provider_async on the GTK main thread.
+     * Initialization therefore completes only after the background provider
+     * transaction has finished, without blocking the GTK event loop. */
+    on_initialization_complete(app);
+}
+
 gboolean on_app_startup_prime(gpointer user_data) {
     AppContext *app = (AppContext *)user_data;
     if (!app) return G_SOURCE_REMOVE;
@@ -1819,17 +1870,16 @@ gboolean on_app_startup_prime(gpointer user_data) {
     char *red     = g_strdup(global_app->ansi.red);
     char *nml     = g_strdup(global_app->ansi.normal);
 
-    DEBUG_PRINT("[ %sDEBUG%s ]: [%sINIT%s]: %sPriming selected AI provider after GTK loop start...%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sINIT%s]: %sPriming selected AI provider asynchronously after GTK loop start...%s\n",
 	lt_pl, nml, cy, nml, yl, nml);
-    
-    /* Provider-neutral startup request.  This used to call Gemini directly,
-     * which meant changing provider still caused a Gemini request here. */
-    char *prime_response = ai_provider_send(
-        app, "System Initialized. Acknowledge readiness in 1 sentence.");
-    if (prime_response) {
-        g_free(prime_response);
+
+    /* GENERAL_DIRECTIVES are sent exactly once after the selected provider is
+     * initialized. The complete provider transaction now runs on a worker. */
+    if (!ai_provider_send_directives_async(app, startup_directive_complete, NULL)) {
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sINIT%s]: %sUnable to queue provider directive initialization.%s\n",
+            lt_pl, nml, cy, nml, red, nml);
+        on_initialization_complete(app);
     }
-    on_initialization_complete(app);
 
     g_free(lt_pl);
     g_free(cy);

@@ -298,6 +298,9 @@ int main(int argc, char *argv[]) {
     pthread_mutex_destroy(&app->access.db_init_mutex);
     pthread_mutex_destroy(&app->access.db_mutex);
 
+    g_cond_clear(&app->provider_cond);
+    g_mutex_clear(&app->provider_mutex);
+
     // 21) free master key from memory
     if (app->security.master_key) {
         // Overwrite memory with zeros before freeing
@@ -306,7 +309,10 @@ int main(int argc, char *argv[]) {
         free(app->security.master_key);
     }
 
-    // 22) free provider config and explicit provider credentials
+    // 22) release the Gemini directive interaction handle before destroying AppContext
+    gemini_directive_invalidate(app);
+
+    // 22.1) free provider config and explicit provider credentials
     free_provider_config(&app->provider_config);
     g_free(app->security.openai_key);
     g_free(app->security.gemini_key);

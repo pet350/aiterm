@@ -12,6 +12,7 @@
 #include "auto_chunk.h"
 #include "gui.h"
 #include "utils.h"
+#include "ai_provider.h"
 
 gsize effective_max_chunk(const AppContext *app) {
 
@@ -26,7 +27,7 @@ gsize effective_max_chunk(const AppContext *app) {
     char *nml     = g_strdup(app->ansi.normal);
 
     if (app->chunk.max_chunk > 0) {
-        DEBUG_PRINT("[ %sDEBUG%s ] [%sMax Chunk%s] %sReturning max chunk size [%s%zu%s] byte %s\n",
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sMax Chunk%s] %sReturning max chunk size [%s%zu%s] byte %s\n",
             lt_pl, nml, cy, nml, gr,
             red, app->chunk.max_chunk, gr, nml);
         g_free(lt_pl);
@@ -38,7 +39,7 @@ gsize effective_max_chunk(const AppContext *app) {
         return app->chunk.max_chunk;
     }
 
-    DEBUG_PRINT("[ %sDEBUG%s ] [%sMax Chunk%s] %sReturning default chunk size [%s%u%s] byte %s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sMax Chunk%s] %sReturning default chunk size [%s%u%s] byte %s\n",
         lt_pl, nml, cy, nml, gr,
         red, AITERM_AUTO_CHUNK_DEFAULT_MAX, gr, nml);
 
@@ -52,7 +53,7 @@ gsize effective_max_chunk(const AppContext *app) {
     return AITERM_AUTO_CHUNK_DEFAULT_MAX;
 }
 
-static gsize effective_overlap(const AppContext *app, gsize chunk_size) {
+gsize effective_overlap(const AppContext *app, gsize chunk_size) {
     gsize overlap = app ? app->chunk.overlap : 0;
 
     if (!app)
@@ -69,7 +70,7 @@ static gsize effective_overlap(const AppContext *app, gsize chunk_size) {
     if (overlap >= chunk_size)
         overlap = chunk_size > 1 ? chunk_size / 2 : 0;
 
-    DEBUG_PRINT("[ %sDEBUG%s ] [%sAutoChunk%s] %sOverlap: [%s%ld%s]%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sAutoChunk%s] %sOverlap: [%s%ld%s]%s\n",
 	lt_pl, nml, cy, nml, gr,
 	red, overlap, gr, nml);
 
@@ -89,7 +90,7 @@ static gsize effective_overlap(const AppContext *app, gsize chunk_size) {
  * retained because the payload may legitimately contain arbitrary terminal
  * bytes.
  */
-static gsize utf8_safe_boundary(const char *payload, gsize start, gsize candidate) {
+gsize utf8_safe_boundary(const char *payload, gsize start, gsize candidate) {
     if (!payload || candidate <= start)
         return candidate;
 
@@ -109,9 +110,7 @@ static gsize utf8_safe_boundary(const char *payload, gsize start, gsize candidat
  * over ordinary whitespace.  The returned offset is the first byte of the
  * next chunk, so the delimiter remains in the preceding chunk.
  */
-static gsize find_natural_boundary(const char *payload,
-                                   gsize start,
-                                   gsize limit) {
+gsize find_natural_boundary(const char *payload, gsize start, gsize limit) {
     if (!payload || limit <= start)
         return limit;
 
@@ -141,14 +140,15 @@ gsize auto_chunk_request_budget(const AppContext *app) {
     if (!app)
         return AITERM_CONTEXT_BUDGET_OTHER;
 
-    const char *provider = app->provider_config.provider;
+    const ProviderConfig *config = ai_provider_current_config(app);
+    const char *provider = config ? config->provider : NULL;
     if (!provider || !*provider)
         return AITERM_CONTEXT_BUDGET_OPENAI;
 
     if (g_ascii_strcasecmp(provider, "groq") == 0)
         return AITERM_CONTEXT_BUDGET_GROQ;
 
-    if (app->provider_config.kind == PROVIDER_KIND_GEMINI_GENERATE ||
+    if ((config && config->kind == PROVIDER_KIND_GEMINI_GENERATE) ||
         g_ascii_strcasecmp(provider, "gemini") == 0)
         return AITERM_CONTEXT_BUDGET_GEMINI;
 
@@ -185,7 +185,7 @@ void auto_chunk_reset(AppContext *app) {
     char *red     = g_strdup(app->ansi.red);
     char *nml     = g_strdup(app->ansi.normal);
 
-    DEBUG_PRINT("[ %sDEBUG%s ] [%sAutoChunk%s] %sResetting%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sAutoChunk%s] %sResetting%s\n",
 	lt_pl, nml, cy, nml, red, nml); 
     app->chunk.original_size = 0;
     app->chunk.chunk_count = 0;
@@ -228,7 +228,7 @@ void auto_chunk_configure(AppContext *app, gsize max_chunk, gsize overlap) {
     if (!app->chunk.initialized)
         app->chunk.initialized = TRUE;
 
-    DEBUG_PRINT("[ %sDEBUG%s ] [%sAutoChunk%s] %sConfigured%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sAutoChunk%s] %sConfigured%s\n",
 	lt_pl, nml, cy, nml, red, nml);
 
     g_free(lt_pl);
@@ -249,7 +249,7 @@ gboolean auto_chunk_needed(AppContext *app, const char *payload) {
     return strlen(payload) > effective_max_chunk(app);
 }
 
-static GPtrArray *auto_chunk_payload_internal(AppContext *app, const char *payload, gsize forced_max) {
+GPtrArray *auto_chunk_payload_internal(AppContext *app, const char *payload, gsize forced_max) {
     GPtrArray *chunks = g_ptr_array_new_with_free_func(g_free);
 
     if (!app) {
@@ -258,13 +258,21 @@ static GPtrArray *auto_chunk_payload_internal(AppContext *app, const char *paylo
         return chunks;
     }
 
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     if (!app->chunk.initialized)
         auto_chunk_init(app);
 
     auto_chunk_reset(app);
 
     if (!payload || !*payload) {
-        DEBUG_PRINT("[ AUTOCHUNK ] Empty payload; nothing to split.\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOCHUNK%s] %sEmpty payload; %snothing to split.%s\n",
+	    lt_pl, nml, cy, nml, yl, red, nml);
         return chunks;
     }
 
@@ -286,7 +294,9 @@ static GPtrArray *auto_chunk_payload_internal(AppContext *app, const char *paylo
         app->chunk.processing = FALSE;
         app->chunk.complete = TRUE;
 
-        DEBUG_PRINT("[ AUTOCHUNK ] Payload %zu bytes fits in one chunk.\n", total);
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOCHUNK%s] %sPayload [%s%zu%s] bytes fits in one chunk.%s\n",
+	    lt_pl, nml, cy, nml, gr, 
+	    red,  total, gr, nml);
         return chunks;
     }
 
@@ -350,11 +360,19 @@ static GPtrArray *auto_chunk_payload_internal(AppContext *app, const char *paylo
     app->chunk.processing = FALSE;
     app->chunk.complete = TRUE;
 
-    DEBUG_PRINT("[ AUTOCHUNK ] Split %zu bytes into %u chunks (max=%zu overlap=%zu).\n",
-                total,
-                chunks->len,
-                max_chunk,
-                app->chunk.overlap);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOCHUNK%s] %sSplit [%s%zu%s] bytes into [%s%u%s] chunks (max=%s%zu%s overlap=%s%zu%s).%s\n",
+	lt_pl, nml, cy, nml, gr,
+        red, total, gr,
+        red, chunks->len, gr,
+        red, max_chunk, gr, 
+        red, app->chunk.overlap, gr, nml);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
 
     return chunks;
 }
@@ -372,9 +390,27 @@ GPtrArray *auto_chunk_payload_with_limit(AppContext *app, const char *payload,
 }
 
 void auto_chunk_shutdown(AppContext *app) {
-    if (!app)
+    if (!app) {
         return;
+    }
+
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
 
     auto_chunk_reset(app);
     app->chunk.initialized = FALSE;
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sAutoChunk%s] %sShutdown.%s\n",
+	lt_pl, nml, cy, nml, yl, nml);    
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }

@@ -34,10 +34,263 @@ typedef struct {
 
 extern const char *GENERAL_DIRECTIVES;
 
+static char *gemini_http_single_attempt(const char *payload, long *out_http_code, void *user_data);
+
+/* Gemini Interactions API support. The directive interaction is a stable
+ * parent for normal Gemini requests. AITerm keeps its own MariaDB history,
+ * so each request points back to the same directive-only interaction rather
+ * than chaining user turns together on Google's server. */
+static gboolean gemini_directive_interaction_valid(AppContext *app) {
+    const ProviderConfig *provider = ai_provider_current_config(app);
+    const char *directive_id = ai_provider_current_directive_id(app);
+    const char *directive_model = ai_provider_current_directive_model(app);
+    if (!app || !directive_id || !directive_model || !provider || !provider->model)
+        return FALSE;
+
+    return strcmp(directive_model, provider->model) == 0;
+}
+
+void gemini_directive_invalidate(AppContext *app) {
+    if (!app) return;
+
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
+    if (app->gemini_cache.directive_interaction_id) {
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sDIRECTIVES%s] %sInvalidating Gemini interaction [%s%s%s]%s.\n",
+		lt_pl, nml, cy, nml, gr,
+                red, app->gemini_cache.directive_interaction_id, gr, nml);
+    }
+
+    g_clear_pointer(&app->gemini_cache.directive_interaction_id, g_free);
+    g_clear_pointer(&app->gemini_cache.directive_model, g_free);
+    app->gemini_cache.directive_created_at = 0;
+    app->gemini_cache.directive_active = FALSE;
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
+}
+
+static char *gemini_interactions_url(AppContext *app) {
+    if (!app) return NULL;
+
+    const ProviderConfig *provider = ai_provider_current_config(app);
+    const char *base_url = provider->base_url && *provider->base_url
+        ? provider->base_url
+        : "https://generativelanguage.googleapis.com/v1beta";
+    const char *query_key = provider->query_key_name && *provider->query_key_name
+        ? provider->query_key_name : "key";
+    const char *api_key = provider->api_key ? provider->api_key : "";
+
+    return g_strdup_printf("%s/interactions?%s=%s",
+                           base_url, query_key, api_key);
+}
+
+static char *gemini_interaction_to_generate_json(const char *raw) {
+    if (!raw) return NULL;
+
+    struct json_object *source = json_tokener_parse(raw);
+    if (!source) return NULL;
+
+    struct json_object *steps = NULL;
+    if (!json_object_object_get_ex(source, "steps", &steps) ||
+        json_object_get_type(steps) != json_type_array) {
+        json_object_put(source);
+        return NULL;
+    }
+
+    const char *answer = NULL;
+    for (int i = json_object_array_length(steps) - 1; i >= 0; --i) {
+        struct json_object *step = json_object_array_get_idx(steps, i);
+        struct json_object *type = NULL, *content = NULL;
+        if (!step ||
+            !json_object_object_get_ex(step, "type", &type) ||
+            strcmp(json_object_get_string(type), "model_output") != 0 ||
+            !json_object_object_get_ex(step, "content", &content) ||
+            json_object_get_type(content) != json_type_array)
+            continue;
+
+        for (int j = 0; j < json_object_array_length(content); ++j) {
+            struct json_object *part = json_object_array_get_idx(content, j);
+            struct json_object *text = NULL;
+            if (part && json_object_object_get_ex(part, "text", &text)) {
+                answer = json_object_get_string(text);
+                if (answer) break;
+            }
+        }
+        if (answer) break;
+    }
+
+    if (!answer) {
+        json_object_put(source);
+        return NULL;
+    }
+
+    struct json_object *out = json_object_new_object();
+    struct json_object *candidates = json_object_new_array();
+    struct json_object *candidate = json_object_new_object();
+    struct json_object *content = json_object_new_object();
+    struct json_object *parts = json_object_new_array();
+    struct json_object *part = json_object_new_object();
+
+    json_object_object_add(part, "text", json_object_new_string(answer));
+    json_object_array_add(parts, part);
+    json_object_object_add(content, "parts", parts);
+    json_object_object_add(content, "role", json_object_new_string("model"));
+    json_object_object_add(candidate, "content", content);
+    json_object_object_add(candidate, "finishReason", json_object_new_string("STOP"));
+    json_object_object_add(candidate, "index", json_object_new_int(0));
+    json_object_array_add(candidates, candidate);
+    json_object_object_add(out, "candidates", candidates);
+
+    struct json_object *usage = NULL;
+    if (json_object_object_get_ex(source, "usage", &usage)) {
+        struct json_object *meta = json_object_new_object();
+        struct json_object *in = NULL, *outtok = NULL, *total = NULL, *thoughts = NULL;
+        if (json_object_object_get_ex(usage, "total_input_tokens", &in))
+            json_object_object_add(meta, "promptTokenCount", json_object_new_int64(json_object_get_int64(in)));
+        if (json_object_object_get_ex(usage, "total_output_tokens", &outtok))
+            json_object_object_add(meta, "candidatesTokenCount", json_object_new_int64(json_object_get_int64(outtok)));
+        if (json_object_object_get_ex(usage, "total_tokens", &total))
+            json_object_object_add(meta, "totalTokenCount", json_object_new_int64(json_object_get_int64(total)));
+        if (json_object_object_get_ex(usage, "total_thought_tokens", &thoughts))
+            json_object_object_add(meta, "thoughtsTokenCount", json_object_new_int64(json_object_get_int64(thoughts)));
+        json_object_object_add(out, "usageMetadata", meta);
+    }
+
+    const char *json = json_object_to_json_string(out);
+    char *result = json ? g_strdup(json) : NULL;
+    json_object_put(out);
+    json_object_put(source);
+    return result;
+}
+
+static char *gemini_create_directive_interaction(AppContext *app) {
+    const ProviderConfig *provider = ai_provider_current_config(app);
+    if (!app || !GENERAL_DIRECTIVES || !*GENERAL_DIRECTIVES ||
+        !provider || !provider->api_key || !provider->model)
+        return NULL;
+
+    char *url = gemini_interactions_url(app);
+    if (!url) return NULL;
+
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
+    struct json_object *root = json_object_new_object();
+    char *wrapped_directives = xml_wrap_with_type(app, GENERAL_DIRECTIVES, TAG_SYSTEM);
+    struct json_object *input = json_object_new_string(
+        wrapped_directives ? wrapped_directives : GENERAL_DIRECTIVES);
+    g_free(wrapped_directives);
+
+    json_object_object_add(root, "model", json_object_new_string(provider->model));
+    json_object_object_add(root, "input", input);
+    json_object_object_add(root, "system_instruction",
+                           json_object_new_string("Treat the AITerm directives in the input as persistent operating instructions for this AITerm context."));
+
+    const char *post_data = json_object_to_json_string(root);
+    GeminiHttpData http_data = { .app = app, .url = url };
+    long http_code = 0;
+    char *raw = ai_retry_execute_with_retry(app, gemini_http_single_attempt,
+                                             post_data, &http_data, &http_code);
+
+    if (raw && http_code == 200) {
+        struct json_object *response = json_tokener_parse(raw);
+        struct json_object *id = NULL;
+        if (response && json_object_object_get_ex(response, "id", &id)) {
+            char *new_id = g_strdup(json_object_get_string(id));
+            if (ai_provider_snapshot_is_current(app)) {
+                gemini_directive_invalidate(app);
+                app->gemini_cache.directive_interaction_id = g_strdup(new_id);
+                app->gemini_cache.directive_model = g_strdup(provider->model);
+                app->gemini_cache.directive_created_at = time(NULL);
+                app->gemini_cache.directive_active = TRUE;
+            }
+
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sDIRECTIVES%s] %sGemini interaction parent created [%s%s%s] for model [%s%s%s].%s\n",
+		lt_pl, nml, cy, nml, gr,
+                red, new_id, gr,
+                red, provider->model, gr, nml);
+            g_free(new_id);
+        }
+        if (response) json_object_put(response);
+    } else if (raw) {
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sDIRECTIVES%s] %sGemini interaction creation failed HTTP [%s%ld%s]: %s%s%s\n",
+		lt_pl, nml, cy, nml, gr,
+                red, http_code, gr,
+		red, raw, nml);
+    }
+
+    json_object_put(root);
+    g_free(url);
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
+    return raw;
+}
+
+static struct json_object *gemini_contents_to_interaction_input(struct json_object *contents) {
+    if (!contents || json_object_get_type(contents) != json_type_array) return NULL;
+
+    struct json_object *input = json_object_new_array();
+    for (int i = 0; i < json_object_array_length(contents); ++i) {
+        struct json_object *turn = json_object_array_get_idx(contents, i);
+        struct json_object *role = NULL, *parts = NULL;
+        if (!turn || !json_object_object_get_ex(turn, "role", &role) ||
+            !json_object_object_get_ex(turn, "parts", &parts))
+            continue;
+
+        const char *role_name = json_object_get_string(role);
+        const char *step_type = strcmp(role_name, "model") == 0
+            ? "model_output" : "user_input";
+
+        struct json_object *step = json_object_new_object();
+        struct json_object *content = json_object_new_array();
+        for (int j = 0; j < json_object_array_length(parts); ++j) {
+            struct json_object *part = json_object_array_get_idx(parts, j);
+            struct json_object *text = NULL;
+            if (!part || !json_object_object_get_ex(part, "text", &text)) continue;
+
+            struct json_object *item = json_object_new_object();
+            json_object_object_add(item, "type", json_object_new_string("text"));
+            json_object_object_add(item, "text", json_object_new_string(json_object_get_string(text)));
+            json_object_array_add(content, item);
+        }
+
+        json_object_object_add(step, "type", json_object_new_string(step_type));
+        json_object_object_add(step, "content", content);
+        json_object_array_add(input, step);
+    }
+    return input;
+}
+
 // Single-attempt HTTP dispatch function compatible with ai_retry_execute_with_retry
 static char *gemini_http_single_attempt(const char *payload, long *out_http_code, void *user_data) {
     GeminiHttpData *data = (GeminiHttpData *)user_data;
     if (!data || !data->app || !data->url) return NULL;
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
 
     CURL *curl_handle;
     CURLcode res;
@@ -64,7 +317,8 @@ static char *gemini_http_single_attempt(const char *payload, long *out_http_code
         if (res == CURLE_OK) {
             curl_easy_getinfo(curl_handle, CURLINFO_RESPONSE_CODE, &http_code);
         } else {
-            DEBUG_PRINT("[ DEBUG ]: CURL Error: %s\n", curl_easy_strerror(res));
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sCURL%s] %sError: %s%s%s\n", 
+		lt_pl, nml, cy, nml, red, yl, curl_easy_strerror(res), nml);
             http_code = 0;
         }
 
@@ -76,12 +330,18 @@ static char *gemini_http_single_attempt(const char *payload, long *out_http_code
         *out_http_code = http_code;
     }
 
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     return chunk.memory;
 }
 
 // --- 1. The Core API Logic ---
 // UI-neutral execution wrapped with AI Retry handler
-char* perform_gemini_request_ex_types(AppContext *app, const char *prompt, const char *terminal_context, gboolean include_history, TagType prompt_type, TagType context_type) {
+static char* perform_gemini_request_ex_types_internal(AppContext *app, const char *prompt, const char *terminal_context, gboolean include_history, TagType prompt_type, TagType context_type, gboolean include_directives) {
     char url[1024];
 
     char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
@@ -99,11 +359,17 @@ char* perform_gemini_request_ex_types(AppContext *app, const char *prompt, const
      * chunk selection, so every provider path receives the same metadata. */
     char *tee_chunk = xml_wrap_with_type(app, screen_text, context_type);
 
+    const ProviderConfig *provider = ai_provider_current_config(app);
+    if (!provider) return NULL;
+
     struct json_object *root = json_object_new_object();
     struct json_object *contents = json_object_new_array();
 
-    // 1. System Instruction Injection (Root Level)
-    if (GENERAL_DIRECTIVES && GENERAL_DIRECTIVES[0] != '\0') {
+    // GENERAL_DIRECTIVES are intentionally NOT injected into normal requests.
+    // They are sent only by perform_gemini_send_directives() during AITerm
+    // initialization and after a provider change. This prevents the directive
+    // block from consuming Gemini input tokens on every request.
+    if (include_directives && GENERAL_DIRECTIVES && GENERAL_DIRECTIVES[0] != '\0') {
         struct json_object *sys_instruction = json_object_new_object();
         struct json_object *sys_parts = json_object_new_array();
         struct json_object *sys_part = json_object_new_object();
@@ -112,9 +378,6 @@ char* perform_gemini_request_ex_types(AppContext *app, const char *prompt, const
         json_object_array_add(sys_parts, sys_part);
         json_object_object_add(sys_instruction, "parts", sys_parts);
         json_object_object_add(root, "system_instruction", sys_instruction);
-    } else {
-        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSend to Gemini%s] %s GENERAL_DIRECTIVES%s is %sNULL%s or empty.%s\n",
-		lt_pl, nml, cy, nml, gr, yl, red, yl, nml );
     }
 
     // 2. Load history within the same total request budget used for the
@@ -137,9 +400,13 @@ char* perform_gemini_request_ex_types(AppContext *app, const char *prompt, const
         history_budget = expanded > 12000U ? 12000U : expanded;
     }
 
-    DEBUG_PRINT("[ AUTOCHUNK ] Gemini provider=%s request_budget=%zu fixed=%zu history_budget=%zu terminal_budget=%zu\n",
-                app->provider_config.provider ? app->provider_config.provider : "gemini",
-                request_budget, fixed_budget, history_budget, terminal_budget);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOCHUNK%s] %sGemini provider=[%s%s%s] request_budget=[%s%zu%s] fixed=[%s%zu%s] history_budget=[%s%zu%s] terminal_budget=[%s%zu%s]%s\n",
+	lt_pl, nml, cy, nml, gr,
+        red, provider->provider ? provider->provider : "gemini", gr,
+        red, request_budget, gr,
+	red, fixed_budget, gr,
+	red, history_budget, gr,
+	red, terminal_budget, gr, nml);
 
     if (include_history && !app->sys.is_initializing) {
         DEBUG_PRINT("[ %sDEBUG%s ]: [%sPerform Gemini Request%s]%s Not Initializing, Loading History%s\n",
@@ -176,8 +443,10 @@ char* perform_gemini_request_ex_types(AppContext *app, const char *prompt, const
     GPtrArray *context_chunks = auto_chunk_payload_with_limit(app, tee_chunk, terminal_budget);
     guint chunk_count = context_chunks ? context_chunks->len : 0;
 
-    DEBUG_PRINT("[ AUTOCHUNK ] Gemini context requires %u chunk(s) at %zu-byte request budget.\n",
-                chunk_count, terminal_budget);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOCHUNK%s] %sGemini context requires [%s%u%s] chunk(s) at [%s%zu%s] byte request budget.%s\n",
+	lt_pl, nml, cy, nml, gr,
+        red, chunk_count, gr,
+	red, terminal_budget, gr, nml);
 
     // Direct Gemini requests are bounded to one chunk. Oversized captures are
     // orchestrated above this function as separate ingestion passes.
@@ -195,8 +464,9 @@ char* perform_gemini_request_ex_types(AppContext *app, const char *prompt, const
     }
 
     if (chunk_count > 1)
-        DEBUG_PRINT("[ AUTOCHUNK ] Direct Gemini request is bounded to chunk 1/%u; provider orchestration handles remaining chunks.\n",
-                    chunk_count);
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOCHUNK%s] %sDirect Gemini request is bounded to chunk %s1/%u%s; provider orchestration handles remaining chunks.%s\n",
+		lt_pl, nml, cy, nml, gr,
+                red, chunk_count, gr, nml);
 
     g_string_append_printf(cache_prompt, "\n\nUSER INSTRUCTION: %s", prompt);
 
@@ -236,11 +506,70 @@ char* perform_gemini_request_ex_types(AppContext *app, const char *prompt, const
     if (context_chunks)
         g_ptr_array_unref(context_chunks);
 
-    const char *post_data = json_object_to_json_string(root);
-    DEBUG_PRINT("[ AUTOCHUNK ] Final Gemini JSON payload=%zu bytes (budget=%zu)\n",
-                post_data ? strlen(post_data) : 0UL, request_budget);
+    /* When the directive parent exists, use Google's stateful Interactions API.
+     * The parent contains GENERAL_DIRECTIVES exactly once. AITerm still sends
+     * its normal MariaDB history explicitly, but never resends the directives. */
+    if (gemini_directive_interaction_valid(app)) {
+        struct json_object *interaction_root = json_object_new_object();
+        struct json_object *interaction_input =
+            gemini_contents_to_interaction_input(contents);
 
-    ProviderConfig *provider = &app->provider_config;
+        if (interaction_input && json_object_array_length(interaction_input) > 0) {
+            json_object_object_add(interaction_root, "model",
+                                   json_object_new_string(provider->model));
+            json_object_object_add(interaction_root, "previous_interaction_id",
+                                   json_object_new_string(ai_provider_current_directive_id(app)));
+            json_object_object_add(interaction_root, "input", interaction_input);
+            json_object_object_add(interaction_root, "store", json_object_new_boolean(FALSE));
+
+            const char *interaction_data = json_object_to_json_string(interaction_root);
+            char *interaction_url = gemini_interactions_url(app);
+            GeminiHttpData interaction_http = { .app = app, .url = interaction_url };
+            long interaction_code = 0;
+            char *interaction_raw = ai_retry_execute_with_retry(
+                app, gemini_http_single_attempt, interaction_data,
+                &interaction_http, &interaction_code);
+
+            if (interaction_raw && interaction_code == 200) {
+                char *normalized = gemini_interaction_to_generate_json(interaction_raw);
+                if (normalized) {
+                    gemini_cache_store(prompt_hash, normalized);
+                    DEBUG_PRINT("[ %sDEBUG%s ]: [%sDIRECTIVES%s] %sGemini request used persistent directive interaction [%s%s%s].%s\n",
+			lt_pl, nml, cy,nml, gr, 
+                        red, ai_provider_current_directive_id(app), gr, nml);
+                    free(interaction_raw);
+                    g_free(interaction_url);
+                    json_object_put(interaction_root);
+                    g_free(prompt_hash);
+                    g_free(tee_chunk);
+                    g_free(cy);
+                    g_free(yl);
+                    g_free(gr);
+                    g_free(red);
+                    g_free(nml);
+                    json_object_put(root);
+                    return normalized;
+                }
+            }
+
+            if (interaction_raw) {
+                DEBUG_PRINT("[ %sDEBUG%s ]: [DIRECTIVES] Gemini interaction request failed HTTP [%ld]; falling back to generateContent for this request.\n",
+                    lt_pl, nml, interaction_code);
+                free(interaction_raw);
+            }
+            g_free(interaction_url);
+        } else if (interaction_input) {
+            json_object_put(interaction_input);
+        }
+        json_object_put(interaction_root);
+    }
+
+    const char *post_data = json_object_to_json_string(root);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOCHUNK%s] %sFinal Gemini JSON payload=[%s%zu%s] bytes (budget=%s%zu%s)%s\n",
+	lt_pl, nml, cy, nml, gr,
+        red, post_data ? strlen(post_data) : 0UL, gr,
+	red, request_budget, gr, nml);
+
     const char *base_url = provider->base_url ? provider->base_url : "https://generativelanguage.googleapis.com/v1beta";
     const char *endpoint = provider->endpoint ? provider->endpoint : "models/%s:generateContent";
     const char *model = provider->model ? provider->model : "gemini-3.1-flash-lite";
@@ -353,18 +682,39 @@ char* send_to_gemini(AppContext *app, const char *prompt) {
     if (app->sys.ratelimit_enabled) {
         ratelimit_wait_if_needed(&app->limiter);
     }
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     if (g_atomic_int_get(&app->sys.ai_busy)) {
-        DEBUG_PRINT("[ DEBUG ] SEND_TO_GEMINI: ai_busy flag set not executing perform_gemini_request\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSEND_TO_GEMINI%s]: %sai_busy flag set not executing perform_gemini_request%s\n",
+		lt_pl, nml, cy, nml, gr, nml);
         return NULL;
     }
 
     char *output = g_strdup(noise_filter_apply(app, prompt));
     g_atomic_int_set(&app->sys.ai_busy, 1);
-    DEBUG_PRINT("[ DEBUG ]: [SEND_TO_GEMINI] set ai_busy flag TRUE\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSEND_TO_GEMINI%s] %sset ai_busy flag TRUE%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
+
     char *data = perform_gemini_request_ex(app, output, NULL, TRUE);
     g_atomic_int_set(&app->sys.ai_busy, 0);
-    DEBUG_PRINT("[ DEBUG ]: [SEND_TO_GEMINI] Cleared ai_busy flag, returning response\n");
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSEND_TO_GEMINI%s] %sCleared ai_busy flag, returning response%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
+
     g_free(output);
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     return data;
 }
 
@@ -375,6 +725,13 @@ char* gemini_list_models(AppContext *app) {
     struct json_object *root = NULL;
     struct json_object *models_array = NULL;
     GString *model_output_str = g_string_new("");
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
 
     chunk.memory = malloc(1);  
     chunk.size = 0;    
@@ -396,15 +753,24 @@ char* gemini_list_models(AppContext *app) {
         headers = curl_slist_append(headers, api_key_header);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-        DEBUG_PRINT("[ DEBUG ]: [Gemini Models] Fetching models from: %s\n", url);
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sGemini Models%s] %sFetching models from: %s%s%s\n",
+		lt_pl, nml, cy, nml, gr,
+		red, url, nml );
 
         res = curl_easy_perform(curl);
 
         if (res != CURLE_OK) {
-            DEBUG_PRINT("[ DEBUG ]: [Gemini Models] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sGemini Models%s] %scurl_easy_perform() %sfailed%s: %s%s%s\n", 
+		lt_pl, nml, cy, nml, gr, 
+		red, gr, 
+		red, curl_easy_strerror(res), nml);
+
             g_string_append_printf(model_output_str, "Error: Failed to fetch models from Gemini API: %s\n", curl_easy_strerror(res));
         } else {
-            DEBUG_PRINT("[ DEBUG ]: [Gemini Models] Raw response: %s\n", chunk.memory);
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sGemini Models%s] %sRaw response: %s%s%s\n", 
+		lt_pl, nml, cy, nml, gr, 
+		red, chunk.memory, nml);
+
             root = json_tokener_parse(chunk.memory);
             if (root == NULL) {
                 g_string_append(model_output_str, "Error: Failed to parse Gemini API response (invalid JSON).\n");
@@ -454,10 +820,50 @@ char* gemini_list_models(AppContext *app) {
     free(chunk.memory); 
     curl_global_cleanup();
 
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     return g_string_free(model_output_str, FALSE); 
 }
 
 
+
+char* perform_gemini_request_ex_types(AppContext *app, const char *prompt, const char *terminal_context, gboolean include_history, TagType prompt_type, TagType context_type) {
+    return perform_gemini_request_ex_types_internal(
+        app, prompt, terminal_context, include_history, prompt_type, context_type, FALSE);
+}
+
+char* perform_gemini_send_directives(AppContext *app) {
+    if (!app || !GENERAL_DIRECTIVES || GENERAL_DIRECTIVES[0] == '\0')
+        return NULL;
+
+    /* Gemini's Interactions API gives AITerm a server-side parent interaction.
+     * The directives are included in this initialization call only.  Normal
+     * requests reference the resulting interaction ID instead of resending the
+     * directive block.  This avoids the per-request token cost while keeping
+     * the directives available to Gemini. */
+    const ProviderConfig *provider = ai_provider_current_config(app);
+    if (provider && provider->api_key &&
+        provider->model &&
+        provider->kind == PROVIDER_KIND_GEMINI_GENERATE) {
+        char *raw = gemini_create_directive_interaction(app);
+        if (raw) {
+            char *normalized = gemini_interaction_to_generate_json(raw);
+            free(raw);
+            if (normalized) return normalized;
+        }
+    }
+
+    /* Fallback for non-Google/custom Gemini endpoints that do not expose the
+     * Interactions API.  This remains an initialization/provider-change call,
+     * and normal requests still do not inject GENERAL_DIRECTIVES. */
+    return perform_gemini_request_ex_types_internal(
+        app, "Acknowledge these AITerm directives in one short sentence.",
+        NULL, FALSE, TAG_SYSTEM, TAG_NONE, TRUE);
+}
 
 char* perform_gemini_request_ex(AppContext *app, const char *prompt, const char *terminal_context, gboolean include_history) {
     return perform_gemini_request_ex_types(app, prompt, terminal_context, include_history, TAG_USER, TAG_LOG_DUMP);

@@ -17,6 +17,7 @@
 #include "update.h"
 #include "utils.h"
 #include "xml_tagging.h"
+#include "ai_provider.h"
 
 char *get_cache_dir(void) {
     const char *user_cache = g_get_user_cache_dir();
@@ -77,6 +78,10 @@ void gemini_cache_init(AppContext *app) {
     app->gemini_cache.id = NULL;
     app->gemini_cache.created_at = 0;
     app->gemini_cache.turn_count = 0;
+    app->gemini_cache.directive_interaction_id = NULL;
+    app->gemini_cache.directive_model = NULL;
+    app->gemini_cache.directive_created_at = 0;
+    app->gemini_cache.directive_active = FALSE;
     if (!app->gemini_cache.min_token_threshold) {
         app->gemini_cache.min_token_threshold = GEMINI_CACHE_MIN_TOKEN_FLOOR;
     }
@@ -156,7 +161,7 @@ gboolean gemini_cache_create(AppContext *app, struct json_object *contents) {
         return FALSE;
     }
 
-    ProviderConfig *api = &app->provider_config;
+    const ProviderConfig *api = ai_provider_current_config(app);
     const char *model = (api->model && strlen(api->model) > 0) ? api->model : "gemini-1.5-flash-lite";
     const char *base_url = (api->base_url && strlen(api->base_url) > 0) ? api->base_url : "https://generativelanguage.googleapis.com/v1beta";
     const char *query_key = (api->query_key_name && strlen(api->query_key_name) > 0) ? api->query_key_name : "key";
@@ -280,8 +285,8 @@ void gemini_cache_invalidate(AppContext *app) {
 
     DEBUG_PRINT("[ DEBUG ]: Manual cache invalidation triggered.\n");
 
-    if (app->gemini_cache.id && app->provider_config.api_key) {
-        ProviderConfig *api = &app->provider_config;
+    if (app->gemini_cache.id && ai_provider_current_config(app)->api_key) {
+        const ProviderConfig *api = ai_provider_current_config(app);
         const char *base_url = (api->base_url && strlen(api->base_url) > 0) ? api->base_url : "https://generativelanguage.googleapis.com/v1beta";
         const char *query_key = (api->query_key_name && strlen(api->query_key_name) > 0) ? api->query_key_name : "key";
 
