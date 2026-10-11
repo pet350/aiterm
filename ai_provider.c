@@ -14,11 +14,115 @@
 #include "auto_chunk.h"
 #include "ratelimit.h"
 
-static gboolean provider_is_gemini(const AppContext *app) {
-    return app && app->provider_config.kind == PROVIDER_KIND_GEMINI_GENERATE;
+static gboolean provider_is_gemini(AppContext *app) {
+    const ProviderConfig *provider = ai_provider_current_config(app);
+    return provider && provider->kind == PROVIDER_KIND_GEMINI_GENERATE;
 }
 
 extern int debug_mode;
+
+
+typedef struct {
+    AppContext *app;
+    ProviderConfig config;
+    char *directive_interaction_id;
+    char *directive_model;
+    guint64 generation;
+} AIProviderThreadSnapshot;
+
+static void provider_snapshot_free(gpointer data) {
+    AIProviderThreadSnapshot *snap = data;
+    if (!snap) return;
+    free_provider_config(&snap->config);
+    g_free(snap->directive_interaction_id);
+    g_free(snap->directive_model);
+    g_free(snap);
+}
+
+static GPrivate provider_snapshot_private = G_PRIVATE_INIT(provider_snapshot_free);
+
+void ai_provider_snapshot_begin(AppContext *app) {
+    if (!app) return;
+
+    AIProviderThreadSnapshot *old = g_private_get(&provider_snapshot_private);
+    if (old && old->app == app)
+        return;
+
+    AIProviderThreadSnapshot *snap = g_malloc0(sizeof(*snap));
+    snap->app = app;
+
+    g_mutex_lock(&app->provider_mutex);
+    snap->generation = app->provider_generation;
+    ProviderConfig *src = &app->provider_config;
+    snap->config.name = g_strdup(src->name);
+    snap->config.model = g_strdup(src->model);
+    snap->config.api_key = g_strdup(src->api_key);
+    snap->config.base_url = g_strdup(src->base_url);
+    snap->config.endpoint = g_strdup(src->endpoint);
+    snap->config.auth_header = g_strdup(src->auth_header);
+    snap->config.auth_scheme = g_strdup(src->auth_scheme);
+    snap->config.query_key_name = g_strdup(src->query_key_name);
+    snap->config.provider = g_strdup(src->provider);
+    snap->config.kind = src->kind;
+    snap->config.api_key_in_query = src->api_key_in_query;
+    snap->directive_interaction_id = g_strdup(app->gemini_cache.directive_interaction_id);
+    snap->directive_model = g_strdup(app->gemini_cache.directive_model);
+    g_mutex_unlock(&app->provider_mutex);
+
+    g_private_set(&provider_snapshot_private, snap);
+}
+
+void ai_provider_snapshot_end(void) {
+    g_private_set(&provider_snapshot_private, NULL);
+}
+
+const ProviderConfig *ai_provider_current_config(const AppContext *app) {
+    AIProviderThreadSnapshot *snap = g_private_get(&provider_snapshot_private);
+    if (snap && snap->app == app)
+        return &snap->config;
+    return app ? &app->provider_config : NULL;
+}
+
+const char *ai_provider_current_directive_id(AppContext *app) {
+    AIProviderThreadSnapshot *snap = g_private_get(&provider_snapshot_private);
+    if (snap && snap->app == app)
+        return snap->directive_interaction_id;
+    return app ? app->gemini_cache.directive_interaction_id : NULL;
+}
+
+const char *ai_provider_current_directive_model(AppContext *app) {
+    AIProviderThreadSnapshot *snap = g_private_get(&provider_snapshot_private);
+    if (snap && snap->app == app)
+        return snap->directive_model;
+    return app ? app->gemini_cache.directive_model : NULL;
+}
+
+guint64 ai_provider_current_generation(AppContext *app) {
+    AIProviderThreadSnapshot *snap = g_private_get(&provider_snapshot_private);
+    if (snap && snap->app == app)
+        return snap->generation;
+    if (!app) return 0;
+    g_mutex_lock((GMutex *)&app->provider_mutex);
+    guint64 generation = app->provider_generation;
+    g_mutex_unlock((GMutex *)&app->provider_mutex);
+    return generation;
+}
+
+gboolean ai_provider_snapshot_is_current(AppContext *app) {
+    AIProviderThreadSnapshot *snap = g_private_get(&provider_snapshot_private);
+    if (!snap || snap->app != app || !app)
+        return FALSE;
+
+    g_mutex_lock(&app->provider_mutex);
+    gboolean current = (snap->generation == app->provider_generation);
+    g_mutex_unlock(&app->provider_mutex);
+    return current;
+}
+
+gboolean ai_provider_snapshot_active(AppContext *app) {
+    AIProviderThreadSnapshot *snap = g_private_get(&provider_snapshot_private);
+    return snap && snap->app == app;
+}
 
 static char *provider_send_direct_types(AppContext *app, const char *prompt,
                                         const char *terminal_context,
@@ -30,6 +134,202 @@ static char *provider_send_direct_types(AppContext *app, const char *prompt,
         return perform_gemini_request_ex_types(app, prompt, terminal_context, include_history, prompt_type, context_type);
 
     return send_to_openai_ex_types(app, prompt, terminal_context, include_history, prompt_type, context_type);
+}
+
+void ai_provider_config_lock(AppContext *app) {
+    if (app) g_mutex_lock(&app->provider_mutex);
+}
+
+void ai_provider_config_unlock(AppContext *app) {
+    if (app) g_mutex_unlock(&app->provider_mutex);
+}
+
+typedef struct {
+    AppContext *app;
+    char *prompt;
+    char *terminal_context;
+    gboolean directives;
+    AIProviderAsyncCallback callback;
+    gpointer user_data;
+} AIProviderAsyncJob;
+
+typedef struct {
+    AppContext *app;
+    char *raw_response;
+    AIProviderAsyncCallback callback;
+    gpointer user_data;
+} AIProviderAsyncResult;
+
+static gboolean ai_provider_async_complete(gpointer data) {
+    AIProviderAsyncResult *result = data;
+    if (!result)
+        return G_SOURCE_REMOVE;
+
+    if (result->callback) {
+        result->callback(result->app, result->raw_response, result->user_data);
+        result->raw_response = NULL;
+    }
+
+    if (result->raw_response)
+        free(result->raw_response);
+
+    g_free(result);
+    return G_SOURCE_REMOVE;
+}
+
+static gpointer ai_provider_async_worker(gpointer data) {
+    AIProviderAsyncJob *job = data;
+    if (!job || !job->app)
+        return NULL;
+
+    SET_THREAD_NAME("aiterm-provider");
+
+    char *raw_response = NULL;
+
+    /* A provider-change directive refresh has priority over normal requests,
+     * but waiting happens only on this worker. GTK never waits for it. */
+    if (!job->directives) {
+        g_mutex_lock(&job->app->provider_mutex);
+        while (job->app->provider_directives_pending)
+            g_cond_wait(&job->app->provider_cond, &job->app->provider_mutex);
+        g_mutex_unlock(&job->app->provider_mutex);
+    }
+
+    ai_provider_snapshot_begin(job->app);
+
+    if (job->directives) {
+        raw_response = ai_provider_send_directives_locked(job->app);
+    } else {
+        raw_response = ai_provider_send_with_context_types(
+            job->app, job->prompt, job->terminal_context, TAG_USER, TAG_LOG_DUMP);
+    }
+
+    if (job->directives) {
+        guint64 worker_generation = ai_provider_current_generation(job->app);
+        g_mutex_lock(&job->app->provider_mutex);
+        if (worker_generation == job->app->provider_generation) {
+            job->app->provider_directives_pending = FALSE;
+            g_cond_broadcast(&job->app->provider_cond);
+        }
+        g_mutex_unlock(&job->app->provider_mutex);
+    }
+
+    ai_provider_snapshot_end();
+
+    AIProviderAsyncResult *result = g_malloc0(sizeof(*result));
+    result->app = job->app;
+    result->raw_response = raw_response;
+    result->callback = job->callback;
+    result->user_data = job->user_data;
+
+    g_main_context_invoke(NULL, ai_provider_async_complete, result);
+
+    g_free(job->prompt);
+    g_free(job->terminal_context);
+    g_free(job);
+    return NULL;
+}
+
+static gboolean ai_provider_queue_async(AppContext *app,
+                                         const char *prompt,
+                                         const char *terminal_context,
+                                         gboolean directives,
+                                         AIProviderAsyncCallback callback,
+                                         gpointer user_data) {
+    if (!app)
+        return FALSE;
+
+    AIProviderAsyncJob *job = g_malloc0(sizeof(*job));
+    job->app = app;
+    job->prompt = prompt ? g_strdup(prompt) : NULL;
+    job->terminal_context = terminal_context ? g_strdup(terminal_context) : NULL;
+    job->directives = directives;
+    job->callback = callback;
+    job->user_data = user_data;
+
+    GThread *thread = g_thread_new("aiterm-provider", ai_provider_async_worker, job);
+    if (!thread) {
+        g_free(job->prompt);
+        g_free(job->terminal_context);
+        g_free(job);
+        return FALSE;
+    }
+
+    g_thread_unref(thread);
+    return TRUE;
+}
+
+gboolean ai_provider_send_with_context_async(AppContext *app, const char *prompt,
+                                              const char *terminal_context,
+                                              AIProviderAsyncCallback callback,
+                                              gpointer user_data) {
+    if (!app || !prompt)
+        return FALSE;
+
+    return ai_provider_queue_async(app, prompt, terminal_context, FALSE, callback, user_data);
+}
+
+gboolean ai_provider_send_directives_async_locked(AppContext *app,
+                                                   AIProviderAsyncCallback callback,
+                                                   gpointer user_data) {
+    if (!app)
+        return FALSE;
+
+    app->provider_directives_pending = TRUE;
+
+    if (!ai_provider_queue_async(app, NULL, NULL, TRUE, callback, user_data)) {
+        app->provider_directives_pending = FALSE;
+        g_cond_broadcast(&app->provider_cond);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+gboolean ai_provider_send_directives_async(AppContext *app,
+                                            AIProviderAsyncCallback callback,
+                                            gpointer user_data) {
+    if (!app)
+        return FALSE;
+
+    g_mutex_lock(&app->provider_mutex);
+    gboolean queued = ai_provider_send_directives_async_locked(app, callback, user_data);
+    g_mutex_unlock(&app->provider_mutex);
+    return queued;
+}
+
+void ai_provider_invalidate_directives(AppContext *app) {
+    if (!app) return;
+    gemini_directive_invalidate(app);
+}
+
+char *ai_provider_send_directives_locked(AppContext *app) {
+    if (!app) return NULL;
+
+    gemini_directive_invalidate(app);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sDIRECTIVES%s] %sSending GENERAL_DIRECTIVES to provider [%s%s%s].%s\n",
+        app->ansi.lt_purple, app->ansi.normal,
+        app->ansi.cyan, app->ansi.normal,
+        app->ansi.yellow, app->ansi.red,
+        ai_provider_current_config(app)->provider ? ai_provider_current_config(app)->provider : "unknown",
+        app->ansi.green, app->ansi.normal);
+
+    if (provider_is_gemini(app))
+        return perform_gemini_send_directives(app);
+
+    return send_to_openai_send_directives(app);
+}
+
+char *ai_provider_send_directives(AppContext *app) {
+    if (!app) return NULL;
+    gboolean owns_snapshot = !ai_provider_snapshot_active(app);
+    if (owns_snapshot)
+        ai_provider_snapshot_begin(app);
+    char *result = ai_provider_send_directives_locked(app);
+    if (owns_snapshot)
+        ai_provider_snapshot_end();
+    return result;
 }
 
 char *provider_send_direct(AppContext *app, const char *prompt,
@@ -116,8 +416,11 @@ static char *provider_send_chunked_context(AppContext *app,
         if (app->sys.ratelimit_enabled)
             ratelimit_wait_if_needed(&app->limiter);
 
-        DEBUG_PRINT("[ AUTOCHUNK ] Ingesting chunk %u/%u (%zu bytes).\n",
-                    i + 1, chunk_count, strlen(chunk_text));
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOCHUNK%s] %sIngesting chunk [%s%u%s/%s%u%s] (%s%zu%s bytes).%s\n",
+		lt_pl, nml, cy, nml, gr,
+                red, i + 1, gr, 
+		red, chunk_count, gr,
+		red, strlen(chunk_text), gr, nml);
 
         char *raw = provider_send_direct_types(app, chunk_prompt, chunk_text, FALSE, TAG_SYSTEM, context_type);
         g_free(chunk_prompt);
@@ -152,8 +455,10 @@ static char *provider_send_chunked_context(AppContext *app,
         }
     }
 
-    DEBUG_PRINT("[ AUTOCHUNK ] Every source chunk was dispatched: %u/%u successful ingestion passes.\n",
-                successful, chunk_count);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOCHUNK%s] %sEvery source chunk was dispatched: [%s%u%s/%s%u%s] successful ingestion passes.%s\n",
+		lt_pl, nml, cy, nml, gr,
+                red, successful, gr, 
+		red, chunk_count, gr, nml);
 
     /* Preserve aggregate chunk state after the individual provider calls reset
      * their local chunk statistics. */
@@ -180,8 +485,11 @@ static char *provider_send_chunked_context(AppContext *app,
         prompt, chunk_count);
 
     gsize final_context_len = digests->len;
-    DEBUG_PRINT("[ AUTOCHUNK ] Final synthesis using %u/%u chunk digests (%zu bytes).\n",
-                successful, chunk_count, final_context_len);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOCHUNK%s] %sFinal synthesis using [%s%u%s/%s%u%s] chunk digests (%s%zu%s bytes).%s\n",
+		lt_pl, nml, cy, nml, gr,
+                red, successful, gr,
+		red, chunk_count, gr,
+		red, final_context_len, gr, nml);
 
     if (app->sys.ratelimit_enabled)
         ratelimit_wait_if_needed(&app->limiter);
@@ -205,6 +513,10 @@ char *ai_provider_send_with_context_types(AppContext *app, const char *prompt,
                                           TagType prompt_type, TagType context_type) {
     if (!app || !prompt) return NULL;
 
+    gboolean owns_snapshot = !ai_provider_snapshot_active(app);
+    if (owns_snapshot)
+        ai_provider_snapshot_begin(app);
+
     char *lt_pl   = g_strdup(app->ansi.lt_purple);
     char *cy      = g_strdup(app->ansi.cyan);
     char *yl      = g_strdup(app->ansi.yellow);
@@ -218,12 +530,12 @@ char *ai_provider_send_with_context_types(AppContext *app, const char *prompt,
         lt_pl, nml, cy, nml, yl, gr);
     if (provider_is_gemini(app)) {
         DBG_PRINT("Gemini [%s%s%s]%s\n",
-                red, app->provider_config.model ? app->provider_config.model : "default",
+                red, ai_provider_current_config(app)->model ? ai_provider_current_config(app)->model : "default",
                 gr, nml);
     } else {
         DBG_PRINT("OpenAI-compatible %s%s / %s%s\n",
-                red, app->provider_config.provider ? app->provider_config.provider : "openai",
-                app->provider_config.model ? app->provider_config.model : "default", nml);
+                red, ai_provider_current_config(app)->provider ? ai_provider_current_config(app)->provider : "openai",
+                ai_provider_current_config(app)->model ? ai_provider_current_config(app)->model : "default", nml);
     }
 
     gsize context_len = terminal_context ? strlen(terminal_context) : 0;
@@ -237,7 +549,7 @@ char *ai_provider_send_with_context_types(AppContext *app, const char *prompt,
         lt_pl, nml, cy, nml, gr, red, context_len, gr, nml);
     DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOCHUNK%s] %sprovider=[%s%s%s] request_budget=[%s%zu%s] fixed=[%s%zu%s] initial_terminal_budget=[%s%zu%s]%s\n",
 	lt_pl, nml, cy, nml, gr,
-        red, app->provider_config.provider ? app->provider_config.provider : "openai", gr,
+        red, ai_provider_current_config(app)->provider ? ai_provider_current_config(app)->provider : "openai", gr,
         red, request_budget, gr, 
 	red, fixed_budget, gr, 
 	red, terminal_budget, gr, nml);
@@ -256,6 +568,8 @@ char *ai_provider_send_with_context_types(AppContext *app, const char *prompt,
     g_free(red);
     g_free(nml);
 
+    if (owns_snapshot)
+        ai_provider_snapshot_end();
     return RV;
 }
 
@@ -307,7 +621,7 @@ void ai_provider_extract_usage(AppContext *app, const char *raw_json) {
     json_object_put(root);
 }
 
-const char *ai_provider_protocol_name(const AppContext *app) {
+const char *ai_provider_protocol_name(AppContext *app) {
     if (!app) return "unknown";
     return provider_is_gemini(app) ? "gemini-generateContent" : "openai-chat-completions";
 }

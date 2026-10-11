@@ -16,6 +16,7 @@
 #include "session_manager.h"
 #include "noisefilter.h"
 #include "snmp_manager.h"
+#include "terminal.h"
 
 // --- FORWARD DECLARATIONS (Private callbacks for 0.8.3) ---
 static gboolean update_tee_ui(gpointer data);
@@ -99,6 +100,13 @@ char* tee_get_latest_for_ai(AppContext *app) {
     if (!app || !app->database.global_db_conn || !app->session.session_uuid)
         return NULL;
 
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     MYSQL *db = app->database.global_db_conn;
     const char *uuid = app->session.write_to_global
                      ? GLOBAL_SESSION_UUID
@@ -118,11 +126,18 @@ char* tee_get_latest_for_ai(AppContext *app) {
         db, escaped_uuid, uuid, (unsigned long)strlen(uuid));
     escaped_uuid[escaped_len] = '\0';
 
+    /* Scope to the focused tab: captures are stamped "[tab pts/N]" by
+     * terminal_capture_pending_tee(), so a manual question asked from one tab
+     * never gets another tab's (or a noisy log tab's) newest row. */
+    const char *tab = terminal_active_tab_name(app);
+    char *tab_filter = tab ? g_strdup_printf("AND content LIKE '%%[tab %s]%%' ", tab)
+                           : g_strdup("");
     char *query = g_strdup_printf(
         "SELECT content, sequence_id FROM aiterm_history "
-        "WHERE session_uuid = '%s' AND is_tee = 1 AND role = 'terminal' "
+        "WHERE session_uuid = '%s' AND is_tee = 1 AND role = 'terminal' %s"
         "ORDER BY id DESC LIMIT 1",
-        escaped_uuid);
+        escaped_uuid, tab_filter);
+    g_free(tab_filter);
 
     char *snapshot = NULL;
     if (query && mysql_query(db, query) == 0) {
@@ -131,21 +146,30 @@ char* tee_get_latest_for_ai(AppContext *app) {
             MYSQL_ROW row = mysql_fetch_row(res);
             if (row && row[0] && *row[0]) {
                 snapshot = g_strdup(row[0]);
-                DEBUG_PRINT(
-                    "[ TEE DB ] latest persisted terminal snapshot=%zu bytes sequence=%s\n",
-                    strlen(snapshot), row[1] ? row[1] : "?");
+                DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE DB%s] %sLatest persisted terminal snapshot=[%s%zu%s] bytes sequence=[%s%s%s]%s\n",
+		    lt_pl, nml, cy, nml, gr,
+                    red, strlen(snapshot), gr,
+		    red, row[1] ? row[1] : "?", gr, nml);
             }
             mysql_free_result(res);
         }
     } else if (query) {
-        DEBUG_PRINT("[ TEE DB ] latest snapshot query failed: %s\n",
-                    mysql_error(db));
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE DB%s] %sLatest snapshot query %sfailed: %s%s%s\n",
+		lt_pl, nml, cy, nml, gr, yl,
+                red, mysql_error(db), nml);
     }
 
     g_free(query);
     g_free(escaped_uuid);
     pthread_mutex_unlock(&app->access.db_mutex);
     mysql_thread_end();
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
 
     return snapshot;
 }
@@ -172,7 +196,7 @@ char* tee_extract_for_ai(AppContext *app) {
 		gr, nml);
         g_string_assign(app->aiterm_runtime.tee_accumulator, "");
     } else {
-        DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE_EXTRACT%s ] %saccumulator only %s%zu%s bytes; %snothing to flush%s\n",
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_EXTRACT%s ] %saccumulator only %s%zu%s bytes; %snothing to flush%s\n",
 		lt_pl, nml, cy, nml, gr,
                 red, app->aiterm_runtime.tee_accumulator->len,
 		gr, red, nml);
@@ -198,16 +222,34 @@ void tee_flush_pending_to_history(AppContext *app) {
     if (!app || !app->aiterm_runtime.tee_accumulator)
         return;
 
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     char *local_out = tee_extract_for_ai(app);
     if (!local_out || !*local_out) {
         g_free(local_out);
-        DEBUG_PRINT("[ TEE FLUSH ] No pending TEE data to persist.\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE FLUSH%s] %sNo pending TEE data to persist.%s\n",
+	   lt_pl, nml, cy, nml, yl, nml);
         return;
     }
 
-    DEBUG_PRINT("[ TEE FLUSH ] Persisting %zu bytes without AI dispatch.\n",
-                strlen(local_out));
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE FLUSH%s] %sPersisting [%s%zu%s] bytes without AI dispatch.%s\n",
+		lt_pl, nml, cy, nml, gr,
+                red, strlen(local_out), gr, nml);\
+
     save_tee_to_history(local_out, NULL, "terminal");
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     g_free(local_out);
 }
 
@@ -330,13 +372,13 @@ static gboolean update_tee_ui(gpointer data) {
     char *red     = g_strdup(global_app->ansi.red);
     char *nml     = g_strdup(global_app->ansi.normal);
 
-    DEBUG_PRINT("[%sMEMDBG%s ]: [%sTEE_UI%s] %strd=[%s%p%s] terminal=[%s%p%s] response=[%s%p%s]%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_UI%s] %strd=[%s%p%s] terminal=[%s%p%s] response=[%s%p%s]%s\n",
 	lt_pl, nml, cy, nml, yl,
         red, (void*)trd, yl,
         red, (void*)trd->terminal_output, yl,
 	red, (void*)trd->response_text, yl, nml);
     char *ai_text = extract_ai_text(trd->response_text);
-    DEBUG_PRINT("[%sMEMDBG %s]: [%sTEE_UI%s] %sextract_ai_text -> [%s%p%s]%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s]: [%sTEE_UI%s] %sextract_ai_text -> [%s%p%s]%s\n",
 	lt_pl, nml, cy, nml, gr,
 	red,  (void*)ai_text, gr, nml);
 
@@ -345,7 +387,7 @@ static gboolean update_tee_ui(gpointer data) {
         write_to_ai_pane(trd->app, "AI (Auto-Reply): ", ai_text, "user_tag", "ai_tag");
 
         // SAVE TO DATABASE: Ensure automated insights are in the 100-msg history
-        DEBUG_PRINT("[%sMEMDBG %s]: [%sTEE_UI%s] %sBEFORE save_tee_to_history terminal=[%s%p%s] ai=[%s%p%s]%s\n",
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_UI%s] %sBEFORE save_tee_to_history terminal=[%s%p%s] ai=[%s%p%s]%s\n",
 		lt_pl, nml, cy, nml, gr,
                 red, (void*)trd->terminal_output, gr,
 		red, (void*)ai_text, gr, nml);
@@ -353,11 +395,11 @@ static gboolean update_tee_ui(gpointer data) {
         save_tee_to_history(trd->terminal_output, ai_text,
                             trd->history_role ? trd->history_role : "terminal");
 
-        DEBUG_PRINT("[%sMEMDBG %s]: [%sTEE_UI%s] %sAFTER save_tee_to_history ai=[%s%p%s]%s\n",
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_UI%s] %sAFTER save_tee_to_history ai=[%s%p%s]%s\n",
 		lt_pl, nml, cy, nml, gr, 
 		red, (void*)ai_text, gr, nml);
 
-        DEBUG_PRINT("[%sMEMDBG %s]: [%sTEE_UI%s] %sFREE ai_text=[%s%p%s]%s\n", 
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_UI%s] %sFREE ai_text=[%s%p%s]%s\n", 
 		lt_pl, nml, cy, nml, gr, 
 		red, (void*)ai_text, gr, nml);
 
@@ -371,18 +413,18 @@ static gboolean update_tee_ui(gpointer data) {
     g_atomic_int_set(&trd->app->sys.is_processing, 0);
 
     // Final memory cleanup
-    DEBUG_PRINT("[%sMEMDBG %s]: [%sTEE_UI%s] %sFREE response_text=[%s%p%s]%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_UI%s] %sFREE response_text=[%s%p%s]%s\n",
 	lt_pl, nml, cy, nml, gr, 
 	red, (void*)trd->response_text, gr, nml);
 
     if (trd->response_text) g_free(trd->response_text);
-    DEBUG_PRINT("[%sMEMDBG %s]: [%sTEE_UI%s] %sFREE terminal_output=[%s%p%s]%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_UI%s] %sFREE terminal_output=[%s%p%s]%s\n",
 	lt_pl, nml, cy, nml, gr,
 	red,  (void*)trd->terminal_output, gr, nml);
 
     if (trd->terminal_output) g_free(trd->terminal_output);
     if (trd->history_role) g_free(trd->history_role);
-    DEBUG_PRINT("[%sMEMDBG %s]: [%sTEE_UI%s] %sFREE trd=[%s%p%s]%s\n", 
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_UI%s] %sFREE trd=[%s%p%s]%s\n", 
 	lt_pl, nml, cy, nml, gr,
 	red, (void*)trd, gr, nml);
 
@@ -569,23 +611,23 @@ static gpointer snmp_ai_thread_func(gpointer data) {
     char *clean_prompt = strip_blank_lines(final_prompt);
     TagType context_type = trd->context_type ? trd->context_type : TAG_SNMP;
 
-    DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE%s] %s========================================%s\n", 
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE%s] %s========================================%s\n", 
 	lt_pl, nml, cy, nml, red, nml);
 
-    DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE%s] %sSending Tee request to AI provider%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE%s] %sSending Tee request to AI provider%s\n",
 	lt_pl, nml, cy, nml, gr, nml);
 
-    DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE%s] %sProvider=[%s%s%s]%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE%s] %sProvider=[%s%s%s]%s\n",
 	lt_pl, nml, cy, nml, gr,
         red, app->provider_config.provider ? app->provider_config.provider : "(null)", 
 	gr, nml);
 
-    DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE%s] %smodel=[%s%s%s]%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE%s] %smodel=[%s%s%s]%s\n",
 	lt_pl, nml, cy, nml, gr,
         red, app->provider_config.model ? app->provider_config.model : "(null)",
 	gr, nml);
 
-    DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE%s] %sSNMP context length=[%s%zu%s]%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE%s] %sSNMP context length=[%s%zu%s]%s\n",
 	lt_pl, nml, cy, nml, gr,
         red, trd->terminal_output ? strlen(trd->terminal_output) : 0UL,
 	gr, nml);
@@ -595,7 +637,7 @@ static gpointer snmp_ai_thread_func(gpointer data) {
             lt_pl, nml, cy, nml, gr, lt_pl, trd->terminal_output, nml);
     }
 
-DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE%s] %s========================================%s\n",
+DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE%s] %s========================================%s\n",
 	lt_pl, nml, cy, nml, red, nml);
 
     char *response = ai_provider_send_with_context_types(

@@ -32,6 +32,7 @@
 #include "menu.h"
 #include "snmp_manager.h"
 #include "snmp_manager_gui.h"
+#include "ai_provider.h"
 #include "provider_manager_gui.h"
 #include "autoexec.h"
 #include "terminal.h"
@@ -85,6 +86,7 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
                 memset(app->security.master_key, 0, len);
                 free(app->security.master_key);
             }
+            gemini_directive_invalidate(app);
             free_provider_config(&app->provider_config);
             g_free(app);
             exit(0);
@@ -706,9 +708,12 @@ void handle_version_wrapper(AppContext *app, const char *args) {
 
 void handle_load_config_wrapper(AppContext *app, const char *args) {
     write_to_ai_pane(app, "System: ", "Loaded settings from configuration file", "system_tag", "ai_tag");
+    ai_provider_config_lock(app);
     load_config(app);
     init_provider_config(app);
     gemini_cache_invalidate(app);
+    ai_provider_invalidate_directives(app);
+    ai_provider_config_unlock(app);
 }
 
 void handle_save_config_wrapper(AppContext *app, const char *args) {

@@ -49,7 +49,11 @@ gboolean is_quota_or_ratelimit_error(long http_code, const char *raw_response) {
         if (strstr(raw_response, "RESOURCE_EXHAUSTED") != NULL ||
             strstr(raw_response, "Quota exceeded") != NULL ||
             strstr(raw_response, "exceeded your current quota") != NULL ||
-            strstr(raw_response, "Please retry in") != NULL) {
+            strstr(raw_response, "Please retry in") != NULL ||
+            strstr(raw_response, "Please try again in") != NULL ||
+            strstr(raw_response, "Rate limit reached") != NULL ||
+            strstr(raw_response, "tokens per minute") != NULL ||
+            strstr(raw_response, "TPM") != NULL) {
             return true;
         }
     }
@@ -61,12 +65,21 @@ gboolean is_quota_or_ratelimit_error(long http_code, const char *raw_response) {
 double extract_recommended_delay(const char *raw_response, double default_delay_sec) {
     if (!raw_response) return default_delay_sec;
 
-    const char *p = strstr(raw_response, "Please retry in ");
-    if (p) {
-        p += strlen("Please retry in ");
+    const char *patterns[] = {
+        "Please retry in ",
+        "Please try again in "
+    };
+
+    for (guint i = 0; i < G_N_ELEMENTS(patterns); i++) {
+        const char *p = strstr(raw_response, patterns[i]);
+        if (!p)
+            continue;
+
+        p += strlen(patterns[i]);
+
         double parsed_seconds = 0.0;
         if (sscanf(p, "%lf", &parsed_seconds) == 1 && parsed_seconds > 0.0) {
-            // Add a 0.25s safety margin to guarantee the window resets on Gemini's side
+            /* Small safety margin lets the provider's TPM window settle. */
             return parsed_seconds + 0.25;
         }
     }
@@ -113,6 +126,16 @@ void ai_retry_init(AppContext *app) {
     g_free(nml);
 }
 
+/* Retry backoff executes in the provider worker thread. UI-facing provider
+ * transactions are asynchronous, so GTK's main loop is never used for sleep
+ * or network retry work. */
+static void ai_retry_backoff(double seconds) {
+    if (seconds <= 0.0)
+        return;
+
+    g_usleep((gulong)(seconds * 1000000.0));
+}
+
 gboolean ai_retry_is_transient_error(long http_status, const char *response_body) {
     // Standard HTTP transient failure codes
     if (http_status == 429 || http_status == 503 || http_status == 500 || http_status == 502) {
@@ -125,6 +148,10 @@ gboolean ai_retry_is_transient_error(long http_status, const char *response_body
             strstr(response_body, "RESOURCE_EXHAUSTED") != NULL ||
             strstr(response_body, "Spikes in demand are usually temporary") != NULL ||
             strstr(response_body, "please try again") != NULL ||
+            strstr(response_body, "Please try again in") != NULL ||
+            strstr(response_body, "Rate limit reached") != NULL ||
+            strstr(response_body, "tokens per minute") != NULL ||
+            strstr(response_body, "TPM") != NULL ||
             strstr(response_body, "UNAVAILABLE") != NULL) {
             return TRUE;
         }
@@ -179,7 +206,7 @@ char* ai_retry_execute_with_retry(AppContext *app,
 
             if (attempt < max_attempts) {
                 // Sleep using GLib microsecond delay
-                g_usleep((gulong)(sleep_sec * 1000000.0));
+                ai_retry_backoff(sleep_sec);
                 continue;
             }
         }
@@ -196,7 +223,7 @@ char* ai_retry_execute_with_retry(AppContext *app,
             double sleep_sec = base_delay * attempt;
             DEBUG_PRINT("[%s DEBUG %s]: [%sAI RETRY%s] %sTransient error (%sHTTP %ld%s). Retrying in [%s%.2f%s] seconds...%s\n", 
 		lt_pl, nml, cy, nml,yl, red, http_code, yl, red, sleep_sec, yl, nml);
-            g_usleep((gulong)(sleep_sec * 1000000.0));
+            ai_retry_backoff(sleep_sec);
         }
     }
 

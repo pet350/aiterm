@@ -21,6 +21,8 @@ void apply_visual_settings(AppContext *app);
 char *terminal_capture_context(AppContext *app);
 /* Capture terminal output not yet moved into the TEE accumulator. GTK-thread only. */
 gboolean terminal_capture_pending_tee(AppContext *app);
+/* Name ("pts/N") of the focused tab; used to scope TEE context to that tab. */
+const char *terminal_active_tab_name(AppContext *app);
 
 #endif
 

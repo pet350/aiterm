@@ -882,6 +882,13 @@ GList* extract_code_blocks(const char *text) {
 void feed_command_to_vte(AppContext *app, const char *cmd) {
     if (!app || !cmd) return;
 
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     // Always resolve the destination from the notebook's CURRENT page.
     // app->gui.terminal_view is a cached pointer and is not safe as the sole
     // routing source while multiple tabs are being created or switched.
@@ -904,16 +911,35 @@ void feed_command_to_vte(AppContext *app, const char *cmd) {
     }
 
     if (!active_terminal || !VTE_IS_TERMINAL(active_terminal)) {
-        DEBUG_PRINT("[AUTOEXEC]: No valid current-tab VTE; command not sent: %s\n", cmd);
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOEXEC%s]: %sNo valid current-tab VTE; command not sent: %s%s%s\n", 
+		lt_pl, nml, cy, nml, yl,
+		red, cmd, nml);
+
+        g_free(cy);
+        g_free(yl);
+        g_free(gr);
+        g_free(red);
+        g_free(nml);
         return;
     }
 
     char *exec_str = g_strdup_printf("%s\n", cmd);
     VteTerminal *vte = VTE_TERMINAL(active_terminal);
 
-    DEBUG_PRINT("[AUTOEXEC]: Sending command to current tab page #%d (VTE=%p): %s",
-                current_page, (void *)vte, exec_str);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOEXEC%s]: %sSending command to current tab page [%s#%d%s] (VTE=%s%p%s): %s%s%s",
+		lt_pl, nml, cy, nml, gr,
+                red, current_page, gr,
+		red, (void *)vte, gr,
+		red, exec_str, nml);
+
     vte_terminal_feed_child(vte, exec_str, strlen(exec_str));
+
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     g_free(exec_str);
 }
 

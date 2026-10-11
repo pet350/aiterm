@@ -21,36 +21,54 @@
 extern void add_terminal_tab(AppContext *app);
 extern void execute_next_queued_command(AppContext *app);
 
-gboolean terminal_capture_pending_tee(AppContext *app) {
-    if (!app || !app->gui.terminal_view ||
-        !VTE_IS_TERMINAL(app->gui.terminal_view) ||
-        !app->aiterm_runtime.tee_accumulator) {
-        return FALSE;
+/* Per-tab capture bookkeeping. Previously this lived in app->database and was
+ * shared by every tab (and reset by every new tab), so only the newest tab's
+ * row counters ever made sense. It now hangs off each VteTerminal. */
+typedef struct {
+    long last_row;
+    long last_col;
+    long last_processed_row;
+    int  silence_ticks;
+    char name[16];               /* "pts/N", matches the notebook tab label */
+} TeeTabState;
+
+static TeeTabState *tee_tab_state(VteTerminal *vte) {
+    TeeTabState *st = g_object_get_data(G_OBJECT(vte), "tee-tab-state");
+    if (!st) {
+        static int tab_seq = 0;
+        st = g_new0(TeeTabState, 1);
+        snprintf(st->name, sizeof(st->name), "pts/%d", ++tab_seq);
+        g_object_set_data_full(G_OBJECT(vte), "tee-tab-state", st, g_free);
     }
+    return st;
+}
+
+/* Capture new output from ONE specific terminal into the shared accumulator.
+ * GTK-thread only. */
+static gboolean terminal_capture_pending_tee_vte(AppContext *app, VteTerminal *vte) {
+    if (!app || !vte || !VTE_IS_TERMINAL(vte) || !app->aiterm_runtime.tee_accumulator)
+        return FALSE;
 
     if (!app->sys.tee_enabled && !app->sys.autoreply_enabled)
         return FALSE;
 
+    TeeTabState *st = tee_tab_state(vte);
+
     long cur_row = 0, cur_col = 0;
-    VteTerminal *vte = VTE_TERMINAL(app->gui.terminal_view);
     vte_terminal_get_cursor_position(vte, &cur_col, &cur_row);
 
-    if (cur_row <= app->database.last_processed_row)
+    if (cur_row <= st->last_processed_row)
         return FALSE;
 
     char *new_text = vte_terminal_get_text_range(
-        vte,
-        app->database.last_processed_row, 0,
-        cur_row, cur_col,
-        NULL, NULL, NULL
-    );
+        vte, st->last_processed_row, 0, cur_row, cur_col, NULL, NULL, NULL);
 
     if (!new_text || strlen(new_text) <= 1) {
         g_free(new_text);
         return FALSE;
     }
 
-    app->database.last_processed_row = cur_row;
+    st->last_processed_row = cur_row;
 
     char *cleaned = strip_blank_lines(new_text);
     g_free(new_text);
@@ -59,35 +77,36 @@ gboolean terminal_capture_pending_tee(AppContext *app) {
         return FALSE;
     }
 
-    char *lt_pl   = g_strdup(app->ansi.lt_purple);
-    char *cy      = g_strdup(app->ansi.cyan);
-    char *yl      = g_strdup(app->ansi.yellow);
-    char *gr      = g_strdup(app->ansi.green);
-    char *red     = g_strdup(app->ansi.red);
-    char *nml     = g_strdup(app->ansi.normal);
-
-
-
+    /* Tag every capture with its source tab so output from different tabs can
+     * be told apart in the accumulator, in the DB, and by the AI. */
     g_mutex_lock(&app->access.buffer_mutex);
-    g_string_append(app->aiterm_runtime.tee_accumulator, cleaned);
+    g_string_append_printf(app->aiterm_runtime.tee_accumulator,
+                           "[tab %s]\n%s", st->name, cleaned);
+    if (app->aiterm_runtime.tee_accumulator->len > 65536)   /* same cap as tee_handle_output */
+        g_string_erase(app->aiterm_runtime.tee_accumulator, 0,
+                       app->aiterm_runtime.tee_accumulator->len - 65536);
     gsize accumulator_len = app->aiterm_runtime.tee_accumulator->len;
     g_mutex_unlock(&app->access.buffer_mutex);
 
-    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE SYNC%s] %scaptured=[%s%zu%s] bytes accumulator=[%s%zu%s] bytes%s\n",
-        lt_pl, nml, cy, nml, gr,
-	red, strlen(cleaned), gr,
-	red, accumulator_len, gr, nml);
+    DEBUG_PRINT("[ DEBUG ]: [TEE SYNC] vte=%p captured=[%zu] bytes accumulator=[%zu] bytes\n",
+                (void *)vte, strlen(cleaned), accumulator_len);
 
     g_free(cleaned);
-
-    g_free(lt_pl);
-    g_free(cy);
-    g_free(yl);
-    g_free(gr);
-    g_free(red);
-    g_free(nml);
-
     return TRUE;
+}
+
+/* Public entry point: capture from the currently focused tab. */
+gboolean terminal_capture_pending_tee(AppContext *app) {
+    if (!app || !app->gui.terminal_view || !VTE_IS_TERMINAL(app->gui.terminal_view))
+        return FALSE;
+    return terminal_capture_pending_tee_vte(app, VTE_TERMINAL(app->gui.terminal_view));
+}
+
+/* Name ("pts/N") of the focused tab, or NULL. Valid while the tab is open. */
+const char *terminal_active_tab_name(AppContext *app) {
+    if (!app || !app->gui.terminal_view || !VTE_IS_TERMINAL(app->gui.terminal_view))
+        return NULL;
+    return tee_tab_state(VTE_TERMINAL(app->gui.terminal_view))->name;
 }
 
 char *terminal_capture_context(AppContext *app) {
@@ -238,49 +257,50 @@ static gboolean on_key_press(GtkWidget *terminal, GdkEventKey *event, gpointer u
     return FALSE;
 }
 
-static gboolean throttled_delta_check(gpointer user_data) {
-    AppContext *app = (AppContext *)user_data;
-    if (!app->gui.terminal_view || !GTK_IS_WIDGET(app->gui.terminal_view)) return TRUE;
+/* One timer per terminal. It watches ITS OWN vte (held by weak ref so a closed
+ * tab ends the timer) instead of whichever tab is currently focused. */
+typedef struct {
+    AppContext *app;
+    GWeakRef    vte_ref;
+} TeeTimerCtx;
 
-    char *lt_pl   = g_strdup(app->ansi.lt_purple);
-    char *cy      = g_strdup(app->ansi.cyan);
-    char *yl      = g_strdup(app->ansi.yellow);
-    char *gr      = g_strdup(app->ansi.green);
-    char *red     = g_strdup(app->ansi.red);
-    char *nml     = g_strdup(app->ansi.normal);
+static void tee_timer_ctx_free(gpointer data) {
+    TeeTimerCtx *ctx = data;
+    g_weak_ref_clear(&ctx->vte_ref);
+    g_free(ctx);
+}
+
+static gboolean throttled_delta_check(gpointer user_data) {
+    TeeTimerCtx *ctx = user_data;
+    AppContext *app = ctx->app;
+
+    GtkWidget *w = g_weak_ref_get(&ctx->vte_ref);
+    if (!w) return G_SOURCE_REMOVE;              /* tab was closed */
+
+    VteTerminal *vte = VTE_TERMINAL(w);
+    TeeTabState *st = tee_tab_state(vte);
 
     long cur_row, cur_col;
-    vte_terminal_get_cursor_position(VTE_TERMINAL(app->gui.terminal_view), &cur_col, &cur_row);
+    vte_terminal_get_cursor_position(vte, &cur_col, &cur_row);
 
-    if (cur_row != app->database.last_row || cur_col != app->database.last_col) {
-        app->database.last_row = cur_row;
-        app->database.last_col = cur_col;
-        app->database.silence_ticks = 0;
+    if (cur_row != st->last_row || cur_col != st->last_col) {
+        st->last_row = cur_row;
+        st->last_col = cur_col;
+        st->silence_ticks = 0;
     } else {
-        app->database.silence_ticks++;
+        st->silence_ticks++;
 
-        // Trigger after ~2 seconds of silence
-        if (app->database.silence_ticks == 8) {
-            /* Keep the normal timer path, but use the same GTK-thread-safe
-             * capture helper as manual AI requests and manager opens. */
-            gboolean captured = terminal_capture_pending_tee(app);
-
-            if (captured) {
-                DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE ACCUMULATOR%s] %sFlushing tee data%s\n",
-                            lt_pl, nml, cy, nml, gr, nml);
+        /* ~2 seconds of silence on THIS tab */
+        if (st->silence_ticks == 8) {
+            if (terminal_capture_pending_tee_vte(app, vte)) {
+                DEBUG_PRINT("[ DEBUG ]: [TEE ACCUMULATOR] Flushing tee data (vte=%p)\n", (void *)vte);
                 tee_flush_timed(app);
             }
         }
     }
 
-    g_free(lt_pl);
-    g_free(cy);
-    g_free(yl);
-    g_free(gr);
-    g_free(red);
-    g_free(nml);
-
-    return TRUE;
+    g_object_unref(w);
+    return G_SOURCE_CONTINUE;
 }
 
 // Right-Click Dropdown Option Handlers
@@ -335,12 +355,8 @@ gboolean on_terminal_button_press(GtkWidget *terminal, GdkEventButton *event, gp
 }
 
 GtkWidget* setup_terminal(AppContext *app) {
-    app->database.last_row = 0;
-    app->database.last_col = 0;
-    app->database.silence_ticks = 0;
-    app->database.last_processed_row = 0;
-
     GtkWidget *new_term = vte_terminal_new();
+    tee_tab_state(VTE_TERMINAL(new_term));   /* zeroed per-tab state */
     app->gui.terminal_view = new_term;
     apply_terminal_transparency(app);
 
@@ -361,7 +377,10 @@ GtkWidget* setup_terminal(AppContext *app) {
     g_signal_connect(new_term, "key-press-event", G_CALLBACK(on_key_press), app);
     g_signal_connect(new_term, "button-press-event", G_CALLBACK(on_terminal_button_press), app);
     g_signal_connect(new_term, "child-exited", G_CALLBACK(on_vte_child_exited), app); 
-    g_timeout_add(250, throttled_delta_check, app);
+    TeeTimerCtx *tctx = g_new0(TeeTimerCtx, 1);
+    tctx->app = app;
+    g_weak_ref_init(&tctx->vte_ref, new_term);
+    g_timeout_add_full(G_PRIORITY_DEFAULT, 250, throttled_delta_check, tctx, tee_timer_ctx_free);
 
     vte_terminal_spawn_async(VTE_TERMINAL(new_term),
         VTE_PTY_DEFAULT, NULL, (char *[]){"/bin/bash", NULL},

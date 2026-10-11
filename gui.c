@@ -424,6 +424,7 @@ void add_terminal_tab(AppContext *app) {
         app->tabs[index].tab_label_box = tab_box;
         app->tabs[index].label = tab_label;
         app->tabs[index].close_btn = close_btn;
+	app->tabs[index].vte = new_terminal;
         app->tabs[index].is_active = TRUE;
         app->tabs[index].close_tab_button_enabled = TRUE;
         app->tabs[index].double_click_new_tab = TRUE;
@@ -974,6 +975,7 @@ void setup_gui(AppContext *app) {
 
     // Connect tracker handler ensuring app->gui.terminal_view shifts variables on page selection flips
     g_signal_connect(app->gui.notebook, "switch-page", G_CALLBACK(on_tab_changed), app);
+    // g_signal_connect(app->gui.notebook, "switch-page", G_CALLBACK(on_notebook_switch_page), app);
     gtk_paned_pack1(GTK_PANED(paned), app->gui.notebook, TRUE, FALSE);
 
     // Allocate our initial bootup console instance inside the array matrix
@@ -1041,8 +1043,17 @@ void setup_gui(AppContext *app) {
     gtk_entry_set_placeholder_text(GTK_ENTRY(app->gui.entry), "Ask AI...");
     gtk_box_pack_start(GTK_BOX(bottom_hbox), app->gui.entry, TRUE, TRUE, 5);
 
-    GtkWidget *copy_btn = gtk_button_new_from_icon_name("edit-copy", GTK_ICON_SIZE_BUTTON);
+    // Send Button
+    GtkWidget *send_button = gtk_button_new_from_icon_name("mail-send-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(send_button, "Send Prompt");
+    gtk_style_context_add_class(gtk_widget_get_style_context(send_button), "flat");
+    g_signal_connect(send_button, "clicked", G_CALLBACK(on_send_button_clicked), app);
+    gtk_box_pack_start(GTK_BOX(bottom_hbox), send_button, FALSE, FALSE, 5);
+
+    // Copy button
+    GtkWidget *copy_btn = gtk_button_new_from_icon_name("edit-copy-symbolic", GTK_ICON_SIZE_BUTTON);
     gtk_widget_set_tooltip_text(copy_btn, "Copy AI History");
+    gtk_style_context_add_class(gtk_widget_get_style_context(copy_btn), "flat");
     g_signal_connect(copy_btn, "clicked", G_CALLBACK(on_copy_clicked), app);
     gtk_box_pack_start(GTK_BOX(bottom_hbox), copy_btn, FALSE, FALSE, 5);
 
@@ -1050,8 +1061,9 @@ void setup_gui(AppContext *app) {
     g_signal_connect(app->gui.entry, "activate", G_CALLBACK(on_input_activate), app);
     g_signal_connect(G_OBJECT(app->gui.entry), "key-press-event", G_CALLBACK(on_entry_key_press), app);
 
-    GtkWidget *upload_btn = gtk_button_new_from_icon_name("mail-attachment", GTK_ICON_SIZE_BUTTON);
+    GtkWidget *upload_btn = gtk_button_new_from_icon_name("mail-attachment-symbolic", GTK_ICON_SIZE_BUTTON);
     gtk_widget_set_tooltip_text(upload_btn, "Upload file for AI analysis");
+    gtk_style_context_add_class(gtk_widget_get_style_context(upload_btn), "flat");
     g_signal_connect(upload_btn, "clicked", G_CALLBACK(on_upload_clicked), app);
     gtk_box_pack_start(GTK_BOX(bottom_hbox), upload_btn, FALSE, FALSE, 5);
 
@@ -1066,7 +1078,6 @@ void setup_gui(AppContext *app) {
     g_signal_connect(app->gui.gemini_view, "key-press-event", G_CALLBACK(on_window_key_press), app);
 
     gtk_widget_show_all(app->gui.window);
-
 
     g_free(lt_pl);
     g_free(cy);
@@ -1240,4 +1251,12 @@ void on_vte_populate_popup(VteTerminal *vte, GtkWidget *popup_menu, gpointer use
     gtk_menu_shell_insert(GTK_MENU_SHELL(popup_menu), close_tab_item, insert_idx + 1);
 }
 
+void on_send_button_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
 
+    AppContext *app = (AppContext *)user_data;
+    if (!app || !app->gui.entry)
+        return;
+
+    on_input_activate(GTK_ENTRY(app->gui.entry), app);
+}
