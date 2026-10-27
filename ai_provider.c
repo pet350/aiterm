@@ -51,8 +51,8 @@ void ai_provider_snapshot_begin(AppContext *app) {
     AIProviderThreadSnapshot *snap = g_malloc0(sizeof(*snap));
     snap->app = app;
 
-    g_mutex_lock(&app->provider_mutex);
-    snap->generation = app->provider_generation;
+    g_mutex_lock(&app->provider_runtime.mutex);
+    snap->generation = app->provider_runtime.generation;
     ProviderConfig *src = &app->provider_config;
     snap->config.name = g_strdup(src->name);
     snap->config.model = g_strdup(src->model);
@@ -67,7 +67,7 @@ void ai_provider_snapshot_begin(AppContext *app) {
     snap->config.api_key_in_query = src->api_key_in_query;
     snap->directive_interaction_id = g_strdup(app->gemini_cache.directive_interaction_id);
     snap->directive_model = g_strdup(app->gemini_cache.directive_model);
-    g_mutex_unlock(&app->provider_mutex);
+    g_mutex_unlock(&app->provider_runtime.mutex);
 
     g_private_set(&provider_snapshot_private, snap);
 }
@@ -102,9 +102,9 @@ guint64 ai_provider_current_generation(AppContext *app) {
     if (snap && snap->app == app)
         return snap->generation;
     if (!app) return 0;
-    g_mutex_lock((GMutex *)&app->provider_mutex);
-    guint64 generation = app->provider_generation;
-    g_mutex_unlock((GMutex *)&app->provider_mutex);
+    g_mutex_lock((GMutex *)&app->provider_runtime.mutex);
+    guint64 generation = app->provider_runtime.generation;
+    g_mutex_unlock((GMutex *)&app->provider_runtime.mutex);
     return generation;
 }
 
@@ -113,9 +113,9 @@ gboolean ai_provider_snapshot_is_current(AppContext *app) {
     if (!snap || snap->app != app || !app)
         return FALSE;
 
-    g_mutex_lock(&app->provider_mutex);
-    gboolean current = (snap->generation == app->provider_generation);
-    g_mutex_unlock(&app->provider_mutex);
+    g_mutex_lock(&app->provider_runtime.mutex);
+    gboolean current = (snap->generation == app->provider_runtime.generation);
+    g_mutex_unlock(&app->provider_runtime.mutex);
     return current;
 }
 
@@ -137,11 +137,11 @@ static char *provider_send_direct_types(AppContext *app, const char *prompt,
 }
 
 void ai_provider_config_lock(AppContext *app) {
-    if (app) g_mutex_lock(&app->provider_mutex);
+    if (app) g_mutex_lock(&app->provider_runtime.mutex);
 }
 
 void ai_provider_config_unlock(AppContext *app) {
-    if (app) g_mutex_unlock(&app->provider_mutex);
+    if (app) g_mutex_unlock(&app->provider_runtime.mutex);
 }
 
 typedef struct {
@@ -189,10 +189,10 @@ static gpointer ai_provider_async_worker(gpointer data) {
     /* A provider-change directive refresh has priority over normal requests,
      * but waiting happens only on this worker. GTK never waits for it. */
     if (!job->directives) {
-        g_mutex_lock(&job->app->provider_mutex);
-        while (job->app->provider_directives_pending)
-            g_cond_wait(&job->app->provider_cond, &job->app->provider_mutex);
-        g_mutex_unlock(&job->app->provider_mutex);
+        g_mutex_lock(&job->app->provider_runtime.mutex);
+        while (job->app->provider_runtime.directives_pending)
+            g_cond_wait(&job->app->provider_runtime.cond, &job->app->provider_runtime.mutex);
+        g_mutex_unlock(&job->app->provider_runtime.mutex);
     }
 
     ai_provider_snapshot_begin(job->app);
@@ -206,12 +206,12 @@ static gpointer ai_provider_async_worker(gpointer data) {
 
     if (job->directives) {
         guint64 worker_generation = ai_provider_current_generation(job->app);
-        g_mutex_lock(&job->app->provider_mutex);
-        if (worker_generation == job->app->provider_generation) {
-            job->app->provider_directives_pending = FALSE;
-            g_cond_broadcast(&job->app->provider_cond);
+        g_mutex_lock(&job->app->provider_runtime.mutex);
+        if (worker_generation == job->app->provider_runtime.generation) {
+            job->app->provider_runtime.directives_pending = FALSE;
+            g_cond_broadcast(&job->app->provider_runtime.cond);
         }
-        g_mutex_unlock(&job->app->provider_mutex);
+        g_mutex_unlock(&job->app->provider_runtime.mutex);
     }
 
     ai_provider_snapshot_end();
@@ -275,11 +275,11 @@ gboolean ai_provider_send_directives_async_locked(AppContext *app,
     if (!app)
         return FALSE;
 
-    app->provider_directives_pending = TRUE;
+    app->provider_runtime.directives_pending = TRUE;
 
     if (!ai_provider_queue_async(app, NULL, NULL, TRUE, callback, user_data)) {
-        app->provider_directives_pending = FALSE;
-        g_cond_broadcast(&app->provider_cond);
+        app->provider_runtime.directives_pending = FALSE;
+        g_cond_broadcast(&app->provider_runtime.cond);
         return FALSE;
     }
 
@@ -292,9 +292,9 @@ gboolean ai_provider_send_directives_async(AppContext *app,
     if (!app)
         return FALSE;
 
-    g_mutex_lock(&app->provider_mutex);
+    g_mutex_lock(&app->provider_runtime.mutex);
     gboolean queued = ai_provider_send_directives_async_locked(app, callback, user_data);
-    g_mutex_unlock(&app->provider_mutex);
+    g_mutex_unlock(&app->provider_runtime.mutex);
     return queued;
 }
 
@@ -545,7 +545,7 @@ char *ai_provider_send_with_context_types(AppContext *app, const char *prompt,
         ? request_budget - fixed_budget : 0;
     gsize terminal_budget = (available_budget * 3U) / 4U;
 
-    DEBUG_PRINT("[ %sDEBUG%s ] [%sProvider%s] %sterminal_context=%s%zu%s bytes%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sProvider%s] %sterminal_context=%s%zu%s bytes%s\n",
         lt_pl, nml, cy, nml, gr, red, context_len, gr, nml);
     DEBUG_PRINT("[ %sDEBUG%s ]: [%sAUTOCHUNK%s] %sprovider=[%s%s%s] request_budget=[%s%zu%s] fixed=[%s%zu%s] initial_terminal_budget=[%s%zu%s]%s\n",
 	lt_pl, nml, cy, nml, gr,

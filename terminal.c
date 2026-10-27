@@ -2,14 +2,15 @@
 // terminal.c
 // Functions for setting up and managing terminal I/O
 // By: Peter Talbott
-// Assisted by: Gemini
-// May 2026
+// Assisted by: Gemini and OpenAI
+// May 2026 - Oct 2026
 
 #include <stdio.h>
 #include <string.h>
 #include <vte/vte.h>
 #include <gtk/gtk.h>
 #include <mariadb/mysql.h>
+
 #include "utils.h"
 #include "terminal.h"
 #include "gui.h"
@@ -77,6 +78,13 @@ static gboolean terminal_capture_pending_tee_vte(AppContext *app, VteTerminal *v
         return FALSE;
     }
 
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     /* Tag every capture with its source tab so output from different tabs can
      * be told apart in the accumulator, in the DB, and by the AI. */
     g_mutex_lock(&app->access.buffer_mutex);
@@ -88,8 +96,18 @@ static gboolean terminal_capture_pending_tee_vte(AppContext *app, VteTerminal *v
     gsize accumulator_len = app->aiterm_runtime.tee_accumulator->len;
     g_mutex_unlock(&app->access.buffer_mutex);
 
-    DEBUG_PRINT("[ DEBUG ]: [TEE SYNC] vte=%p captured=[%zu] bytes accumulator=[%zu] bytes\n",
-                (void *)vte, strlen(cleaned), accumulator_len);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE SYNC%s] %svte=[%s%p%s] captured=[%s%zu%s] bytes accumulator=[%s%zu%s] bytes%s\n",
+	lt_pl, nml, cy, nml, gr,
+        red, (void *)vte, gr, 
+        red, strlen(cleaned), gr, 
+	red, accumulator_len, gr, nml);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
 
     g_free(cleaned);
     return TRUE;
@@ -109,22 +127,119 @@ const char *terminal_active_tab_name(AppContext *app) {
     return tee_tab_state(VTE_TERMINAL(app->gui.terminal_view))->name;
 }
 
+static char *terminal_capture_vte_context(VteTerminal *vte, long context_depth) {
+    if (!vte || !VTE_IS_TERMINAL(vte))
+        return g_strdup("No terminal output available.");
+
+    glong cursor_column = 0;
+    glong cursor_row = 0;
+    vte_terminal_get_cursor_position(vte, &cursor_column, &cursor_row);
+    glong start_row = cursor_row > context_depth ? cursor_row - context_depth : 0;
+    char *text = vte_terminal_get_text_range(vte, start_row, 0,
+                                             cursor_row, cursor_column,
+                                             NULL, NULL, NULL);
+    if (!text || !*text) {
+        g_free(text);
+        return g_strdup("No terminal output available.");
+    }
+    return text;
+}
+
 char *terminal_capture_context(AppContext *app) {
     if (!app || !app->gui.terminal_view || !VTE_IS_TERMINAL(app->gui.terminal_view))
         return g_strdup("None");
+    return terminal_capture_vte_context(VTE_TERMINAL(app->gui.terminal_view), 1000);
+}
 
-    VteTerminal *vte = VTE_TERMINAL(app->gui.terminal_view);
-    long row, col;
-    vte_terminal_get_cursor_position(vte, &col, &row);
-    long context_depth = 1000;
-    long start_row = (row > context_depth) ? (row - context_depth) : 0;
+/* Snapshot every tab while called on the GTK thread. Each tab is explicitly
+ * labeled and bounded so background tabs cannot be confused with the active
+ * session and a large scrollback cannot monopolize the request context. */
+char *terminal_capture_tab_context_by_id(AppContext *app, const char *tab_id) {
+    if (!app || !tab_id || !app->gui.notebook || !GTK_IS_NOTEBOOK(app->gui.notebook))
+        return g_strdup("Targeted tab inspection unavailable: terminal notebook is unavailable.");
 
-    char *text = vte_terminal_get_text_range(vte, start_row, 0, row, col, NULL, NULL, NULL);
-    if (!text || !*text) {
-        g_free(text);
-        return g_strdup("None");
+    GtkNotebook *notebook = GTK_NOTEBOOK(app->gui.notebook);
+    gint page_count = gtk_notebook_get_n_pages(notebook);
+    gint active_page = gtk_notebook_get_current_page(notebook);
+
+    for (gint page_index = 0; page_index < page_count && page_index < MAX_TABS; page_index++) {
+        TabSettings *tab = &app->tabs[page_index];
+        if (g_strcmp0(tab->tab_id, tab_id) != 0)
+            continue;
+
+        const char *title = (tab->label && GTK_IS_LABEL(tab->label))
+            ? gtk_label_get_text(GTK_LABEL(tab->label)) : "Terminal";
+        GString *snapshot = g_string_new(NULL);
+        g_string_append_printf(snapshot,
+            "AITERM TARGETED TAB INSPECTION\nTAB %d of %d | id=%s | title=%s | active=%s\n"
+            "This is additional evidence from one specific terminal session.\n\n",
+            page_index + 1, page_count, tab_id, title ? title : "Terminal",
+            page_index == active_page ? "yes" : "no");
+
+        if (tab->vte && VTE_IS_TERMINAL(tab->vte)) {
+            char *tab_text = terminal_capture_vte_context(VTE_TERMINAL(tab->vte), 1200);
+            const gsize max_tab_bytes = 24000;
+            gsize text_length = strlen(tab_text);
+            if (text_length > max_tab_bytes) {
+                const char *tail = tab_text + text_length - max_tab_bytes;
+                g_string_append(snapshot, "[Earlier output omitted; showing the most recent 24000 bytes.]\n");
+                g_string_append_len(snapshot, tail, max_tab_bytes);
+            } else {
+                g_string_append(snapshot, tab_text);
+            }
+            g_free(tab_text);
+        } else {
+            g_string_append(snapshot, "Terminal widget is not available for this tab.\n");
+        }
+        return g_string_free(snapshot, FALSE);
     }
-    return text;
+
+    return g_strdup("Targeted tab inspection failed: the requested tab no longer exists.");
+}
+
+char *terminal_capture_all_tabs_context(AppContext *app) {
+    if (!app || !app->gui.notebook || !GTK_IS_NOTEBOOK(app->gui.notebook))
+        return g_strdup("AITERM multi-tab context unavailable.");
+
+    GtkNotebook *notebook = GTK_NOTEBOOK(app->gui.notebook);
+    gint page_count = gtk_notebook_get_n_pages(notebook);
+    gint active_page = gtk_notebook_get_current_page(notebook);
+    GString *snapshot = g_string_new("AITERM MULTI-TAB SNAPSHOT\n");
+
+    for (gint page_index = 0; page_index < page_count && page_index < MAX_TABS; page_index++) {
+        TabSettings *tab = &app->tabs[page_index];
+        const char *title = (tab->label && GTK_IS_LABEL(tab->label))
+            ? gtk_label_get_text(GTK_LABEL(tab->label)) : NULL;
+        if (!title || !*title)
+            title = "Terminal";
+
+        g_string_append_printf(snapshot,
+            "\n--- TAB %d of %d | id=%s | title=%s | active=%s ---\n",
+            page_index + 1, page_count,
+            tab->tab_id ? tab->tab_id : "unavailable",
+            title, page_index == active_page ? "yes" : "no");
+
+        if (tab->vte && VTE_IS_TERMINAL(tab->vte)) {
+            char *tab_text = terminal_capture_vte_context(VTE_TERMINAL(tab->vte), 180);
+            const gsize max_tab_bytes = 5000;
+            gsize text_length = strlen(tab_text);
+            if (text_length > max_tab_bytes) {
+                const char *tail = tab_text + text_length - max_tab_bytes;
+                g_string_append(snapshot, "[Earlier tab output omitted; showing recent tail.]\n");
+                g_string_append_len(snapshot, tail, max_tab_bytes);
+            } else {
+                g_string_append(snapshot, tab_text);
+            }
+            g_free(tab_text);
+        } else {
+            g_string_append(snapshot, "Terminal widget is not available for this tab.\n");
+        }
+        g_string_append_c(snapshot, '\n');
+    }
+
+    if (page_count == 0)
+        g_string_append(snapshot, "No terminal tabs are currently open.\n");
+    return g_string_free(snapshot, FALSE);
 }
 
 void clear_terminal_ghosts(VteTerminal *terminal) {
@@ -283,6 +398,13 @@ static gboolean throttled_delta_check(gpointer user_data) {
     long cur_row, cur_col;
     vte_terminal_get_cursor_position(vte, &cur_col, &cur_row);
 
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     if (cur_row != st->last_row || cur_col != st->last_col) {
         st->last_row = cur_row;
         st->last_col = cur_col;
@@ -293,11 +415,21 @@ static gboolean throttled_delta_check(gpointer user_data) {
         /* ~2 seconds of silence on THIS tab */
         if (st->silence_ticks == 8) {
             if (terminal_capture_pending_tee_vte(app, vte)) {
-                DEBUG_PRINT("[ DEBUG ]: [TEE ACCUMULATOR] Flushing tee data (vte=%p)\n", (void *)vte);
+                DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE ACCUMULATOR%s] %sFlushing tee data (vte=%s%p%s)%s\n", 
+		    lt_pl, nml, cy, nml, gr,
+		    red, (void *)vte, gr, nml);
+
                 tee_flush_timed(app);
             }
         }
     }
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
 
     g_object_unref(w);
     return G_SOURCE_CONTINUE;

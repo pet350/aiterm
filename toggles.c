@@ -56,6 +56,9 @@ gboolean toggle_function(AppContext *app, ToggleType toggle_type, GtkCheckMenuIt
         case TOGGLE_DEBUG:
             snprintf(command_buffer, sizeof(command_buffer), "debug %s", state_str);
             break;
+        case TOGGLE_IDLE:
+            snprintf(command_buffer, sizeof(command_buffer), "idle %s", state_str);
+            break;
         case TOGGLE_NOISE_FILTER:
             snprintf(command_buffer, sizeof(command_buffer), "noise filter %s", state_str);
             break;
@@ -152,6 +155,9 @@ void setup_menu_toggle(GtkWidget *menu_item, AppContext *app, ToggleType type, g
             break;
         case TOGGLE_DEBUG:
             app->ui.toggle_debug = menu_item;
+            break;
+        case TOGGLE_IDLE:
+            app->ui.toggle_idle = menu_item;
             break;
         case TOGGLE_XML:
             app->ui.toggle_xml_payload_tagging = menu_item;

@@ -1,3 +1,10 @@
+// part of aiterm project
+// policy_dao.c
+// C progrm policy management
+// By: Peter Talbott
+// Assisted by: Gemini and OpenAI
+// May 2026 - Oct 2026
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

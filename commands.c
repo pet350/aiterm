@@ -1,9 +1,9 @@
-// part of aiterm project
+// Part of aiterm project
 // commands.c
-// local command handler / registry / wrappers
+// Local command handler / Registry / Wrappers
 // By: Peter Talbott
-// Assisted by: Gemini
-// June 2026, July 2026, August 2026
+// Assisted by: Gemini and OpenAI
+// June 2026 - October 2026
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,6 +48,82 @@ void cmd_close_provider_manager_wrapper(AppContext *app, const char *args) {
     } else {
         write_to_ai_pane(app, "System: ", "AI Provider Manager window is not open", "ai_tag", "cmd_tag");
     }
+}
+
+/* Terminal-tab command wrappers. User-facing tab numbers are 1-based. */
+void cmd_open_tab_wrapper(AppContext *app, const char *args) {
+    (void)args;
+    if (!app || !app->gui.notebook) {
+        if (app) write_to_ai_pane(app, "System: ", "Cannot open tab: terminal notebook is unavailable.\n", "ai_tag", "cmd_tag");
+        return;
+    }
+
+    gint before = gtk_notebook_get_n_pages(GTK_NOTEBOOK(app->gui.notebook));
+    add_terminal_tab(app);
+    gint after = gtk_notebook_get_n_pages(GTK_NOTEBOOK(app->gui.notebook));
+    if (after > before) {
+        write_to_ai_pane(app, "System: ", "Opened a new terminal tab.\n", "ai_tag", "cmd_tag");
+    } else {
+        write_to_ai_pane(app, "System: ", "Could not open a new terminal tab; the tab limit may have been reached.\n", "ai_tag", "cmd_tag");
+    }
+}
+
+void cmd_close_tab_wrapper(AppContext *app, const char *args) {
+    (void)args;
+    if (!app || !app->gui.notebook) {
+        if (app) write_to_ai_pane(app, "System: ", "Cannot close tab: terminal notebook is unavailable.\n", "ai_tag", "cmd_tag");
+        return;
+    }
+
+    gint page_num = gtk_notebook_get_current_page(GTK_NOTEBOOK(app->gui.notebook));
+    gint page_count = gtk_notebook_get_n_pages(GTK_NOTEBOOK(app->gui.notebook));
+    if (page_num < 0 || page_count == 0) {
+        write_to_ai_pane(app, "System: ", "There is no active terminal tab to close.\n", "ai_tag", "cmd_tag");
+        return;
+    }
+
+    /* Reuse the existing close callback so the TabSettings array stays aligned. */
+    GtkWidget *close_button = (page_num < MAX_TABS) ? app->tabs[page_num].close_btn : NULL;
+    if (close_button && GTK_IS_BUTTON(close_button)) {
+        on_tab_close_clicked(GTK_BUTTON(close_button), app);
+        write_to_ai_pane(app, "System: ", "Closed the active terminal tab.\n", "ai_tag", "cmd_tag");
+    } else {
+        write_to_ai_pane(app, "System: ", "Cannot close the active tab safely: its close-button state is unavailable.\n", "ai_tag", "cmd_tag");
+    }
+}
+
+void cmd_change_tab_wrapper(AppContext *app, const char *args) {
+    if (!app || !app->gui.notebook) {
+        if (app) write_to_ai_pane(app, "System: ", "Cannot change tab: terminal notebook is unavailable.\n", "ai_tag", "cmd_tag");
+        return;
+    }
+
+    while (args && g_ascii_isspace(*args)) args++;
+    if (!args || !*args) {
+        write_to_ai_pane(app, "System: ", "Usage: change tab <number> (tab numbers start at 1).\n", "ai_tag", "cmd_tag");
+        return;
+    }
+
+    char *end = NULL;
+    long requested_tab = strtol(args, &end, 10);
+    while (end && g_ascii_isspace(*end)) end++;
+    gint page_count = gtk_notebook_get_n_pages(GTK_NOTEBOOK(app->gui.notebook));
+    if (end == args || (end && *end != '\0') || requested_tab < 1 || requested_tab > page_count) {
+        char *message = g_strdup_printf("Invalid tab number. Choose a tab from 1 to %d.\n", page_count);
+        write_to_ai_pane(app, "System: ", message, "ai_tag", "cmd_tag");
+        g_free(message);
+        return;
+    }
+
+    gint page_num = (gint)requested_tab - 1;
+    gtk_notebook_set_current_page(GTK_NOTEBOOK(app->gui.notebook), page_num);
+    if (page_num < MAX_TABS && app->tabs[page_num].vte && GTK_IS_WIDGET(app->tabs[page_num].vte)) {
+        gtk_widget_grab_focus(app->tabs[page_num].vte);
+    }
+
+    char *message = g_strdup_printf("Switched to terminal tab %ld.\n", requested_tab);
+    write_to_ai_pane(app, "System: ", message, "ai_tag", "cmd_tag");
+    g_free(message);
 }
 
 // Parse command line options and handle early-exit CLI queries
@@ -160,6 +236,10 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
                 lt_pl, nml, cy, nml, gr,
 		red,  app->security.mistral_key ? app->security.mistral_key : "", nml);
 
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sDecrypted%s] %sCLAUDE_KEY:\t%s%s%s\n",
+                lt_pl, nml, cy, nml, gr,
+		red,  app->security.claude_key ? app->security.claude_key : "", nml);
+
             DEBUG_PRINT("[ %sDEBUG%s ]: [%sDecrypted%s] %sOLLAMA_KEY:\t%s%s%s\n",
                 lt_pl, nml, cy, nml, gr,
 		red,  app->security.ollama_key ? app->security.ollama_key : "", nml);
@@ -228,6 +308,7 @@ static CommandRegistry registry[] = {
     {"autoretry", "Toggles auto AI retry (on/off/status)", cmd_toggle_autoretry},
     {"autoexe", "Toggle execution of AI payloads (on/off/status)", cmd_toggle_autoexe},
     {"clear", "Clear the contents of the AI pane", handle_clear_wrapper},
+    {"close tab", "Close the currently selected terminal tab", cmd_close_tab_wrapper},
     {"close history manager", "Closes the history manager window", cmd_close_history_manager_wrapper},
     {"close noise manager", "Closes the noise filter manager window", cmd_close_noise_manager_wrapper},
     {"close provider manager", "Closes the AI provider manager window", cmd_close_provider_manager_wrapper},
@@ -238,11 +319,13 @@ static CommandRegistry registry[] = {
     {"command line help", "display all command line options", cmd_show_command_line_help_wrapper},
     {"debug", "Toggle debug mode out stderr (on/off/status)", cmd_toggle_debug},
     {"directives", "Display AI Directives", handle_directive_wrapper},
+    {"change tab", "Switch to a terminal tab by number (1-based)", cmd_change_tab_wrapper},
     {"extended help", "Display extended help message", handle_extended_help},
     {"features", "Display new aiterm features", handle_features_wrapper},
     {"help", "Display this dynamic help menu", handle_help_wrapper},
     {"history", "Display mysql history", handle_history_wrapper},
     {"hw", "Display various hardware info", handle_hw_wrapper},
+    {"idle", "Toggle automatic idle suspension (on/off/status)", cmd_toggle_idle},
     {"invalidate cache", "Force a reload of smart cache", cmd_invalidate_cache},
     {"list models", "Display all models from current provider", handle_list_models_wrapper},
     {"load config", "Loads configurations from aiterm.conf", handle_load_config_wrapper},
@@ -258,6 +341,7 @@ static CommandRegistry registry[] = {
     {"open policy manager", "Open Policy Manager window", cmd_policy_manager_wrapper},
     {"open snmp manager", "Opens SNMP Target Manager window", cmd_snmp_manager_wrapper},
     {"open session manager", "Opens the session manager window", cmd_session_manager_wrapper},
+    {"open tab", "Open a new terminal tab", cmd_open_tab_wrapper},
     {"save config", "Saves configuration to aiterm.conf", handle_save_config_wrapper},
     {"session config", "Toggle loading config per session (on/off/status)", cmd_toggle_session_config},
     {"session default", "Sets current or specified UUID as default", cmd_session_default},
@@ -1387,6 +1471,24 @@ void cmd_toggle_autoexe(AppContext *app, const char *args) {
 
     app->sys.auto_execute_enabled = state;
     write_to_ai_pane_wrapper(app, state ? ": Auto Execute Enabled" : ": Auto Execute Disabled");
+    sync_toggle_ui_elements(app);
+}
+
+
+void cmd_toggle_idle(AppContext *app, const char *args) {
+    if (!app) return;
+    while (args && *args == ' ') args++;
+    if (!args || !*args || strcmp(args, "status") == 0) {
+        write_to_ai_pane_wrapper(app, app->idle.enabled ? ": Idle suspension enabled." : ": Idle suspension disabled.");
+        sync_toggle_ui_elements(app);
+        return;
+    }
+    if (strcmp(args, "on") == 0) app->idle.enabled = TRUE;
+    else if (strcmp(args, "off") == 0) { app->idle.enabled = FALSE; if (app->idle.suspended) idle_resume(app); }
+    else { write_to_ai_pane_wrapper(app, ": Required parameter: on, off, or status."); return; }
+    app->idle.last_activity_us = g_get_monotonic_time();
+    save_config(app);
+    write_to_ai_pane_wrapper(app, app->idle.enabled ? ": Idle suspension enabled." : ": Idle suspension disabled.");
     sync_toggle_ui_elements(app);
 }
 

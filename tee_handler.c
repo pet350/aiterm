@@ -18,9 +18,6 @@
 #include "snmp_manager.h"
 #include "terminal.h"
 
-// --- FORWARD DECLARATIONS (Private callbacks for 0.8.3) ---
-static gboolean update_tee_ui(gpointer data);
-static gpointer tee_ai_thread_func(gpointer data);
 static gboolean reset_ai_status_idle(gpointer data) {
     AppContext *app = (AppContext *)data;
     if (app) update_status_label(app, "Ready");
@@ -190,7 +187,7 @@ char* tee_extract_for_ai(AppContext *app) {
 	lt_pl, nml, cy, nml, gr, nml);
     if (app->aiterm_runtime.tee_accumulator->len > 5) {
         snapshot = g_strdup(app->aiterm_runtime.tee_accumulator->str);
-        DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE_EXTRACT%s ] %sSnapshot=%s%zu%s bytes%s\n",
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE_EXTRACT%s ] %sSnapshot=%s%zu%s bytes%s\n",
 		lt_pl, nml, cy, nml, gr,
                 red, snapshot ? strlen(snapshot) : 0UL,
 		gr, nml);
@@ -326,7 +323,7 @@ void tee_flush_timed(AppContext *app) {
 // BACKGROUND WORKER:
 // This runs on a separate CPU thread. It can "hang" waiting for
 // the internet/API without affecting the terminal UI responsiveness.
-static gpointer tee_ai_thread_func(gpointer data) {
+gpointer tee_ai_thread_func(gpointer data) {
     TeeResponseData *trd = (TeeResponseData*)data;
     AppContext *app = trd->app;
 
@@ -361,7 +358,7 @@ static gpointer tee_ai_thread_func(gpointer data) {
 
 // GUI UPDATE CALLBACK:
 // Safely runs on the Main UI Thread to update GTK widgets.
-static gboolean update_tee_ui(gpointer data) {
+gboolean update_tee_ui(gpointer data) {
     TeeResponseData *trd = (TeeResponseData *)data;
     if (!trd || !trd->app) return FALSE;
 
@@ -633,7 +630,7 @@ static gpointer snmp_ai_thread_func(gpointer data) {
 	gr, nml);
 
     if (trd->terminal_output) {
-        DEBUG_PRINT("[ %sDEBUG%s ] [%sTEE%s] %sSNMP context:\n%s%.4000s%s\n",
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE%s] %sSNMP context:\n%s%.4000s%s\n",
             lt_pl, nml, cy, nml, gr, lt_pl, trd->terminal_output, nml);
     }
 

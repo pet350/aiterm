@@ -20,7 +20,7 @@ void ai_provider_config_unlock(AppContext *app);
 char *ai_provider_send_directives_locked(AppContext *app);
 
 /* Provider jobs use an immutable per-thread snapshot. The snapshot is copied
- * while provider_mutex is held briefly, then the mutex is released before any
+ * while provider_runtime.mutex is held briefly, then the mutex is released before any
  * network I/O, retry backoff, AutoChunk processing, or DB work begins. */
 void ai_provider_snapshot_begin(AppContext *app);
 void ai_provider_snapshot_end(void);

@@ -21,7 +21,15 @@ PKGS = gtk+-3.0 glib-2.0 vte-2.91 libcurl json-c $(MARIADB_PKG)
 PREFIX  ?= /usr/local
 DATADIR ?= /usr/share
 BINDIR   = $(PREFIX)/bin
+MANDIR  ?= $(PREFIX)/share/man
+MAN1DIR  = $(MANDIR)/man1
+MAN5DIR  = $(MANDIR)/man5
+MAN7DIR  = $(MANDIR)/man7
 SQLDIR   = $(DATADIR)/aiterm/db
+
+MAN1_FILES = man/aiterm.1
+MAN5_FILES = man/aiterm.conf.5
+MAN7_FILES = man/aiterm-commands.7
 
 CFLAGS += $(shell pkg-config --cflags $(PKGS)) -Wall -Wno-deprecated-declarations
 # Bakes SQLDIR into the binary as the fallback init_db_from_directory() path
@@ -30,7 +38,7 @@ CFLAGS += $(shell pkg-config --cflags $(PKGS)) -Wall -Wno-deprecated-declaration
 CFLAGS += -DAITERM_SQL_DIR_DEFAULT='"$(SQLDIR)"'
 LIBS   += $(shell pkg-config --libs $(PKGS)) -lpthread -lcurl -lcrypto -luuid -lnetsnmp
 
-OBJ = ai_provider.o auto_chunk.o provider_manager_gui.o ai_retry.o autoexec.o commands.o config.o crypto.o export.o gemini.o gemini_cache.o gui.o help.o \
+OBJ = ai_provider.o auto_chunk.o provider_manager_gui.o ai_retry.o autoexec.o commands.o config.o crypto.o export.o environment.o gemini.o gemini_cache.o gui.o help.o \
       history_manager_gui.o idle.o main.o menu.o noise_filter_manager_gui.o noisefilter.o openai.o \
       policy_dao.o policy_manager_gui.o print.o provider_keys.o ratelimit.o resources.o session_manager_gui.o \
       session_manager.o snmp_manager.o snmp_manager_gui.o status.o tee_handler.o terminal.o toggles.o \
@@ -41,7 +49,7 @@ TARGET = aiterm
 # *.sql files to install, evaluated at parse time relative to this Makefile
 SQL_FILES = $(wildcard db/*.sql)
 
-.PHONY: all clean install install-bin install-db uninstall
+.PHONY: all clean install install-bin install-db install-man uninstall
 
 # 1. The DEFAULT target
 all: build_id.h $(TARGET)
@@ -87,18 +95,31 @@ install-db:
 		install -m 0644 $(SQL_FILES) $(DESTDIR)$(SQLDIR)/; \
 	fi
 
-# 9. Full install: builds first, then installs binary + schema scripts
-install: all install-bin install-db
+# 9. Install manual pages into the conventional man sections.
+install-man:
+	@for f in $(MAN1_FILES); do install -D -m 0644 "$$f" "$(DESTDIR)$(MAN1DIR)/$$(basename $$f)"; done
+	@for f in $(MAN5_FILES); do install -D -m 0644 "$$f" "$(DESTDIR)$(MAN5DIR)/$$(basename $$f)"; done
+	@for f in $(MAN7_FILES); do install -D -m 0644 "$$f" "$(DESTDIR)$(MAN7DIR)/$$(basename $$f)"; done
+
+# 10. Full install: binary, schema scripts, and manual pages.
+install: all install-bin install-db install-man
 	@echo "Installed $(TARGET) to $(DESTDIR)$(BINDIR)"
 	@echo "Installed SQL init scripts to $(DESTDIR)$(SQLDIR)"
+	@echo "Installed man pages under $(DESTDIR)$(MANDIR)"
 
-# 10. Reverses install: only removes what install would have put there,
-# never rm -rf's the whole data dir in case something else was dropped in it
+# 11. Remove only files installed by these targets.
 uninstall:
 	rm -fv $(DESTDIR)$(BINDIR)/$(TARGET)
 	@for f in $(SQL_FILES); do \
 		rm -fv $(DESTDIR)$(SQLDIR)/$$(basename $$f); \
 	done
+	@for f in $(MAN1_FILES); do rm -fv "$(DESTDIR)$(MAN1DIR)/$$(basename $$f)"; done
+	@for f in $(MAN5_FILES); do rm -fv "$(DESTDIR)$(MAN5DIR)/$$(basename $$f)"; done
+	@for f in $(MAN7_FILES); do rm -fv "$(DESTDIR)$(MAN7DIR)/$$(basename $$f)"; done
+	-rmdir $(DESTDIR)$(MAN1DIR) 2>/dev/null
+	-rmdir $(DESTDIR)$(MAN5DIR) 2>/dev/null
+	-rmdir $(DESTDIR)$(MAN7DIR) 2>/dev/null
+	-rmdir $(DESTDIR)$(MANDIR) 2>/dev/null
 	-rmdir $(DESTDIR)$(SQLDIR) 2>/dev/null
 	-rmdir $(DESTDIR)$(DATADIR)/aiterm 2>/dev/null
 

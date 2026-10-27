@@ -2,7 +2,7 @@
 # unencrtpted/plain text passwords are no longer supposrted in the config file!
 # you must use the ouput from the built in ssl function in ./aiterm --master=<master key> --crypt-pw=<string>
 
-# Provider [openai/gemini/groq/openrouter/mistral/ollama]
+# Provider [openai/gemini/groq/openrouter/mistral/claude/ollama]
 provider=gemini
 
 # AI Model name. (Working Gemini model listed} 
@@ -14,6 +14,7 @@ GEMINI_KEY={ Encrypted Gemini key }
 GROQ_KEY={ Encrypted Groq key }
 OPENROUTER_KEY={ Encrypted OpenRouter key }
 MISTRAL_KEY={ Encrypted Mistral key }
+CLAUDE_KEY={ Encrypted Claude key }
 OLLAMA_KEY=
 CUSTOM_KEY={ Encrypted custom-provider key }
 

@@ -148,6 +148,8 @@ const char* get_features_text() {
         "\n"
         "\t*** Changes in Version 0.8.0-alpha/beta ***\n"
         "\t- [New] Multi-Tab Interface powered by GtkNotebook layout matrix.\n"
+        "\t- [New] 0.9.13-epsilon: bounded targeted inspection of a specific terminal tab, preserving source identity and continuing the same investigation.\n"
+        "\t- [New] AI tab-aware investigation may inspect at most two additional tab snapshots per request; inspection/navigation actions do not authorize command execution.\n"
         "\t- [New] Dynamic Right-Click Context Menu (New Tab, Copy, Paste).\n"
         "\t- [New] Lifecycle Tracking syncing active shell variables on tab flips.\n"
         "\t- [New] Adaptive Font/Opacity inheritance across tabs.\n"

@@ -9,7 +9,7 @@ terminal analysis, optional automatic command execution, SNMP telemetry,
 a provider abstraction, caching, noise filtering, rate limiting,
 export/printing, and session-aware configuration.
 
-> **Current source tree:** 0.9.12-gamma / October 2026\
+> **Current source tree:** 0.9.13-epsilon-fix1 / October 2026\
 > **Primary build system:** GNU Make\
 > **Configuration file:** searched in several locations, falling back to
 > `/etc/aiterm.conf` (see [Configuration](#configuration))
@@ -22,7 +22,24 @@ The project is built around one principle:
 
 ------------------------------------------------------------------------
 
-## What's New in 0.9.12
+## What's New in 0.9.13-epsilon-fix1
+
+### 0.9.13-epsilon-fix1
+
+- Fixed Auto Execute dispatch ordering for AI-directed tab navigation. Commands are now queued only after a requested tab switch succeeds, so they target the selected terminal. Responses requesting another targeted inspection remain non-executable intermediate steps.
+
+- **Targeted tab inspection.** When a bounded initial tab snapshot is insufficient, the AI can request a larger recent-output snapshot from one specific tab using its stable UUID. The GTK main thread resolves the UUID at inspection time; a closed or unknown tab cannot silently redirect the request.
+- **Bounded multi-step investigation.** The AI can continue the original question with the additional evidence and its previous findings. At most two targeted inspections are allowed per user request, limiting recursive requests and context growth.
+- **Source-aware evidence.** Targeted context includes the selected tab's current index, stable UUID, title, active status, and recent output. The AI is instructed to attribute findings to their source and distinguish observation from inference.
+- **Execution remains separate.** Inspection and tab-navigation markers do not grant command-execution rights. Responses requesting either action are excluded from Auto Execute processing.
+- **Retained initial context.** The follow-up includes the original multi-tab snapshot and appends the targeted evidence, allowing the AI to correlate it with other sessions rather than replacing the original context.
+
+### 0.9.13-delta
+
+- **AI-aware multi-tab context.** Manual AI requests include a bounded snapshot of each open terminal tab, labeled by tab number, title, and active status, while preserving the focused-tab context path.
+- **AI-directed tab navigation.** Each tab receives a stable UUID, included in the tab snapshot. The AI may request a visible tab switch using that UUID; the GTK main thread resolves it against the current tab list, so tab reordering or closure cannot silently redirect the action. The marker is stripped from the displayed and saved answer. This does not grant command-execution capability.
+- **Per-tab snapshots are bounded.** Each tab contributes at most 5,000 bytes from a recent 180-row window to limit request growth. Stable tab UUIDs are generated at creation and survive notebook reordering; requests targeting a tab that has since closed are rejected.
+- **Tab navigation is intentionally limited.** This release permits AI-initiated switching only. It does not let the AI open or close tabs or execute commands through the navigation mechanism.
 
 ### 0.9.12-gamma
 
@@ -185,7 +202,7 @@ The request layer is centralized in `ai_provider.c`. Built-in provider
 names:
 
 ``` text
-openai   gemini   groq   openrouter   mistral   ollama   custom
+openai   gemini   groq   openrouter   mistral   claude   ollama   custom
 ```
 
 Gemini uses its own `generateContent` protocol. All other providers use
@@ -467,7 +484,8 @@ If `provider=` is absent from the file, the loader defaults to `openai`.
 aiterm encrypts, using AES-256-CBC with a master key:
 
 -   Each provider's API key (`OPENAI_KEY`, `GEMINI_KEY`, `GROQ_KEY`,
-    `OPENROUTER_KEY`, `MISTRAL_KEY`, `OLLAMA_KEY`, `CUSTOM_KEY`).
+    `OPENROUTER_KEY`, `MISTRAL_KEY`, `CLAUDE_KEY`, `OLLAMA_KEY`,
+    `CUSTOM_KEY`).
 -   The MariaDB password (`db_pass`).
 
 ## Supply the master key
@@ -531,6 +549,7 @@ Implemented in `ai_provider.c`, `gemini.c`, `openai.c`, and
 | `groq`       | OpenAI-compatible         | `https://api.groq.com/openai/v1`                 | `openai/gpt-oss-120b`        |
 | `openrouter` | OpenAI-compatible         | `https://openrouter.ai/api/v1`                   | `openai/gpt-oss-20b:free`    |
 | `mistral`    | OpenAI-compatible         | `https://api.mistral.ai/v1`                      | `mistral-small-latest`       |
+| `claude`     | OpenAI-compatible         | `https://api.anthropic.com/v1`                   | `claude-haiku-5-5`           |
 | `ollama`     | OpenAI-compatible (local) | `http://127.0.0.1:11434/v1`                      | `llama3.2`                   |
 | `custom`     | OpenAI-compatible         | OpenAI defaults, overridden by saved/ENV values  | as configured                |
 
@@ -541,6 +560,13 @@ Notes:
 -   OpenAI-compatible providers use `chat/completions` with an
     `Authorization: Bearer <key>` header.
 -   Ollama sends no auth header (no API key required).
+-   `claude` uses Anthropic's OpenAI SDK compatibility layer (Chat
+    Completions at `https://api.anthropic.com/v1/chat/completions`,
+    `Authorization: Bearer <key>`). Anthropic describes this layer as
+    intended mainly for testing and comparison. Prompt caching is not
+    available through it and Claude's thinking output is not returned.
+    Create a key in the Claude Console and store it as `CLAUDE_KEY`.
+    Use `claude-sonnet-5-5` in the model field for a stronger model.
 -   Values saved by the Provider Manager (base URL, endpoint, auth header
     and scheme, query key, key-in-query flag) override these defaults.
 -   Each provider uses only its own key. aiterm does **not** fall back
@@ -654,13 +680,16 @@ created by the SQL scripts:
 
 `aiterm_history` rows include at least: role, content, tee flag
 (`is_tee`), session UUID, sequence id, and a creation timestamp. Roles
-used include `user`, `assistant`, `terminal`, and `snmp`.
+used include `user`, `assistant`, `terminal`, `snmp`, and `tab` (a
+tab-report note saved with `is_tee = 1`; `role` is `VARCHAR(20)`).
 
-> **Important:** the source archive reviewed for this README does **not**
-> include a `db/` directory or any `.sql` files. A fresh deployment needs
-> schema scripts that create the tables above with columns compatible with
-> the queries in the source. Without them, session, history, noise,
-> policy, and SNMP features will fail.
+> **Important:** `db/` ships scripts `001`-`007`. They create and migrate
+> `aiterm_history`, `relevance_triggers`, and `command_policy`, add the
+> toggle columns to `sessions`, and index `aiterm_history`. They do **not**
+> create `sessions` itself (nor the columns `uuid`, `description`,
+> `created_at`, `is_default` the code reads), `snmp_targets`, or
+> `noise_filters`. All scripts run alphabetically on every startup, so each
+> statement must be idempotent.
 
 ## Database permissions
 
@@ -1464,6 +1493,7 @@ GEMINI_KEY=<AES-256-CBC hex>
 GROQ_KEY=<AES-256-CBC hex>
 OPENROUTER_KEY=<AES-256-CBC hex>
 MISTRAL_KEY=<AES-256-CBC hex>
+CLAUDE_KEY=<AES-256-CBC hex>
 OLLAMA_KEY=<AES-256-CBC hex>
 CUSTOM_KEY=<AES-256-CBC hex>
 db_pass=<AES-256-CBC hex>
@@ -1731,10 +1761,10 @@ functionality that is not present.
 
 ## No bundled schema
 
-The C code has no `CREATE TABLE` statements and the reviewed source
-archive contains no `db/` directory or `.sql` files. You must provide
-schema scripts for `aiterm_history`, `sessions`, `snmp_targets`,
-`noise_filters`, `command_policy`, and `relevance_triggers`. Older README
+The C code has no `CREATE TABLE` statements; schema comes from `db/*.sql`.
+That directory does not yet create `sessions`, `snmp_targets`, or
+`noise_filters` -- see the Important note under "Tables used by the code".
+Older README
 text that said the application creates these tables, or that referred to
 `schema.sql`, is obsolete.
 
@@ -1869,7 +1899,27 @@ Open `Managers → AI Provider Manager` and use the test operation, or run
 /ratelimit status
 ```
 
-### 11. Test Tee across tabs
+### Epsilon: Test targeted cross-tab investigation
+
+1. Open at least two terminal tabs with clearly different output, such as a remote SSH session and local system logs.
+2. Ask the AI to investigate a question that requires details beyond the initial tab snapshots.
+3. Confirm that it requests a targeted inspection using the correct stable tab UUID and that the returned evidence is labeled with the correct tab title and identity.
+4. Confirm the AI correlates the additional evidence with the original tabs and does not fabricate unseen output.
+5. Close a tab before a targeted inspection is fulfilled, where practical. The request should report that the tab is unavailable rather than inspecting a different tab.
+6. Verify the AI stops requesting further targeted inspections after two rounds for one user request.
+7. With Auto Execute enabled, verify that an inspection/navigation response does not execute any command block.
+
+### 11. Test AI awareness across tabs
+
+1. Open at least three terminal tabs and run different diagnostic commands in each.
+2. Ask the AI to identify which tab contains a distinctive error or hostname.
+3. Ask it to switch to the tab that contains the relevant evidence.
+4. Confirm the selected tab is correct and no shell command was executed by the navigation action.
+5. Close or reorder a tab while a request is in flight and confirm navigation still targets the matching stable tab ID or is safely rejected if that tab was closed.
+
+The AI sees bounded recent snapshots from all tabs on ordinary manual AI requests. Background tab snapshots are read on the GTK thread; AI networking remains in the worker thread.
+
+### 12. Test Tee across tabs
 
 1.  `/tee on`
 2.  Open a second tab and run a command; wait about 2 seconds or use
@@ -1887,8 +1937,54 @@ See `LICENSE` for the license applicable to this project.
 
 ## Project Status
 
-This README documents the source tree reviewed for **0.9.12-gamma**. The
-source tree is the authoritative reference for behavior when this
-document and older historical notes disagree.
+This README documents the **0.9.13-epsilon-fix1** source tree. The source tree is the authoritative reference for behavior when this document and older historical notes disagree.
 
 Project author: Peter Talbott. Source: <https://github.com/pet350/aiterm>
+
+
+## Environment variable configuration overrides (0.9.13-beta and later)
+
+Every ordinary `aiterm.conf` option can be overridden with an environment variable named `AITERM_` followed by the option name in uppercase. For example, `term_transparency` becomes `AITERM_TERM_TRANSPARENCY`, and `idle_timeout_minutes` becomes `AITERM_IDLE_TIMEOUT_MINUTES`. When an override is set, it takes precedence over the value in `aiterm.conf`; the override is runtime-only and is not written back to the file. Existing dedicated environment variables for provider settings and API credentials remain supported.
+
+Examples:
+
+```sh
+AITERM_IDLE_ENABLED=1 AITERM_IDLE_TIMEOUT_MINUTES=15 aiterm
+AITERM_TERM_TRANSPARENCY=0.85 AITERM_AI_TRANSPARENCY=0.75 aiterm
+AITERM_PROVIDER=gemini AITERM_MODEL=gemini-flash-lite-latest aiterm
+```
+
+The database password may be supplied as `AITERM_DB_PASS` in plaintext in the process environment; prefer a protected service environment file or secret manager rather than embedding secrets in shell history.
+
+------------------------------------------------------------------------
+
+# Man Pages
+
+AITerm installs manual pages for the application, configuration file, and
+interactive command reference:
+
+```sh
+man aiterm
+man 5 aiterm.conf
+man 7 aiterm-commands
+```
+
+Build and install the application, SQL initialization scripts, and man pages
+with the usual command:
+
+```sh
+sudo make install
+```
+
+The man pages can be installed separately with `make install-man`. The
+installation prefix defaults to `/usr/local`, so manual pages are placed under
+`/usr/local/share/man` by default. Override `PREFIX` or `MANDIR` when packaging
+or installing elsewhere. `DESTDIR` is supported for staged package builds, for
+example:
+
+```sh
+make install-man PREFIX=/usr MANDIR=/usr/share/man DESTDIR=/tmp/aiterm-stage
+```
+
+Remove the installed binary, SQL files, and man pages with `sudo make uninstall`
+using the same `PREFIX`, `DATADIR`, and `MANDIR` values used for installation.

@@ -351,6 +351,7 @@ gpointer session_db_worker(gpointer data) {
                 }
                 app->session.session_uuid = g_strdup(new_uuid_str);
                 pthread_mutex_unlock(&app->access.session_mutex);
+                tab_report_current_async(app);
                 write_to_ai_pane_wrapper(app, " Session loaded successfully.");
 
                 SessionShowResult *show_res = g_malloc0(sizeof(SessionShowResult));
@@ -387,6 +388,7 @@ gpointer session_db_worker(gpointer data) {
                         g_free(app->session.session_uuid);
                         app->session.session_uuid = g_strdup(std->arg);
                         pthread_mutex_unlock(&app->access.session_mutex);
+                        tab_report_current_async(app);
                         write_to_ai_pane_wrapper(app, "Session loaded successfully.");
                     } else {
                         write_to_ai_pane_wrapper(app, "Error: Session UUID not found.");

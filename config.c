@@ -25,6 +25,7 @@
 #include "noisefilter.h"
 #include "config.h"
 #include "menu.h"
+#include "environment.h"
 
 static const char *CONFIG_FILE_VERSION="1.3";
 
@@ -103,7 +104,7 @@ void save_config(AppContext *app) {
     /* 0.9.11-alpha: persist one encrypted key per provider.  These names
      * map directly to AppContext.security fields. */
     const char *known_providers[] = {
-        "openai", "gemini", "groq", "openrouter", "mistral", "ollama", "custom", NULL
+        "openai", "gemini", "groq", "openrouter", "mistral", "claude", "ollama", "custom", NULL
     };
     for (int i = 0; known_providers[i]; ++i) {
         const char *key = get_provider_api_key(app, known_providers[i]);
@@ -151,6 +152,7 @@ void save_config(AppContext *app) {
     fprintf(fp, "ai_retry_max_retries=%d\n", app->retry_config.max_retries);
     fprintf(fp, "ai_retry_delay_sec=%d\n", app->retry_config.delay_sec);
     fprintf(fp, "load_from_session=%d\n", app->sys.load_from_session);
+    fprintf(fp, "idle_enabled=%d\n", app->idle.enabled);
     fprintf(fp, "idle_timeout_minutes=%u\n", idle_get_timeout_minutes(app));
     fprintf(fp, "# End of Config file.\n\n");
 
@@ -195,6 +197,7 @@ void load_config(AppContext *app) {
         { "GROQ_KEY",         &app->security.groq_key },
         { "OPENROUTER_KEY",   &app->security.openrouter_key },
         { "MISTRAL_KEY",      &app->security.mistral_key },
+        { "CLAUDE_KEY",       &app->security.claude_key },
         { "OLLAMA_KEY",       &app->security.ollama_key },
         { "CUSTOM_KEY",       &app->security.custom_key },
     };
@@ -217,6 +220,8 @@ void load_config(AppContext *app) {
     char line[1024];
     while (fgets(line, sizeof(line), fp)) {
 	line[strcspn(line, "\r\n")] = 0;
+        /* Environment overrides use AITERM_<UPPERCASE_CONFIG_KEY>. */
+        environment_apply_config_override(line, sizeof(line));
         for (size_t i = 0; i < G_N_ELEMENTS(provider_keys); i++) {
             char prefix[128];
 
@@ -317,10 +322,10 @@ void load_config(AppContext *app) {
                         app->ansi.cyan, app->database.db_user, app->ansi.yellow, app->ansi.normal);
 	} else if (strstr(line, "db_pass=")) {
 		char *val = strchr(line, '=') + 1;
-		if (app->database.db_pass) {
-			free(app->database.db_pass);
-		}
-		app->database.db_pass = hex_to_decrypt(val, app->security.master_key);
+		if (app->database.db_pass) free(app->database.db_pass);
+        const char *environment_password = environment_get_config_override("db_pass");
+        app->database.db_pass = environment_password ? strdup(environment_password)
+                                                     : hex_to_decrypt(val, app->security.master_key);
 		DEBUG_PRINT("%s DB Password: [%sxxxxxx%s]%s\n", DECRYPTED_PREFIX(app), 
 			app->ansi.yellow, app->ansi.yellow, app->ansi.normal);
 	} else if (strstr(line, "db_name")) {
@@ -460,10 +465,14 @@ void load_config(AppContext *app) {
                 app->sys.load_from_session = atoi(strchr(line, '=') + 1);
                 const char *load_from_session_val = app->sys.load_from_session ? ON_VAL(app) : OFF_VAL(app);
                 DEBUG_PRINT("%s  Session based config enabled: [%s]%s\n", LOADED_PREFIX(app), load_from_session_val, app->ansi.normal);
+        } else if (strncmp(line, "idle_enabled=", 13) == 0) {
+            app->idle.enabled = atoi(strchr(line, '=') + 1) != 0;
+            app->idle.initialized = TRUE;
         } else if (strstr(line, "idle_timeout_minutes=")) {
                 long idle_minutes = strtol(strchr(line, '=') + 1, NULL, 10);
                 if (idle_minutes >= 0 && idle_minutes <= 1440) {
                     app->idle.timeout_minutes = (guint)idle_minutes;
+                    app->idle.timeout_configured = TRUE;
                     DEBUG_PRINT("%s  Idle timeout: [%u minutes]%s\n",
                         LOADED_PREFIX(app), app->idle.timeout_minutes, app->ansi.normal);
                 }

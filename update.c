@@ -134,13 +134,111 @@ gboolean update_gui_with_response(gpointer data) {
             // 1. ALWAYS render the AI response text to the side pane first
             write_to_ai_pane(rd->app, "AI: ", rd->response_text, "ai_tag", "body_tag");
 
-            // 2. Evaluate and execute code blocks if auto-execute toggle is enabled
-            if (rd->app->sys.auto_execute_enabled) {
-                process_auto_execution(rd->app, rd->response_text);
-            }
+            /* Auto Execute is dispatched below, after any requested tab switch.
+             * This ensures command payloads target the tab the AI selected rather
+             * than the tab that happened to be active when the response arrived. */
         }
     } else {
         write_to_ai_pane(rd->app, "System: ", "No response from provider.", "cmd_tag", "cmd_tag");
+    }
+
+    /* Execute navigation only after rendering the response. All GTK access is
+     * on this main-loop callback. Auto Execute is dispatched only after this
+     * block, so a valid change_tab action changes the execution destination first. */
+    gboolean navigation_succeeded = (rd->requested_tab_id == NULL);
+    if (rd->requested_tab_id && rd->app->gui.notebook && GTK_IS_NOTEBOOK(rd->app->gui.notebook)) {
+        gint page_count = gtk_notebook_get_n_pages(GTK_NOTEBOOK(rd->app->gui.notebook));
+        gint target_page = -1;
+        for (gint page_index = 0; page_index < page_count && page_index < MAX_TABS; page_index++) {
+            if (g_strcmp0(rd->app->tabs[page_index].tab_id, rd->requested_tab_id) == 0) {
+                target_page = page_index;
+                break;
+            }
+        }
+        if (target_page >= 0) {
+            navigation_succeeded = TRUE;
+            gtk_notebook_set_current_page(GTK_NOTEBOOK(rd->app->gui.notebook), target_page);
+            if (rd->app->tabs[target_page].vte && GTK_IS_WIDGET(rd->app->tabs[target_page].vte))
+                gtk_widget_grab_focus(rd->app->tabs[target_page].vte);
+            const char *title = (rd->app->tabs[target_page].label && GTK_IS_LABEL(rd->app->tabs[target_page].label))
+                ? gtk_label_get_text(GTK_LABEL(rd->app->tabs[target_page].label)) : "Terminal";
+            char *notice = g_strdup_printf("AI switched to terminal tab %d (%s).\n", target_page + 1, title);
+            write_to_ai_pane(rd->app, "System: ", notice, "cmd_tag", "cmd_tag");
+            g_free(notice);
+        } else {
+            write_to_ai_pane(rd->app, "System: ", "AI requested a tab that no longer exists; navigation was ignored.\n", "cmd_tag", "cmd_tag");
+        }
+    }
+
+    /* Run command payloads only after navigation has completed. A response
+     * requesting another inspection is an intermediate investigation step, so
+     * its commands are deferred rather than executed. If navigation failed,
+     * do not risk running the command in the wrong terminal. */
+    if (rd->response_text &&
+        strncmp(rd->response_text, "API ERROR:", 10) != 0 &&
+        rd->app->sys.auto_execute_enabled &&
+        navigation_succeeded &&
+        !rd->requested_inspect_tab_id) {
+        process_auto_execution(rd->app, rd->response_text);
+    }
+
+    /* A targeted inspection is a bounded follow-up request. Capture the
+     * requested tab only on the GTK thread, append that evidence to the
+     * original bounded snapshot, and continue the same investigation. */
+    if (rd->requested_inspect_tab_id) {
+        if (rd->investigation_step >= 2) {
+            write_to_ai_pane(rd->app, "System: ",
+                "Targeted inspection limit reached (2 per request); no further tab inspection was started.\n",
+                "cmd_tag", "body_tag");
+        } else {
+            char *targeted_context = terminal_capture_tab_context_by_id(
+                rd->app, rd->requested_inspect_tab_id);
+            char *combined_context = g_strdup_printf(
+                "%s\n\n--- TARGETED INSPECTION %u ---\n%s",
+                rd->terminal_context ? rd->terminal_context : "Initial tab context unavailable.",
+                rd->investigation_step + 1,
+                targeted_context ? targeted_context : "Targeted tab context unavailable.");
+            g_free(targeted_context);
+
+            AIThreadData *followup = g_malloc0(sizeof(*followup));
+            followup->app = rd->app;
+            followup->original_prompt = g_strdup(rd->original_prompt ? rd->original_prompt : "Continue the current investigation.");
+            followup->prompt = g_strdup_printf(
+                "AITERM CROSS-TAB INVESTIGATION CONTINUATION\n"
+                "Original user request: %s\n\n"
+                "Your previous response/findings: %s\n\n"
+                "New evidence from the specifically requested tab is included in terminal context. "
+                "Continue the same investigation, keep each finding attributed to its source tab, "
+                "and distinguish observed evidence from inference. Do not invent command output. "
+                "You may request one more targeted tab inspection using the final-line marker "
+                "[[AITERM_ACTION: inspect_tab TAB_ID]] only if it is necessary; the system allows "
+                "at most two targeted inspections total for this user request. You may instead "
+                "switch the visible tab with [[AITERM_ACTION: change_tab TAB_ID]]. Use at most "
+                "one action marker, and only as the final non-whitespace content. Navigation and "
+                "inspection markers do not authorize command execution.",
+                rd->original_prompt ? rd->original_prompt : "(original request unavailable)",
+                rd->response_text ? rd->response_text : "No previous findings were returned.");
+            followup->terminal_context = combined_context;
+            followup->investigation_step = rd->investigation_step + 1;
+
+            char *target_notice = g_strdup_printf(
+                "AI is inspecting tab context (%u of 2) and continuing the investigation...\n",
+                followup->investigation_step);
+            write_to_ai_pane(rd->app, "System: ", target_notice, "cmd_tag", "body_tag");
+            g_free(target_notice);
+            gtk_label_set_text(GTK_LABEL(rd->app->gui.status_label), "AI is investigating another tab...");
+            g_thread_unref(g_thread_new("ai-investigate", (GThreadFunc)ai_thread_func, followup));
+
+            /* The follow-up owns the combined context. Keep the busy flag set
+             * until the final response (or bounded next inspection) completes. */
+            g_free(rd->terminal_context);
+            if (rd->response_text) free(rd->response_text);
+            if (rd->original_prompt) free(rd->original_prompt);
+            g_free(rd->requested_tab_id);
+            g_free(rd->requested_inspect_tab_id);
+            g_free(rd);
+            return FALSE;
+        }
     }
 
     gtk_label_set_text(GTK_LABEL(rd->app->gui.status_label), "Ready");
@@ -148,7 +246,10 @@ gboolean update_gui_with_response(gpointer data) {
     g_atomic_int_set(&rd->app->sys.is_processing, 0);
     if (rd->response_text) free(rd->response_text);
     if (rd->original_prompt) free(rd->original_prompt);
-    free(rd);
+    g_free(rd->requested_tab_id);
+    g_free(rd->requested_inspect_tab_id);
+    g_free(rd->terminal_context);
+    g_free(rd);
     return FALSE;
 }
 
@@ -382,6 +483,17 @@ void on_input_activate(GtkEntry *entry, gpointer data) {
         context_source = "vte-fallback";
     }
 
+    /* Snapshot all tabs on the GTK thread. The AI receives bounded, labeled
+     * context for background tabs as well as the normal focused-tab TEE. */
+    char *all_tabs_context = terminal_capture_all_tabs_context(app);
+    char *combined_context = g_strdup_printf(
+        "%s\n\n--- FOCUSED TAB PRIORITY CONTEXT ---\n%s",
+        all_tabs_context ? all_tabs_context : "AITERM multi-tab context unavailable.",
+        terminal_context ? terminal_context : "No focused-tab context available.");
+    g_free(all_tabs_context);
+    g_free(terminal_context);
+    terminal_context = combined_context;
+
     DEBUG_PRINT("[ %sDEBUG%s ]: [%sTEE CONTEXT%s] %ssource=[%s%s%s] bytes=[%s%zu%s]%s\n",
 	lt_pl, nml, cy, nml, gr,
         red, context_source, gr,
@@ -405,7 +517,20 @@ void on_input_activate(GtkEntry *entry, gpointer data) {
     g_free(nml);
 
     td->app = app;
-    td->prompt = g_strdup(input_text);
+    td->original_prompt = g_strdup(cleaned_text);
+    td->prompt = g_strdup_printf(
+        "AITERM TAB-AWARE REQUEST\n"
+        "You may inspect the labeled multi-tab snapshot supplied as terminal context. "
+        "Treat each tab as a distinct source and cite tab numbers/titles when useful. "
+        "Each tab's initial snapshot is bounded. If a specific tab needs more evidence, "
+        "request targeted inspection with exactly one final-line marker: "
+        "[[AITERM_ACTION: inspect_tab TAB_ID]], using that tab's exact stable UUID. "
+        "The system will retrieve a larger recent output snapshot and ask you to continue. "
+        "At most two targeted inspections are allowed per user request. If switching the "
+        "visible tab would help, use [[AITERM_ACTION: change_tab TAB_ID]] instead. Use at "
+        "most one action marker, only as the final non-whitespace content. Never use these "
+        "markers to run commands or request opening/closing tabs. Attribute evidence to its "
+        "source and distinguish observations from inference.\n\nUSER REQUEST:\n%s", cleaned_text);
     td->terminal_context = terminal_context;
     g_thread_unref(g_thread_new("ai_worker", (GThreadFunc)ai_thread_func, td));
     g_free(cleaned_text);
