@@ -326,6 +326,100 @@ static gboolean on_window_key_press(GtkWidget *widget, GdkEventKey *event, gpoin
     return FALSE;
 }
 
+/* ---- Tab reporting --------------------------------------------------------
+ * The AI is told which terminal tab is active through rows saved to
+ * aiterm_history (role "tab"); no API call is made.  Reported:
+ *   - the current tab once startup has finished (baseline),
+ *   - each switch, after the user has settled on the new tab (debounced), and
+ *   - the current tab again whenever the session changes, because tab rows
+ *     belong to a session and a new or loaded session would not know it.
+ * Everything runs on the GTK thread from copied strings, so a tab closed in
+ * the meantime cannot leave a dangling VTE pointer. */
+#define TAB_REPORT_SETTLE_MS   750
+#define TAB_REPORT_MAX_RETRIES 40    /* ~30 s of waiting for startup / session / DB */
+
+static guint tab_report_source  = 0;
+static guint tab_report_retries = 0;
+static char *tab_reported_name  = NULL;  /* tab the AI was last told about */
+static char *tab_current_name   = NULL;  /* tab that is active right now */
+static guint tab_current_pos    = 0;     /* 1-based position in the notebook */
+static guint tab_current_total  = 0;
+
+static gboolean tab_report_ready(AppContext *app) {
+    return !app->sys.is_initializing &&
+           app->session.session_uuid &&
+           app->database.global_db_conn;
+}
+
+/* Position can change without a switch (a background tab was closed), so
+ * re-read it from the notebook just before reporting. */
+static void tab_refresh_position(AppContext *app) {
+    if (!app->gui.notebook || !GTK_IS_NOTEBOOK(app->gui.notebook))
+        return;
+    GtkNotebook *nb = GTK_NOTEBOOK(app->gui.notebook);
+    gint total = gtk_notebook_get_n_pages(nb);
+    gint cur   = gtk_notebook_get_current_page(nb);
+    if (total > 0 && cur >= 0) {
+        tab_current_pos   = (guint)cur + 1;
+        tab_current_total = (guint)total;
+    }
+}
+
+/* from == NULL reports the current tab; otherwise reports a change. */
+static void tab_report_send(const char *from) {
+    char *text = from
+        ? g_strdup_printf("Active terminal tab changed: %s -> %s (tab %u of %u).",
+                          from, tab_current_name, tab_current_pos, tab_current_total)
+        : g_strdup_printf("Active terminal tab: %s (tab %u of %u).",
+                          tab_current_name, tab_current_pos, tab_current_total);
+    save_tab_event_to_history(text);
+    g_free(text);
+
+    char *now = g_strdup(tab_current_name);   /* `from` may alias tab_reported_name */
+    g_free(tab_reported_name);
+    tab_reported_name = now;
+}
+
+static gboolean tab_report_fire(gpointer data) {
+    AppContext *app = (AppContext *)data;
+
+    if (!tab_current_name) {
+        tab_report_source = 0;
+        return G_SOURCE_REMOVE;
+    }
+    if (!tab_report_ready(app)) {
+        if (++tab_report_retries <= TAB_REPORT_MAX_RETRIES)
+            return G_SOURCE_CONTINUE;          /* startup/session/DB not ready: retry */
+        tab_report_source = 0;
+        tab_report_retries = 0;
+        return G_SOURCE_REMOVE;                /* gave up; next switch or session event retries */
+    }
+
+    tab_report_source = 0;
+    tab_report_retries = 0;
+    tab_refresh_position(app);
+
+    if (!tab_reported_name)
+        tab_report_send(NULL);                 /* baseline: where the user is now */
+    else if (g_strcmp0(tab_reported_name, tab_current_name) != 0)
+        tab_report_send(tab_reported_name);    /* settled on a different tab */
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean tab_report_current_idle(gpointer data) {
+    AppContext *app = (AppContext *)data;
+    if (tab_current_name && tab_report_ready(app)) {
+        tab_refresh_position(app);
+        tab_report_send(NULL);
+    }
+    return G_SOURCE_REMOVE;
+}
+
+/* Safe from any thread.  Call after the session UUID changes (new / load). */
+void tab_report_current_async(AppContext *app) {
+    g_idle_add(tab_report_current_idle, app);
+}
+
 // NEW: Lifecycle tracking handler syncing app->gui.terminal_view during tab adjustments
 // Updated 0.9.4
 void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_num, gpointer data) {
@@ -353,6 +447,19 @@ void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_num, gpoi
 
         // Push current fonts and transparency settings dynamically down to the new pane
         apply_visual_settings(app);
+
+        // Remember the active tab and queue a debounced report to the AI/DB
+        const char *tab_name = terminal_active_tab_name(app);
+        if (tab_name) {
+            g_free(tab_current_name);
+            tab_current_name  = g_strdup(tab_name);
+            tab_current_pos   = page_num + 1;
+            tab_current_total = gtk_notebook_get_n_pages(notebook);
+            tab_report_retries = 0;
+            if (tab_report_source)
+                g_source_remove(tab_report_source);
+            tab_report_source = g_timeout_add(TAB_REPORT_SETTLE_MS, tab_report_fire, app);
+        }
     }
     g_free(cy);
     g_free(yl);
@@ -421,6 +528,7 @@ void add_terminal_tab(AppContext *app) {
 
     // 4. Update internal TabSettings array state in AppContext
     if (index >= 0 && index < MAX_TABS) {
+        app->tabs[index].tab_id = g_uuid_string_random();
         app->tabs[index].tab_label_box = tab_box;
         app->tabs[index].label = tab_label;
         app->tabs[index].close_btn = close_btn;
@@ -473,6 +581,10 @@ void on_tab_close_clicked(GtkButton *button, gpointer user_data) {
 
         // 1. Remove the page from the GTK Notebook container
         gtk_notebook_remove_page(GTK_NOTEBOOK(app->gui.notebook), page_num);
+
+        // Free the closed tab's stable identity before compacting the array.
+        g_free(app->tabs[page_num].tab_id);
+        app->tabs[page_num].tab_id = NULL;
 
         // 2. Shift app->tabs array elements left to keep tracking in sync with GTK indices
         for (int i = page_num; i < total_pages - 1 && i < MAX_TABS - 1; i++) {

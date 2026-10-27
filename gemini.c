@@ -339,6 +339,21 @@ static char *gemini_http_single_attempt(const char *payload, long *out_http_code
     return chunk.memory;
 }
 
+/* Did this failed cachedContent request fail because of the cache itself?
+ * 403/404 are not ordinary payload errors, so they always count; a 400 only
+ * counts when the error body mentions the cache.  Heuristic: it avoids
+ * deleting a healthy cache over an unrelated bad request. */
+static gboolean gemini_error_is_cache_miss(long http_code, const char *body) {
+    if (http_code == 403 || http_code == 404)
+        return TRUE;
+    if (http_code != 400 || !body)
+        return FALSE;
+    char *lower = g_ascii_strdown(body, -1);
+    gboolean mentions = strstr(lower, "cache") != NULL;
+    g_free(lower);
+    return mentions;
+}
+
 // --- 1. The Core API Logic ---
 // UI-neutral execution wrapped with AI Retry handler
 static char* perform_gemini_request_ex_types_internal(AppContext *app, const char *prompt, const char *terminal_context, gboolean include_history, TagType prompt_type, TagType context_type, gboolean include_directives) {
@@ -383,6 +398,9 @@ static char* perform_gemini_request_ex_types_internal(AppContext *app, const cha
     // 2. Load history within the same total request budget used for the
     // terminal/TEE payload.  Gamma-4 no longer gives history an independent
     // 100-row allowance that can silently consume the provider context.
+    /* TRUE when a server-side Smart Cache covers this request's history. */
+    gboolean cache_in_use = FALSE;
+
     const gsize request_budget = auto_chunk_request_budget(app);
     const gsize fixed_budget = strlen(prompt) + 1024;
     gsize available_budget = request_budget > fixed_budget
@@ -411,27 +429,21 @@ static char* perform_gemini_request_ex_types_internal(AppContext *app, const cha
     if (include_history && !app->sys.is_initializing) {
         DEBUG_PRINT("[ %sDEBUG%s ]: [%sPerform Gemini Request%s]%s Not Initializing, Loading History%s\n",
 		lt_pl, nml, cy, nml, yl, nml );
-        load_history_to_gemini(app, contents, prompt, history_budget);
+        /* Smart Cache only applies to plain generateContent requests: cachedContent
+         * cannot be combined with a per-request system_instruction. */
+        if (!include_directives)
+            cache_in_use = gemini_cache_prepare_history(app, contents, history_budget);
+        if (!cache_in_use)
+            load_history_to_gemini(app, contents, prompt, history_budget);
     } else {
         DEBUG_PRINT("[ %sDEBUG%s ]: [%sInit Phase%s] %sBypassing history retrieval.%s\n",
 		lt_pl, nml, cy, nml, yl, nml);
     }
 
-    int total_history_turns = json_object_array_length(contents);
-
-    // Slice history array if using active server-side cache
-    if (app->sys.smart_cache_enabled && app->gemini_cache.id != NULL) {
-        struct json_object *trimmed_contents = json_object_new_array();
-        for (int i = app->gemini_cache.turn_count; i < total_history_turns; i++) {
-            struct json_object *turn = json_object_array_get_idx(contents, i);
-            json_object_get(turn);
-            json_object_array_add(trimmed_contents, turn);
-        }
-        json_object_put(contents);
-        contents = trimmed_contents;
-
+    /* gemini_cache_prepare_history() already put only the not-yet-cached turns
+     * into `contents`; the cached prefix is referenced by handle. */
+    if (cache_in_use && app->gemini_cache.id)
         json_object_object_add(root, "cachedContent", json_object_new_string(app->gemini_cache.id));
-    }
 
     // 3. Append Final User Turn (Terminal Screen + Prompt)
     // The complete terminal context is chunked before provider-specific JSON
@@ -509,7 +521,7 @@ static char* perform_gemini_request_ex_types_internal(AppContext *app, const cha
     /* When the directive parent exists, use Google's stateful Interactions API.
      * The parent contains GENERAL_DIRECTIVES exactly once. AITerm still sends
      * its normal MariaDB history explicitly, but never resends the directives. */
-    if (gemini_directive_interaction_valid(app)) {
+    if (!cache_in_use && gemini_directive_interaction_valid(app)) {
         struct json_object *interaction_root = json_object_new_object();
         struct json_object *interaction_input =
             gemini_contents_to_interaction_input(contents);
@@ -593,6 +605,53 @@ static char* perform_gemini_request_ex_types_internal(AppContext *app, const cha
     long final_http_code = 0;
     char *raw_json = ai_retry_execute_with_retry(app, gemini_http_single_attempt, post_data, &http_data, &final_http_code);
 
+    /* A cache deleted or expired server-side fails the request.  Drop the local
+     * handle and retry ONCE without the cache: full budgeted history plus the
+     * directives (which lived inside the cache) sent inline. */
+    if (cache_in_use && final_http_code != 200 &&
+        gemini_error_is_cache_miss(final_http_code, raw_json)) {
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sCache%s] %sCached request failed (HTTP %s%ld%s); retrying once without the cache.%s\n",
+            lt_pl, nml, cy, nml, yl, red, final_http_code, yl, nml);
+        gemini_cache_invalidate(app);
+
+        struct json_object *full = json_object_new_array();
+        load_history_to_gemini(app, full, prompt, history_budget);
+
+        /* The final user turn (terminal context + instruction) is the last
+         * element of the current contents; carry it over. */
+        int cn = json_object_array_length(contents);
+        if (cn > 0) {
+            struct json_object *final_turn = json_object_array_get_idx(contents, cn - 1);
+            json_object_get(final_turn);
+            json_object_array_add(full, final_turn);
+        }
+
+        json_object_object_del(root, "cachedContent");
+        json_object_object_add(root, "contents", full);   /* releases the old array */
+        contents = full;
+
+        if (GENERAL_DIRECTIVES && GENERAL_DIRECTIVES[0] != '\0') {
+            struct json_object *sys_instruction = json_object_new_object();
+            struct json_object *sys_parts = json_object_new_array();
+            struct json_object *sys_part = json_object_new_object();
+            json_object_object_add(sys_part, "text", json_object_new_string(GENERAL_DIRECTIVES));
+            json_object_array_add(sys_parts, sys_part);
+            json_object_object_add(sys_instruction, "parts", sys_parts);
+            json_object_object_add(root, "system_instruction", sys_instruction);
+        }
+
+        post_data = json_object_to_json_string(root);
+        if (raw_json) {
+            free(raw_json);
+            raw_json = NULL;
+        }
+        if (app->sys.ratelimit_enabled)
+            ratelimit_wait_if_needed(&app->limiter);
+        final_http_code = 0;
+        raw_json = ai_retry_execute_with_retry(app, gemini_http_single_attempt, post_data, &http_data, &final_http_code);
+        cache_in_use = FALSE;
+    }
+
     if (raw_json != NULL) {
         DEBUG_PRINT("[ %sDEBUG%s ]:%s --- %sRAW GEMINI RESPONSE%s --- %s\n",
 		lt_pl, nml, yl, cy, yl, nml); 
@@ -655,11 +714,48 @@ gpointer ai_thread_func(gpointer data) {
     raw_json = ai_provider_send_with_context(td->app, td->prompt, td->terminal_context);
 
     char *final_text = NULL;
+    char *requested_tab_id = NULL;
+    char *requested_inspect_tab_id = NULL;
     if (raw_json) {
         ai_provider_extract_usage(td->app, raw_json);
         final_text = ai_provider_extract_text(raw_json);
         if (final_text) {
-            save_to_history(td->prompt, final_text);
+            /* Only honor a final-line action marker with a valid stable UUID.
+             * The worker parses text only; all terminal/GTK access is deferred
+             * to update_gui_with_response() on the GTK main loop. */
+            const char *markers[] = {
+                "[[AITERM_ACTION: change_tab ",
+                "[[AITERM_ACTION: inspect_tab "
+            };
+            char *actions[] = { NULL, NULL };
+            for (guint marker_index = 0; marker_index < G_N_ELEMENTS(markers); marker_index++) {
+                char *action = strstr(final_text, markers[marker_index]);
+                if (!action)
+                    continue;
+                char *id_start = action + strlen(markers[marker_index]);
+                char *marker_end = strstr(id_start, "]] ");
+                if (!marker_end) marker_end = strstr(id_start, "]]\n");
+                if (!marker_end) marker_end = strstr(id_start, "]]\r");
+                if (!marker_end) marker_end = strstr(id_start, "]]" );
+                if (!marker_end)
+                    continue;
+
+                char *id_text = g_strndup(id_start, (gsize)(marker_end - id_start));
+                g_strstrip(id_text);
+                char *after_marker = marker_end + 2;
+                while (*after_marker && g_ascii_isspace(*after_marker))
+                    after_marker++;
+                if (g_uuid_string_is_valid(id_text) && *after_marker == '\0') {
+                    actions[marker_index] = g_strdup(id_text);
+                    memmove(action, after_marker, strlen(after_marker) + 1);
+                    g_strchomp(final_text);
+                }
+                g_free(id_text);
+                break;
+            }
+            requested_tab_id = actions[0];
+            requested_inspect_tab_id = actions[1];
+            save_to_history(td->original_prompt ? td->original_prompt : td->prompt, final_text);
         }
         free(raw_json);
     }
@@ -667,11 +763,17 @@ gpointer ai_thread_func(gpointer data) {
     AIResponseData *rd = g_malloc0(sizeof(AIResponseData));
     rd->app = td->app;
     rd->response_text = final_text;
-    rd->original_prompt = g_strdup(td->prompt);
+    rd->original_prompt = g_strdup(td->original_prompt ? td->original_prompt : td->prompt);
+    rd->requested_tab_id = requested_tab_id;
+    rd->requested_inspect_tab_id = requested_inspect_tab_id;
+    rd->terminal_context = td->terminal_context;
+    td->terminal_context = NULL;
+    rd->investigation_step = td->investigation_step;
 
     g_idle_add((GSourceFunc)update_gui_with_response, rd);
 
     g_free(td->terminal_context);
+    g_free(td->original_prompt);
     g_free(td->prompt);
     g_free(td);
     return NULL;

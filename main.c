@@ -298,19 +298,19 @@ int main(int argc, char *argv[]) {
     pthread_mutex_destroy(&app->access.db_init_mutex);
     pthread_mutex_destroy(&app->access.db_mutex);
 
-    g_cond_clear(&app->provider_cond);
-    g_mutex_clear(&app->provider_mutex);
+    g_cond_clear(&app->provider_runtime.cond);
+    g_mutex_clear(&app->provider_runtime.mutex);
 
-    // 21) free master key from memory
+    // 21) release the Gemini directive interaction handle before destroying AppContext
+    gemini_directive_invalidate(app);
+
+    // 22) free master key from memory
     if (app->security.master_key) {
         // Overwrite memory with zeros before freeing
         size_t len = strlen(app->security.master_key);
         memset(app->security.master_key, 0, len);
         free(app->security.master_key);
     }
-
-    // 22) release the Gemini directive interaction handle before destroying AppContext
-    gemini_directive_invalidate(app);
 
     // 22.1) free provider config and explicit provider credentials
     free_provider_config(&app->provider_config);
@@ -319,6 +319,7 @@ int main(int argc, char *argv[]) {
     g_free(app->security.groq_key);
     g_free(app->security.openrouter_key);
     g_free(app->security.mistral_key);
+    g_free(app->security.claude_key);
     g_free(app->security.ollama_key);
     g_free(app->security.custom_key);
 

@@ -237,7 +237,7 @@ static gboolean idle_watchdog(gpointer user_data)
     AppContext *app = (AppContext *)user_data;
     if (!app) return FALSE;
 
-    if (app->idle.timeout_minutes == 0) {
+    if (!app->idle.enabled || app->idle.timeout_minutes == 0) {
         /* Zero means disabled.  Keep the timer alive so the timeout can be
          * changed later without having to rebuild the source. */
         return TRUE;
@@ -289,6 +289,16 @@ gboolean idle_event_after(GtkWidget *widget, GdkEvent *event, gpointer user_data
     return FALSE;
 }
 
+void idle_set_timeout_minutes(AppContext *app, guint minutes)
+{
+    if (!app) return;
+    if (minutes > 1440) minutes = 1440;
+    app->idle.timeout_minutes = minutes;
+    app->idle.timeout_configured = TRUE;
+    app->idle.last_activity_us = g_get_monotonic_time();
+    if (minutes == 0 && app->idle.suspended) idle_resume(app);
+}
+
 guint idle_get_timeout_minutes(AppContext *app)
 {
     if (!app) {
@@ -302,9 +312,11 @@ void idle_init(AppContext *app)
 {
     if (!app) return;
 
-    if (app->idle.timeout_minutes == 0) {
+    if (app->idle.timeout_minutes == 0 && !app->idle.timeout_configured) {
         app->idle.timeout_minutes = IDLE_DEFAULT_TIMEOUT_MINUTES;
     }
+    /* Enabled defaults on for existing configurations. */
+    if (!app->idle.initialized) { app->idle.enabled = TRUE; app->idle.initialized = TRUE; }
 
     char *lt_pl   = g_strdup(app->ansi.lt_purple);
     char *cy      = g_strdup(app->ansi.cyan);

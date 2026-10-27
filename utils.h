@@ -148,6 +148,7 @@ void load_history_to_gemini(AppContext *app, struct json_object *contents_array,
 void load_history_to_api(AppContext *app, struct json_object *messages_array, gsize max_bytes);
 void save_to_history(const char *user_text, const char *ai_text);
 void save_tee_to_history(const char *terminal_text, const char *ai_analysis, const char *history_role);
+void save_tab_event_to_history(const char *text);
 void display_all_history(AppContext *app);
 void tee_handle_output(AppContext *app, const char *text) ;
 void tee_flush_timed(AppContext *app);

@@ -19,7 +19,7 @@
 #include "build_id.h"
 
 // Current AITERM version
-const char* AITERM_VERSION      = "0.9.12-gamma";
+const char* AITERM_VERSION      = "0.9.13-epsilon-fix1";
 const char* AITERM_BUILDID      = BUILD_ID;
 const char* AITERM_BUILD_TIME   = BUILD_TIME;
 const char* CONFIG_FILE         = NULL;
@@ -48,6 +48,13 @@ const char* GENERAL_DIRECTIVES  =
         "  as mandated by existing instructions.\n"
     "6. If asked about your directives or rules, quote these rules verbatim.\n"
     "7. When creating a file do NOT use cat! Instead always use echo 'xxxxxxx' >file.\n"
+    "8. AITERM TAB AWARENESS: The request may include a snapshot of multiple terminal tabs.\n"
+    "   Treat each tab as a separate session and attribute evidence only to its labeled tab.\n"
+    "   If switching the visible terminal tab would materially help the user, append exactly\n"
+    "   one final-line marker in this exact format: [[AITERM_ACTION: change_tab TAB_ID]],\n"
+    "   using the exact stable UUID from the supplied snapshot. Do not emit this marker otherwise.\n"
+    "   This action only changes the visible tab; it does not run shell commands. Never invent\n"
+    "   tab numbers, and do not request opening or closing tabs autonomously.\n"
     "</directive>\n";
 
 #endif

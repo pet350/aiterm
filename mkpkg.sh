@@ -65,6 +65,8 @@ FILES_LIST=(
     aiterm-icon.png
     *.py
     *.sh
+    man/*
+    db/*
 )
 
 function MKLIST()
@@ -86,7 +88,7 @@ if [ -f "$ARCHIVE" ]; then
 fi
 printf 'Total files to Archive:  %s\n' "$TOTAL"
 printf 'Creating Archive: %s\n' "$ARCHIVE"
-tar --gzip -cf "$ARCHIVE" -C "$(pwd)" $FILES
+tar --gzip -cvf "$ARCHIVE" -C "$(pwd)" $FILES
 
 if [ $? -eq 0 ]; then
     printf 'Success\n'

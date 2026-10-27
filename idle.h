@@ -24,6 +24,9 @@ typedef struct {
     guint timeout_minutes;
     gint64 last_activity_us;
     gboolean suspended;
+    gboolean enabled;
+    gboolean initialized;
+    gboolean timeout_configured;
 
     gboolean saved_autoreply;
     gboolean saved_auto_execute;
@@ -45,6 +48,7 @@ typedef struct {
 // Function Prototypes
 gboolean idle_event_after(GtkWidget *widget, GdkEvent *event, gpointer user_data);
 guint idle_get_timeout_minutes(AppContext *app);
+void idle_set_timeout_minutes(AppContext *app, guint minutes);
 
 void idle_save_toggle_state(AppContext *app);
 void idle_force_toggles_off(AppContext *app);

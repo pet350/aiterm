@@ -148,6 +148,7 @@ typedef struct {
 // Added 0.9.6
 typedef struct {
     // Identity & DB Sync
+    char *tab_id;                // Stable UI identity; survives notebook reordering
     char *session_uuid;          // Unique session ID for this tab
     char *custom_title;          // Label title on the GTK notebook tab
     char *model_override;        // Per-tab AI model selection (NULL = use global default)
@@ -261,6 +262,7 @@ typedef struct {
     GtkWidget *toggle_autoreply;
     GtkWidget *toggle_autoexe;
     GtkWidget *toggle_debug;
+    GtkWidget *toggle_idle;
     GtkWidget *toggle_tee;
     GtkWidget *toggle_noise_filter;
     GtkWidget *toggle_smart_cache;
@@ -315,6 +317,9 @@ typedef struct {
     int min_token_floor;       // Threshold required before triggering cache
     long min_token_threshold;  // Minimum token count boundary
     gboolean is_valid;         // Active valid cache flag
+    char prefix_fingerprint[65]; // SHA-256 of the newest row frozen in the cache
+    char *cache_model;         // Model the cache was built for (caches are model-bound)
+    time_t create_retry_after; // Do not retry a failed create before this time
 
     /* Gemini Interactions API parent used to persist GENERAL_DIRECTIVES.
      * This is deliberately separate from the legacy explicit content cache. */
@@ -461,6 +466,7 @@ typedef struct {
     char *groq_key;
     char *openrouter_key;
     char *mistral_key;
+    char *claude_key;
     char *ollama_key;
     char *custom_key;
 } SecurityConfig;
@@ -469,6 +475,15 @@ typedef struct {
 // Constantly being updated
 // Completely modularized AppContext: 0.9.5-omega
 // Gemini stated: `AppContext` root now exclusively acts as a "Table of Contents" for your sub-systems.
+/* Synchronization state for the active provider configuration.
+ * Reach it as app->provider_runtime.<member>. */
+typedef struct {
+    GMutex   mutex;               // Protects short provider-config snapshots only
+    GCond    cond;                // Coordinates worker-side directive ordering
+    gboolean directives_pending;  // A directive send is outstanding for this generation
+    guint64  generation;          // Changes whenever active provider configuration changes
+} ProviderRuntime;
+
 typedef struct AppContext {
     ANSI_Color		ansi;				// colorize the debug messages
     ChunkContext	chunk;				// autochunk for splitting large payloads
@@ -486,10 +501,7 @@ typedef struct AppContext {
     NoiseFilter		noise;				// Active noise filter rules loaded from DB
     PrintConfig		print_opts;			// GTK printer configurations
     ProviderConfig	provider_config;		// AI backend API parameters (Gemini / OpenAI)
-    GMutex		provider_mutex;		// Protects short provider-config snapshots only
-    GCond		provider_cond;		// Coordinates worker-side directive ordering
-    gboolean		provider_directives_pending;
-    guint64		provider_generation;	// Changes whenever active provider configuration changes
+    ProviderRuntime	provider_runtime;		// Provider-config synchronization (mutex, cond, generation)
     AIRetryConfig	retry_config;			// Backoff/retry settings for API calls
     AIRetryState	retry_state;			// Runtime execution counters for API retries
     SecurityConfig	security;			// Encrypted keys and security master tokens
@@ -508,8 +520,10 @@ typedef struct AppContext {
 typedef struct {
     AppContext *app;
     char *prompt;
+    char *original_prompt; /* User text before tab-awareness instructions are added. */
     char *terminal_context;
     long last_sent_db_id; // Added here for thread tracking
+    guint investigation_step; /* Number of targeted inspections already performed. */
 } AIThreadData;
 
 // AIResponseData Threaded response data backbone
@@ -517,6 +531,10 @@ typedef struct {
     AppContext *app;
     char *response_text;
     char *original_prompt;
+    char *requested_tab_id; /* Stable tab UUID requested by AI; NULL means no navigation. */
+    char *requested_inspect_tab_id; /* Stable tab UUID for a targeted context follow-up. */
+    char *terminal_context; /* Retained context for bounded multi-step investigation. */
+    guint investigation_step;
     long last_sent_db_id; // Added here for thread tracking
 } AIResponseData;
 
@@ -537,6 +555,7 @@ void on_buffer_changed_scroll(GtkTextBuffer *buffer, gpointer data);
 void on_terminal_child_exited(VteTerminal *terminal, gint status, gpointer user_data);
 void on_tab_close_requested(AppContext *app, GtkWidget *term);
 void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_num, gpointer data);
+void tab_report_current_async(AppContext *app);   /* re-report the active tab (e.g. after a session change) */
 void on_notebook_double_click(GtkGestureMultiPress *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data);
 void on_tab_close_clicked(GtkButton *button, gpointer user_data);
 void add_terminal_tab(AppContext *app);

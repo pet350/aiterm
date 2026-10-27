@@ -319,6 +319,11 @@ void on_ai_font_set(GtkFontButton *btn, gpointer data) {
     apply_visual_settings(app);
 }
 
+static void on_idle_timeout_changed(GtkRange *range, gpointer data) {
+    AppContext *app = (AppContext *)data;
+    if (app) idle_set_timeout_minutes(app, (guint)gtk_range_get_value(range));
+}
+
 static void on_preferences_response(GtkDialog *dialog, gint response_id, gpointer data) {
     AppContext *app = (AppContext *)data;
 
@@ -363,6 +368,15 @@ void on_preferences(GtkWidget *widget, gpointer data) {
     gtk_range_set_value(GTK_RANGE(s2), app->gui.ai_transparency);
     gtk_box_pack_start(GTK_BOX(vbox), s2, FALSE, FALSE, 0);
     g_signal_connect(s2, "value-changed", G_CALLBACK(on_ai_transparency_changed), app);
+
+    /* Keep both transparency controls adjacent, with idle timeout below them. */
+    gtk_box_pack_start(GTK_BOX(vbox), gtk_label_new("Idle Suspension Timeout (minutes, 0 = disabled):"), FALSE, FALSE, 0);
+    GtkWidget *idle_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 120, 1);
+    gtk_scale_set_digits(GTK_SCALE(idle_scale), 0);
+    gtk_scale_set_value_pos(GTK_SCALE(idle_scale), GTK_POS_RIGHT);
+    gtk_range_set_value(GTK_RANGE(idle_scale), idle_get_timeout_minutes(app));
+    gtk_box_pack_start(GTK_BOX(vbox), idle_scale, FALSE, FALSE, 0);
+    g_signal_connect(idle_scale, "value-changed", G_CALLBACK(on_idle_timeout_changed), app);
 
     gtk_box_pack_start(GTK_BOX(vbox), gtk_label_new("Terminal Font:"), FALSE, FALSE, 0);
     GtkWidget *f1 = gtk_font_button_new_with_font(app->gui.terminal_font);
@@ -462,6 +476,16 @@ void sync_toggle_ui_elements(AppContext *app) {
         g_signal_handlers_block_by_func(app->ui.toggle_debug, G_CALLBACK(on_menu_toggle_item_toggled), app);
         gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_debug), app->sys.debug_mode);
         g_signal_handlers_unblock_by_func(app->ui.toggle_debug, G_CALLBACK(on_menu_toggle_item_toggled), app);
+    }
+
+    if (app->ui.toggle_idle) {
+        // setup_menu_toggle() connects on_menu_toggle_item_toggled with NULL user
+        // data, and g_signal_handlers_block_by_func() matches on func AND data,
+        // so NULL must be passed here or the block silently matches nothing and
+        // set_active() re-dispatches "idle on|off" through the command pipeline.
+        g_signal_handlers_block_by_func(app->ui.toggle_idle, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(app->ui.toggle_idle), app->idle.enabled);
+        g_signal_handlers_unblock_by_func(app->ui.toggle_idle, G_CALLBACK(on_menu_toggle_item_toggled), NULL);
     }
 
     if (app->ui.toggle_snmp_payload) {
@@ -761,6 +785,13 @@ GtkWidget* create_menu_bar(AppContext *app) {
     append_ai_action(cfg_menu, "Force Re-establish Database Sockets", "reset db", FALSE, app);
 
     GtkWidget *item;
+
+    // Idle suspension toggle is handled by the command registry
+    // ("idle on|off|status" -> cmd_toggle_idle) via the unified toggle pipeline.
+    item = gtk_check_menu_item_new_with_label("Idle Suspension");
+    setup_menu_toggle(item, app, TOGGLE_IDLE, app->idle.enabled);
+    gtk_menu_shell_append(GTK_MENU_SHELL(toggle_menu), item);
+    gtk_widget_show(item);
 
     // Populate Toggles Submenu via setup_menu_toggle()
     item = gtk_check_menu_item_new_with_label("Toggle Real-Time Prompt Analysis");

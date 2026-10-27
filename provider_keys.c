@@ -112,6 +112,10 @@ void provider_keys_show(AppContext *app)
           "https://console.mistral.ai/api-keys/",
           app ? &app->security.mistral_key : NULL, FALSE },
 
+        { "Claude",     "CLAUDE_KEY",
+          "https://platform.claude.com/settings/keys",
+          app ? &app->security.claude_key : NULL, FALSE },
+
         { "Ollama",     "OLLAMA_KEY",
           "https://ollama.com/settings/keys",
           app ? &app->security.ollama_key : NULL, TRUE },

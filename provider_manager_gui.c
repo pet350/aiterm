@@ -18,7 +18,7 @@
 #include "utils.h"
 
 static const char *provider_names[] = {
-    "openai", "gemini", "groq", "openrouter", "mistral", "ollama", "custom", NULL
+    "openai", "gemini", "groq", "openrouter", "mistral", "claude", "ollama", "custom", NULL
 };
 
 static void set_entry(GtkWidget *entry, const char *value) {
@@ -63,6 +63,10 @@ static void fill_from_provider(ProviderManagerDialog *dlg, const char *name) {
     } else if (strcasecmp(name, "mistral") == 0) {
         model = "mistral-small-latest";
         base_url = "https://api.mistral.ai/v1";
+    } else if (strcasecmp(name, "claude") == 0) {
+        /* OpenAI-compatible endpoint of the Claude API (Authorization: Bearer). */
+        model = "claude-haiku-5-5";
+        base_url = "https://api.anthropic.com/v1";
     } else if (strcasecmp(name, "ollama") == 0) {
         model = "llama3.2";
         base_url = "http://127.0.0.1:11434/v1";
@@ -147,7 +151,7 @@ static gboolean apply_provider(ProviderManagerDialog *dlg, gboolean save) {
     /* 0.9.11-alpha: keep a separate credential in SecurityConfig for every provider. */
     set_provider_api_key(app, name, api_key);
     if (provider_changed)
-        app->provider_generation++;
+        app->provider_runtime.generation++;
     g_free(app->aiterm_runtime.model);
     app->aiterm_runtime.model = g_strdup(model);
 
@@ -380,7 +384,8 @@ void open_provider_manager_window(AppContext *app) {
     if (!found) {
         /* Preserve an arbitrary provider name as a selectable custom entry. */
         gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(dlg->provider_combo), current);
-        active = 7;
+        active = 0;
+        while (provider_names[active]) active++;   /* index just past the built-ins */
     }
     gtk_combo_box_set_active(GTK_COMBO_BOX(dlg->provider_combo), active);
     fill_from_provider(dlg, found ? provider_names[active] : current);

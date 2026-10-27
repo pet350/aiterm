@@ -382,10 +382,10 @@ void initialize_booleans(AppContext *app) {
     g_atomic_int_set(&app->sys.is_processing, 0);
     g_atomic_int_set(&app->sys.ai_busy, 0);
 
-    g_mutex_init(&app->provider_mutex);
-    g_cond_init(&app->provider_cond);
-    app->provider_directives_pending = FALSE;
-    app->provider_generation = 1;
+    g_mutex_init(&app->provider_runtime.mutex);
+    g_cond_init(&app->provider_runtime.cond);
+    app->provider_runtime.directives_pending = FALSE;
+    app->provider_runtime.generation = 1;
 
     // Noise-filter patterns are copied into a non-GTK cache so background
     // workers never access the GTK ListStore.
@@ -409,6 +409,7 @@ void initialize_booleans(AppContext *app) {
     app->security.groq_key = NULL;
     app->security.openrouter_key = NULL;
     app->security.mistral_key = NULL;
+    app->security.claude_key = NULL;
     app->security.ollama_key = NULL;
     app->security.custom_key = NULL;
 }
@@ -468,6 +469,7 @@ static char **provider_key_slot(AppContext *app, const char *provider_name) {
     if (strcasecmp(provider_name, "groq") == 0) return &app->security.groq_key;
     if (strcasecmp(provider_name, "openrouter") == 0) return &app->security.openrouter_key;
     if (strcasecmp(provider_name, "mistral") == 0) return &app->security.mistral_key;
+    if (strcasecmp(provider_name, "claude") == 0) return &app->security.claude_key;
     if (strcasecmp(provider_name, "ollama") == 0) return &app->security.ollama_key;
 
     /* Provider Manager's custom endpoint uses the custom credential slot. */
@@ -494,6 +496,7 @@ void clear_provider_key_store(AppContext *app) {
     set_provider_api_key(app, "groq", NULL);
     set_provider_api_key(app, "openrouter", NULL);
     set_provider_api_key(app, "mistral", NULL);
+    set_provider_api_key(app, "claude", NULL);
     set_provider_api_key(app, "ollama", NULL);
     set_provider_api_key(app, "custom", NULL);
 }
@@ -584,6 +587,11 @@ void init_provider_config(AppContext *app) {
         } else if (strcasecmp(name, "mistral") == 0) {
             provider_replace_string(&provider->model, model ? model : "mistral-small-latest");
             provider_replace_string(&provider->base_url, "https://api.mistral.ai/v1");
+        } else if (strcasecmp(name, "claude") == 0) {
+            /* Claude API via Anthropic's OpenAI SDK compatibility layer.
+             * Same Chat Completions wire format and Authorization: Bearer auth. */
+            provider_replace_string(&provider->model, model ? model : "claude-haiku-5-5");
+            provider_replace_string(&provider->base_url, "https://api.anthropic.com/v1");
         } else if (strcasecmp(name, "ollama") == 0) {
             provider_replace_string(&provider->model, model ? model : "llama3.2");
             provider_replace_string(&provider->base_url, "http://127.0.0.1:11434/v1");
@@ -1240,7 +1248,7 @@ void load_history_to_gemini(AppContext *app, struct json_object *contents_array,
     char *query = g_strdup_printf(
         "SELECT role, content, created_at FROM aiterm_history "
         "WHERE session_uuid %s "
-        "ORDER BY created_at DESC LIMIT 100", uuid_filter);
+        "ORDER BY created_at DESC, id DESC LIMIT 100", uuid_filter);
 
     DEBUG_PRINT("[%s DEBUG %s]: [%sLOAD_HISTORY_TO_GEMINI%s]: %sQuery %s%s%s\n",
                 lt_pl, nml, cy, nml, yl, gr, query, nml);
@@ -1266,8 +1274,9 @@ void load_history_to_gemini(AppContext *app, struct json_object *contents_array,
 
             char *data = noise_filter_apply(app, content);
 
-            TagType row_type = (strcmp(role, "model") == 0)
-                                   ? TAG_HISTORY : TAG_MEMORY;
+            TagType row_type = (strcmp(role, "model") == 0) ? TAG_HISTORY
+                             : (row[0] && strcmp(row[0], "tab") == 0) ? TAG_STATUS
+                             : TAG_MEMORY;
             char *wrapped_content = xml_wrap_with_type_timestamp(app, data, row_type, timestamp);
             g_free(data);
 
@@ -1468,6 +1477,14 @@ void save_to_history(const char *user_text, const char *ai_text) {
     g_free(cleaned_ai_text);
 }
 
+/* Record a tab-switch event as a lone history row (role "tab") so the AI sees
+ * it as context on its next request.  No API call is made here. */
+void save_tab_event_to_history(const char *text) {
+    if (!text || !*text)
+        return;
+    save_tee_to_history(text, NULL, "tab");
+}
+
 void save_tee_to_history(const char *terminal_text, const char *ai_analysis, const char *history_role) {
     extern AppContext *global_app;
 
@@ -1526,7 +1543,9 @@ void save_tee_to_history(const char *terminal_text, const char *ai_analysis, con
      * their distinct database roles. Only internal callers supply these
      * controlled role names. */
     if (!history_role ||
-        (strcmp(history_role, "terminal") != 0 && strcmp(history_role, "snmp") != 0)) {
+        (strcmp(history_role, "terminal") != 0 &&
+         strcmp(history_role, "snmp") != 0 &&
+         strcmp(history_role, "tab") != 0)) {
         history_role = "terminal";
     }
     data->history_role = g_strdup(history_role);
@@ -1608,8 +1627,7 @@ void load_history_to_api(AppContext *app, struct json_object *messages_array, gs
         "SELECT id, role, content, sequence_id, created_at FROM aiterm_history "
         "WHERE session_uuid %s "
         "  AND sequence_id > %d "
-        "  AND is_tee = 0 "
-        "  AND role IN ('user','assistant') "
+        "  AND ((is_tee = 0 AND role IN ('user','assistant')) OR role = 'tab') "
         "  AND content NOT LIKE 'API_ERROR:%%' "
         "ORDER BY sequence_id DESC, id DESC LIMIT 100", uuid_filter,
         app->session.last_sent_db_id);
@@ -1644,8 +1662,9 @@ void load_history_to_api(AppContext *app, struct json_object *messages_array, gs
 
             char *clean_content = noise_filter_apply(app, content);
             const char *timestamp = row[4] ? row[4] : NULL;
-            TagType row_type = (strcmp(api_role, "assistant") == 0)
-                             ? TAG_HISTORY : TAG_MEMORY;
+            TagType row_type = (strcmp(api_role, "assistant") == 0) ? TAG_HISTORY
+                             : (row[1] && strcmp(row[1], "tab") == 0) ? TAG_STATUS
+                             : TAG_MEMORY;
             char *wrapped_content = xml_wrap_with_type_timestamp(
                 app, clean_content ? clean_content : content, row_type, timestamp);
             g_free(clean_content);
@@ -1672,7 +1691,7 @@ void load_history_to_api(AppContext *app, struct json_object *messages_array, gs
     }
     json_object_put(history_messages);
 
-    DEBUG_PRINT("[ %sDEBUG%s ] [%sLOAD_HISTORY_TO_API%s] %sSelected [%s%u%s] row(s), skipped [%s%u%s] row(s), approx [%s%zu%s] bytes, budget=[%s%zu%s]%s\n",
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sLOAD_HISTORY_TO_API%s] %sSelected [%s%u%s] row(s), skipped [%s%u%s] row(s), approx [%s%zu%s] bytes, budget=[%s%zu%s]%s\n",
 		lt_pl, nml, cy, nml, gr,
                 red, count, gr,
 		red, skipped, gr,
