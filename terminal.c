@@ -251,11 +251,28 @@ void on_vte_child_exited(VteTerminal *vte, gint status, gpointer user_data) {
     AppContext *app = (AppContext *)user_data;
     if (!app) return;
 
-    DEBUG_PRINT("[VTE]: Process exited (status %d). Marking terminal available.\n", status);
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
+    DEBUG_PRINT("[ %sDEBUG%s ] [%sVTE%s]: %sProcess exited (status %s%d%s). Marking terminal available.%s\n", 
+	lt_pl, nml, cy, nml, gr,
+	red, status, gr, nml);
     
     // Unlock and trigger the next enqueued autoexec command
     app->aiterm_runtime.is_command_running = FALSE;
     execute_next_queued_command(app);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 void apply_terminal_transparency(AppContext *app) {
