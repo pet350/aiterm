@@ -23,6 +23,8 @@
 #include <time.h>
 #include "idle.h"
 
+#define MAX_HOSTS	1024
+
 // define some static variables
 #define APP_NAME	"aiterm"
 #define MAX_TABS	32
@@ -31,6 +33,58 @@
 
 #define AITERM_WM_CLASS "aiterm"
 #define AITERM_WM_ROLE  "terminal"
+
+typedef enum {
+    HOST_SOURCE_LOCAL = 0,
+    HOST_SOURCE_SNMP,
+    HOST_SOURCE_SSH,
+    HOST_SOURCE_DATABASE
+} HostSource;
+
+typedef enum {
+    HOST_UNKNOWN = 0,
+    HOST_ONLINE,
+    HOST_OFFLINE,
+    HOST_WARNING,
+    HOST_CRITICAL
+} HostState;
+
+typedef struct {
+    char hostname[256];
+    char description[256];
+
+    HostSource source;
+    HostState state;
+
+    double cpu_percent;
+    double load_avg;
+
+    long memory_used;
+    long memory_total;
+    long disk_used;
+    long disk_total;
+    long swap_used;
+    long swap_total;
+    long uptime_seconds;
+
+    int failed_services;
+    int tcp_connections;
+
+    unsigned long journal_errors;
+
+    time_t last_update;
+} HostDetails;
+
+typedef struct {
+    HostDetails hosts[MAX_HOSTS];
+    int count;
+    pthread_mutex_t mutex;
+    pthread_t collector_thread;
+    pthread_t analyzer_thread;
+    gboolean running;
+    guint refresh_interval;
+    guint analysis_interval;
+} HostAnalysisContext;
 
 // 0.9.13-omega
 // moved from config.h
@@ -507,6 +561,7 @@ typedef struct AppContext {
     ExportConfig	export_opts;			// Data export settings
     GeminiCacheState	gemini_cache;			// Smart Cache state and token tracking
     SysWidgets		gui;				// Core system GUI widgets and theme providers
+    HostAnalysisContext host_analysis;			// Subsystem for storing multiple host statistics
     RateLimiter		limiter;			// API rate-limiting structures
     LocalCommand	local;				// Shell command history cache
     ManagerWindows	manager;			// Handles for policy, session, noise, history, SNMP, and provider windows
