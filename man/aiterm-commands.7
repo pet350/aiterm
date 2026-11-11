@@ -1,0 +1,147 @@
+.TH AITERM-COMMANDS 7 "2026-10-23" "aiterm 0.9.13-epsilon" "Miscellaneous Information"
+.SH NAME
+aiterm-commands \- interactive AITerm command reference
+.SH DESCRIPTION
+AITerm commands are entered in the AI input line. The leading slash is
+optional. Matching is case-insensitive and uses prefix matching against the
+command registry; the first matching command wins. For reliable results, type
+the complete command words shown below. Some commands open GUI managers or
+modify persistent application state.
+.SH GENERAL COMMANDS
+.TP
+.B /help
+Show command help.
+.TP
+.B /legacy help, /extended help
+Show alternate help listings where available.
+.TP
+.B /features, /version, /status, /hw
+Show feature information, version, runtime status, or hardware information.
+.TP
+.B /history, /clear, /directives
+Inspect history, clear the AI pane, or display AI directives.
+.TP
+.B /exit
+Exit the application.
+.SH TOGGLES
+Most toggles accept on, off, or status:
+.PP
+.nf
+/tee on|off|status
+/autoreply on|off|status
+/autoexe on|off|status
+/auto all on|off|status
+/autoretry on|off|status
+/debug on|off|status
+/color on|off|status
+/smart cache on|off|status
+/ratelimit on|off|status
+/rpm <number>
+/xml tagging on|off|status
+/noise filter on|off|status
+/session config on|off|status
+/session read from global on|off|status
+/session write to global on|off|status
+/snmp enable on|off|status
+/snmp ticker on|off|status
+.fi
+.PP
+Idle suspension supports the corresponding idle toggle command:
+.PP
+.nf
+/idle on
+/idle off
+/idle status
+.fi
+.PP
+The exact accepted command spelling is determined by the command registry in
+the installed version. Auto All controls Tee, Auto Reply, and Auto Execute
+together.
+.SH PROVIDER AND CONFIGURATION
+.TP
+.B /provider
+Display provider information.
+.TP
+.B /list models
+List available models where supported.
+.TP
+.B /load config, /save config
+Load or save the application configuration.
+.TP
+.B /open provider manager
+Open the provider manager.
+.TP
+.B /open provider api keys
+Open the provider API-key window.
+.SH SESSIONS
+.nf
+/session new
+/session list
+/session show
+/session sync
+/session load <UUID>
+/session description <text>
+/session default <UUID>
+/session no default
+/session delete <UUID>
+.fi
+Session commands can load, inspect, synchronize, describe, select, and delete
+saved sessions. Deleting a session can remove persistent data; verify the UUID
+before confirming such an operation.
+.SH MANAGERS
+The following commands open or close their corresponding GUI managers:
+.PP
+.nf
+/open session manager       /close session manager
+/open history manager       /close history manager
+/open noise manager         /close noise manager
+/open policy manager        /close policy manager
+/open snmp manager          /close snmp manager
+/open provider manager      /close provider manager
+.fi
+.SH NOISE FILTERING
+.nf
+/noise filter on|off|status
+/noise add <pattern>
+/noise list
+/noise reload
+.fi
+.PP
+A delete command may appear in help text but is not implemented in every
+version. Check the live command help before relying on it.
+.SH POLICY COMMANDS
+.nf
+policy list
+policy find <command>
+policy add <command|*> <ALLOW|BLOCK|APPROVE> <LOW|MEDIUM|HIGH|CRITICAL>
+policy delete <command>
+.fi
+.PP
+Policy rules affect automatic command execution. Review rules carefully before
+enabling execution features.
+.SH SNMP COMMANDS
+.nf
+/snmp cmd list|add|edit|delete ...
+/snmp enable on|off|status
+/snmp force
+/snmp dump
+/snmp poller start|restart
+/snmp ticker on|off|status
+.fi
+.PP
+SNMP features depend on the Net-SNMP libraries, configured targets, and
+network access.
+.SH AI RETRY AND EXECUTION QUEUE
+.nf
+/retry times <number>
+/retry delay <seconds>
+/show queue
+.fi
+.SH SAFETY
+Auto-execution can pass AI-generated command payloads into a terminal execution
+workflow. Keep execution disabled unless you understand the configured policy,
+approval behavior, and trust boundary. Do not run unreviewed AI-generated
+commands on systems where mistakes could cause data loss or service disruption.
+.SH SEE ALSO
+.BR aiterm (1),
+.BR aiterm.conf (5)

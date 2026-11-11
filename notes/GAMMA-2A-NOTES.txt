@@ -1,0 +1,8 @@
+AITerm 0.9.14-gamma-2a: unified host identity
+- Shared mutex-held host find/create helper used by local and SNMP import.
+- SNMP-only records rebuilt from current observations, while local records persist.
+- SNMP observations can now attach to a local host with the same FQDN.
+- /hosts dump displays SNMP observations even for a locally collected host.
+- /hosts status counts SNMP-bearing hosts, including mixed-source hosts.
+- No changes to SNMP polling engine or command registration.
+- Archive integrity verified; build/runtime validation required on GTK/VTE system.

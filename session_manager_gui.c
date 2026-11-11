@@ -68,7 +68,7 @@ void refresh_session_list(AppContext *app, GtkListStore *store) {
                                    COLUMN_CURRENT, current_marker,
                                    COLUMN_UUID, uuid,
                                    COLUMN_DESC, row[1],
-                                   COLUMN_COUNT, atoi(row[2]),
+                                   COLUMN_COUNT, row[2] ? atoi(row[2]) : 0,
                                    -1);
             }
             mysql_free_result(res);
@@ -224,17 +224,40 @@ void on_load_clicked(GtkButton *btn, gpointer user_data) {
     GtkTreeModel *model;
     GtkTreeIter iter;
 
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     if (gtk_tree_selection_get_selected(sel, &model, &iter)) {
         char *uuid;
         gtk_tree_model_get(model, &iter, COLUMN_UUID, &uuid, -1);
-        DEBUG_PRINT("[ DEBUG ]: SESSION_MANAGER: Extracted UUID is: '%s'\n", uuid ? uuid : "NULL");
+	char *uuid_val = g_malloc(40);
+	snprintf(uuid_val, 40, "%s", uuid ? uuid : "NULL");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_MANAGER%s]: %sExtracted UUID is: [%s%s%s]%s\n", 
+		lt_pl, nml, cy, nml, gr,
+		red, uuid_val, gr, nml);
         cmd_session_load(global_app, uuid);
 
-        DEBUG_PRINT("[ DEBUG ]: Loading session: %s\n", uuid);
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_MANAGER%s]: %sLoading session: [%s%s%s]%s\n", 
+		lt_pl, nml, cy, nml, gr,
+		red, uuid_val, gr, nml);
+
+        g_free(uuid_val);
         g_free(uuid);
         // Instant visual update when selection changes
         refresh_session_list(global_app, GTK_LIST_STORE(model));
     }
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 void on_default_clicked(GtkButton *btn, gpointer user_data) {
@@ -243,16 +266,36 @@ void on_default_clicked(GtkButton *btn, gpointer user_data) {
     GtkTreeModel *model;
     GtkTreeIter iter;
 
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     if (gtk_tree_selection_get_selected(sel, &model, &iter)) {
         char *uuid;
         gtk_tree_model_get(model, &iter, COLUMN_UUID, &uuid, -1);
-        DEBUG_PRINT("[ DEBUG ]: SESSION_MANAGER: Extracted UUID is: '%s'\n", uuid ? uuid : "NULL");
+	char *uuid_val = g_malloc(40);
+	snprintf(uuid_val, 40, "%s", uuid ? uuid : "NULL");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_MANAGER%s]: %sExtracted UUID is: [%s%s%s]%s\n", 
+		lt_pl, nml, cy, nml, gr,
+		red, uuid_val, gr, nml);
+        g_free(uuid_val);
         cmd_session_default(global_app, uuid);
         g_free(uuid);
 
         // Force the layout to instantly update the asterisk location
         refresh_session_list(global_app, GTK_LIST_STORE(model));
     }
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 void on_delete_clicked(GtkButton *btn, gpointer user_data) {
@@ -261,23 +304,61 @@ void on_delete_clicked(GtkButton *btn, gpointer user_data) {
     GtkTreeModel *model;
     GtkTreeIter iter;
 
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     if (gtk_tree_selection_get_selected(sel, &model, &iter)) {
         char *uuid;
         gtk_tree_model_get(model, &iter, COLUMN_UUID, &uuid, -1);
-        DEBUG_PRINT("[ DEBUG ]: SESSION_MANAGER: Extracted UUID is: '%s'\n", uuid ? uuid : "NULL");
+	char *uuid_val = g_malloc(40);
+	snprintf(uuid_val, 40, "%s", uuid ? uuid : "NULL");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_MANAGER%s]: %sExtracted UUID is: [%s%s%s]%s\n", 
+		lt_pl, nml, cy, nml, gr, 
+		red, uuid_val, gr, nml);
+        g_free(uuid_val);
         cmd_session_delete(global_app, uuid);
         g_free(uuid);
         refresh_session_list(global_app, GTK_LIST_STORE(model));
     }
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 void on_refresh_clicked(GtkButton *btn, gpointer user_data) {
     GtkTreeView *tree = GTK_TREE_VIEW(user_data);
     GtkTreeModel *model = gtk_tree_view_get_model(tree);
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     if (model && GTK_IS_LIST_STORE(model)) {
-        DEBUG_PRINT("[ DEBUG ]: UI: User forced a manual list store refresh\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_MANAGER%s]: %sUser forced a manual list store refresh%s\n",
+		lt_pl, nml, cy, nml, gr, nml);
+
         refresh_session_list(global_app, GTK_LIST_STORE(model));
     }
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 void on_rename_clicked(GtkButton *btn, gpointer user_data) {

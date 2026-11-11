@@ -1,0 +1,3 @@
+ALTER TABLE aiterm_history
+MODIFY COLUMN content MEDIUMTEXT DEFAULT NULL;
+

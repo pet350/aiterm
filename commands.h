@@ -22,6 +22,10 @@ typedef struct {
     cmd_handler_func handler;
 } CommandRegistry;
 
+void cmd_hosts_refresh(AppContext *app, const char *args);
+void cmd_hosts_dump(AppContext *app, const char *args);
+void cmd_hosts_status(AppContext *app, const char *args);
+
 // Function prototypes
 gboolean ui_display_list(gpointer data);
 gboolean ui_display_show(gpointer data);

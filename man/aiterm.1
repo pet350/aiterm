@@ -1,0 +1,179 @@
+.TH AITERM 1 "2026-10-23" "aiterm 0.9.13-epsilon" "User Commands"
+.SH NAME
+aiterm \- AI-assisted GTK terminal emulator
+.SH SYNOPSIS
+.B aiterm
+.RI [ options ]
+.SH DESCRIPTION
+.B aiterm
+is a GTK3 terminal application built around a terminal pane and an AI
+assistant pane. It integrates configurable AI providers, session history,
+terminal-output capture, optional AI-assisted command execution, and
+administrative tools for noise filtering, policies, and SNMP telemetry.
+.PP
+The application uses VTE for terminal emulation and MariaDB for persistent
+history and related state. An AI provider and database may require separate
+configuration. The application can start only when its network-availability
+check succeeds, unless the relevant offline override is enabled in the
+running build.
+.SH OPTIONS
+.TP
+.B --help
+Print command-line help and application highlights, then exit.
+.TP
+.B --version
+Print version, build identifier, and build time, then exit.
+.TP
+.B --debug
+Enable verbose diagnostic output on standard error. This also prints version
+information.
+.TP
+.B --color
+Enable colorized diagnostic output when appropriate.
+.TP
+.B --bw
+Force black-and-white diagnostic output.
+.TP
+.B --features
+Print the built-in feature and release information, then exit.
+.TP
+.B --highlights
+Print application highlights, then exit.
+.TP
+.B --directives
+Print the general AI directives, then exit.
+.TP
+.B --provider
+Load configuration and print the active provider, model, protocol, base URL,
+and endpoint, then exit.
+.TP
+.B --list-models
+List Gemini models. A master encryption key is required.
+.TP
+.BI --master= key
+Supply the master key used to decrypt configured credentials. The key may
+instead be supplied through AITERM_MASTER_KEY.
+.TP
+.BI --crypt-pw= text
+Encrypt a plaintext secret and print the encrypted representation. Requires
+a master key through --master or AITERM_MASTER_KEY.
+.TP
+.B --decrypt-pw
+Print decrypted provider credentials and the database password. Use only in a
+trusted terminal because secrets are exposed in diagnostic output.
+.SH FEATURES
+.SS Terminal and AI pane
+The main window provides a terminal and an AI pane. The AI pane can receive
+questions and selected application context. The interface supports multiple
+terminal tabs and session-aware behavior.
+.SS AI providers
+Provider configuration supports OpenAI-compatible APIs and Gemini, plus
+configured provider options including Groq, OpenRouter, Mistral, Claude, Ollama,
+and a custom provider. Availability depends on the configured endpoint, model, and
+credentials. See
+.BR aiterm.conf (5).
+.SS Capture and automation
+Tee mode captures terminal output for application context and history. Auto
+Reply analyzes captured output. AI payload auto-execution can submit approved
+or permitted command payloads to the execution workflow; use policy controls
+carefully and review commands before enabling automation.
+.SS History and sessions
+AITerm can persist session history and context in MariaDB. Session and history
+managers provide access to saved records. Global-context read and write toggles
+control whether the corresponding global context streams are used.
+.SS Additional tools
+The application includes provider and API-key managers, noise filtering,
+smart caching, request-rate limiting, AI retry controls, export and printing,
+XML payload tagging, and SNMP monitoring and command management.
+.SS Idle suspension
+Idle suspension temporarily disables selected background/runtime toggles after
+a configured period without user activity, then restores their previous states
+when activity resumes. Configure idle_enabled and idle_timeout_minutes in the
+configuration file.
+.SH INTERACTIVE COMMANDS
+Commands are entered in the AI input line. A leading slash is optional.
+Command matching is case-insensitive and uses prefix matching against the
+command registry, so use the full command words to avoid ambiguous matches.
+See
+.BR aiterm-commands (7)
+for a categorized reference.
+.SH ENVIRONMENT
+.TP
+.B AITERM_CONFIG
+Use this configuration path when it names an existing file.
+.TP
+.B AITERM_MASTER_KEY
+Fallback master key for encrypted configuration values.
+.TP
+.B AITERM_SQL_DIR
+Override the directory containing SQL schema initialization scripts, when the
+specified directory exists.
+.TP
+.B AITERM_DEBUG
+Set initial debug mode (1 or 0).
+.TP
+.B AITERM_COLOR
+Set initial colorized diagnostic output (1 or 0).
+.TP
+.B AITERM_PROVIDER
+Override the configured provider name.
+.TP
+.B AITERM_MODEL
+Override the model name.
+.TP
+.B AITERM_PROVIDER_BASE_URL, AITERM_PROVIDER_ENDPOINT
+Override provider transport URL and endpoint.
+.TP
+.B AITERM_PROVIDER_AUTH_HEADER, AITERM_PROVIDER_AUTH_SCHEME, AITERM_PROVIDER_QUERY_KEY
+Override provider authentication transport settings.
+.TP
+.B AITERM_<CONFIG_KEY>
+Ordinary configuration values can be overridden using the uppercase key name
+prefixed with AITERM_, for example AITERM_IDLE_ENABLED or
+AITERM_TERM_TRANSPARENCY. Overrides are runtime-only and are not saved back to
+the configuration file. The current loader applies these overrides while
+processing configuration entries, so ensure the corresponding key exists in
+the file.
+.TP
+.B <PROVIDER>_KEY, <PROVIDER>_API_KEY
+Provider-specific credential fallback variables, for example GEMINI_KEY or
+OPENAI_API_KEY. These are distinct from encrypted credential fields.
+.SH FILES
+.TP
+.I /etc/aiterm.conf
+System-wide fallback configuration file.
+.TP
+.I ~/.config/aiterm.conf
+Per-user configuration file, preferred over ~/.aiterm.conf when present.
+.TP
+.I ~/.aiterm.conf
+Legacy per-user configuration file.
+.TP
+.I /etc/.UID.aiterm.conf
+Per-user configuration file in /etc, where UID is the numeric user ID.
+.TP
+.I /usr/share/aiterm/db/
+Default SQL schema directory; installation paths may be customized at build
+or runtime.
+.SH SECURITY
+Provider API keys and the database password are stored as encrypted values in
+the configuration file. Protect the master key and configuration file.
+Avoid --decrypt-pw in shared terminals or logs. Environment variables may be
+visible to processes or diagnostic tooling depending on system configuration.
+AI-assisted execution can run terminal commands; enable it only when its
+policy and approval behavior are understood.
+.SH EXAMPLES
+.TP
+.B aiterm --version
+Display build information.
+.TP
+.B AITERM_MASTER_KEY='secret' aiterm --provider
+Inspect the selected provider configuration.
+.TP
+.B AITERM_IDLE_TIMEOUT_MINUTES=15 aiterm
+Run with a 15-minute idle timeout when the corresponding configuration entry
+is present.
+.SH SEE ALSO
+.BR aiterm.conf (5),
+.BR aiterm-commands (7),
+.BR man (1)

@@ -1,0 +1,7 @@
+AITerm 0.9.14-gamma refresh integration
+- host_analysis_refresh_all: local collection + cached SNMP import
+- host_analysis_import_snmp: cached SNMP import only
+- /hosts refresh and 300-second worker call full refresh
+- Completed SNMP polling pass calls SNMP-only import after all poll locks are released
+- Existing host_analysis_analyze_all retained as compatibility wrapper
+- No additional SNMP network requests

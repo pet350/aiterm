@@ -6,8 +6,8 @@
 #include <string.h>
 #include <json-c/json.h>
 
+#include "appcontext.h"
 #include "ai_provider.h"
-#include "gui.h"
 #include "gemini.h"
 #include "openai.h"
 #include "utils.h"

@@ -204,6 +204,14 @@ void session_init(AppContext *app) {
 }
 
 void session_sync_to_db(AppContext *app) {
+
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     // 1. Get the cache content
     char *data = app->session.history_cache->str;
 
@@ -214,7 +222,17 @@ void session_sync_to_db(AppContext *app) {
     g_string_truncate(app->session.history_cache, 0);
     app->session.last_sync = time(NULL);
 
-    DEBUG_PRINT("[ DEBUG ]: SESSION: Synced %ld bytes to DB\n", strlen(data));
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION%s]: %sSynced %s%ld%s bytes to DB%s\n",
+	lt_pl, nml, cy, nml, gr,
+	red, strlen(data), gr, nml);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 // This creates the <tee> tags for live stream
@@ -256,45 +274,69 @@ gpointer session_db_worker(gpointer data) {
     uuid_generate_random(new_uuid);
     uuid_unparse_lower(new_uuid, new_uuid_str);
 
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
+
     pthread_mutex_lock(&app->access.db_mutex);
-    DEBUG_PRINT("[ DEBUG ]: SESSION_DB_WORKER: Locked DB mutex\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_DB_WORKER%s]: %sLocked DB mutex%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
 
     switch (std->type) {
         case CMD_SESSION_NEW: {
             char *new_desc = g_strdup("[ New Session ]");
             query = g_strdup_printf("INSERT IGNORE INTO sessions (uuid, description) VALUES ('%s', '%s');",
                                          new_uuid_str, new_desc);
-            DEBUG_PRINT("[ DEBUG ]: SESSION_DB_WORKER: Creating new session %s: %s\n", new_uuid_str, new_desc);
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_DB_WORKER%s]: %sCreating new session [%s%s%s]: [%s%s%s]%s\n", 
+		lt_pl, nml, cy, nml, gr,
+		red, new_uuid_str, gr,
+		red, new_desc, gr, nml);
             g_free(new_desc); // Properly scoped free
             break;
         }
         case CMD_SESSION_LIST: {
-            DEBUG_PRINT("[ DEBUG ]: SESSION_DB_WORKER: Listing sessions\n");
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_DB_WORKER%s]: %sListing sessions%s\n",
+		lt_pl, nml, cy, nml, yl, nml);
             query = g_strdup("SELECT uuid, description FROM sessions");
             break;
         }
         case CMD_SESSION_SHOW: {
-            DEBUG_PRINT("[ DEBUG ]: SESSION_DB_WORKER: Fetching info for Session %s\n", app->session.session_uuid);
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_DB_WORKER%s]: %sFetching info for Session [%s%s%s]%s\n", 
+		lt_pl, nml, cy, nml, gr,
+		red, app->session.session_uuid, gr, nml);
             query = g_strdup_printf("SELECT uuid, created_at, description FROM sessions WHERE uuid = '%s';", app->session.session_uuid);
             break;
         }
         case CMD_SESSION_LOAD: {
             if (std->arg) {
-                DEBUG_PRINT("[ DEBUG ]: SESSION_DB_WORKER: Loading session %s\n", std->arg);
+                DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_DB_WORKER%s]: %sLoading session [%s%s%s]%s\n", 
+			lt_pl, nml, cy, nml, gr,
+			red, std->arg, gr, nml);
                 query = g_strdup_printf("SELECT uuid FROM sessions WHERE uuid = '%s';", std->arg);
             }
             break;
         }
         case CMD_SESSION_DELETE: {
             char *del_hist = g_strdup_printf("DELETE FROM aiterm_history WHERE session_uuid = '%s';", std->arg);
-            DEBUG_PRINT("[ DEBUG ]: SESSION_DB_WORKER: Executing query: %s\n", del_hist);
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_DB_WORKER%s]: %sExecuting query: [%s%s%s]%s\n", 
+		lt_pl, nml, cy, nml, gr,
+		red, del_hist, gr, nml);
 
             if (mysql_query(app->database.global_db_conn, del_hist) == 0) {
                 my_ulonglong affected = mysql_affected_rows(app->database.global_db_conn);
-                DEBUG_PRINT("[ DEBUG ]: SESSION_DB_WORKER: Deleted %llu rows from history.\n", affected);
+                DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_DB_WORKER%s]: %sDeleted [%s%llu%s] rows from history.%s\n", 
+			lt_pl, nml, cy, nml, yl,
+			red, affected, yl, nml);
             } else {
-                DEBUG_PRINT("[ERROR]: SESSION_DB_WORKER: History delete failed: %s\n", mysql_error(app->database.global_db_conn));
-            }
+                DEBUG_PRINT("[ %sDEBUG%s ] [%sSESSION_DB_WORKER%s]: [%sERROR%s]: %sHistory delete %sfailed%s: [%s%s%s]%s\n", 
+			lt_pl, nml, cy, nml, 
+			red, nml, yl, red, yl,
+			lt_pl, mysql_error(app->database.global_db_conn), yl, nml);
+            } 
             g_free(del_hist);
             query = g_strdup_printf("DELETE FROM sessions WHERE uuid = '%s';", std->arg);
             break;
@@ -309,9 +351,11 @@ gpointer session_db_worker(gpointer data) {
             }
             break;
         }
+
         case CMD_SESSION_NO_DEFAULT: {
             query = g_strdup("UPDATE sessions SET is_default = 0");
-            DEBUG_PRINT("[ DEBUG ]: [SESSION]: Clearing default session flag.\n");
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION%s]: %sClearing default session flag.%s\n",
+		lt_pl, nml, cy, nml, yl, nml);
             break;
         }
         case CMD_SESSION_DEFAULT: {
@@ -320,15 +364,20 @@ gpointer session_db_worker(gpointer data) {
                 mysql_query(app->database.global_db_conn, "UPDATE sessions SET is_default = 0");
                 // 2. Set the requested UUID as default
                 query = g_strdup_printf("UPDATE sessions SET is_default = 1 WHERE uuid = '%s'", std->arg);
-                DEBUG_PRINT("[ DEBUG ]: [SESSION]: Setting default session to %s\n", std->arg);
+                DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION%s]: %sSetting default session to [%s%s%s]%s\n", 
+			lt_pl, nml, cy, nml, gr,
+			lt_pl, std->arg, gr, nml);
             }
             break;
         }
     }
     if (query) {
-        DEBUG_PRINT("[ DEBUG ]: SESSION_DB_WORKER: Case query %s\n", query);
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_DB_WORKER%s]: %sCase query [%s%s%s]%s\n", 
+		lt_pl, nml, cy, nml, gr,
+		red, query, gr, nml);
         if (mysql_query(app->database.global_db_conn, query) == 0) {
-            DEBUG_PRINT("[ DEBUG ]: SESSION_DB_WORKER: Successful execution of mysql query!\n");
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_DB_WORKER%s]: %sSuccessful execution of mysql query!%s\n",
+		lt_pl, nml, cy, nml, gr, nml);
 
             if (std->type == CMD_SESSION_LIST) {
                 MYSQL_RES *res = mysql_store_result(app->database.global_db_conn);
@@ -403,15 +452,30 @@ gpointer session_db_worker(gpointer data) {
                    write_to_ai_pane_wrapper(app, "System: Default session cleared. Reverting to random sessions.");
             } else {
                 my_ulonglong affected = mysql_affected_rows(app->database.global_db_conn);
-                DEBUG_PRINT("[ DEBUG ]: SESSION_DB_WORKER: %llu row(s) affected.\n", affected);
+                DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_DB_WORKER%s]: %s[%s%llu%s] row(s) affected.%s\n", 
+			lt_pl, nml, cy, nml, gr,
+			red, affected, gr, nml);
             }
         } else {
-            DEBUG_PRINT("[ DEBUG ]: [ERROR] DB Query failed: %s\n", mysql_error(app->database.global_db_conn));
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_DB_WORKER%s]: [%sERROR%s] %sDB Query failed: %s%s%s\n", 
+		lt_pl, nml, cy, nml, 
+		red, nml, yl,
+		lt_pl, mysql_error(app->database.global_db_conn), nml);
         }
         g_free(query);
     }
 
     pthread_mutex_unlock(&app->access.db_mutex);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSESSION_DB_WORKER%s]: %sUnlocked DB mutex%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     if (std->arg) g_free(std->arg);
     if (std) g_free(std);
 

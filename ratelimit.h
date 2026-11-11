@@ -15,12 +15,9 @@
 #include <stdlib.h>
 #include <gtk/gtk.h>
 
-typedef struct {
-    gint64 last_request_time;
-    int requests_per_minute;
-    pthread_mutex_t lock;
-} RateLimiter;
+#include "gui.h"
 
+// Function prototypes
 void ratelimit_init(RateLimiter *rl, int rpm);
 bool ratelimit_check(RateLimiter *rl);
 void ratelimit_wait_if_needed(RateLimiter *rl);

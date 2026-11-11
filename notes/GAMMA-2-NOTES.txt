@@ -1,0 +1,8 @@
+AITerm 0.9.14-gamma-2
+Local Systemd service-health collector.
+Runs systemctl --system --no-pager --plain --no-legend --no-ask-password --failed --type=service on full refresh only.
+Preserves existing SNMP import and refresh triggers.
+Stores failed-unit names (first 32), total count, collection result and error per local host.
+Adds HostSSHProfile structure for future SSH transport; no remote SSH connections or passwords implemented.
+No changes to SNMP polling engine.
+Note: systemctl is launched synchronously; a stalled systemctl may delay refresh.

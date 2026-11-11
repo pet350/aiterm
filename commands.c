@@ -37,6 +37,9 @@
 #include "autoexec.h"
 #include "terminal.h"
 #include "provider_keys.h"
+#include "host_analysis.h"
+#include "host_ssh.h"
+#include "host_linux_remote.h"
 
 extern const char* HIGHLIGHT_STRING;
 extern const char* GENERAL_DIRECTIVES;
@@ -302,6 +305,115 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
     }
 }
 
+void cmd_hosts_dump(AppContext *app, const char *args)
+{
+    if (!app) return;
+    while (args && g_ascii_isspace(*args)) ++args;
+    if (args && *args) {
+        write_to_ai_pane(app, "System: ", "Usage: /hosts dump\n", "ai_tag", "cmd_tag");
+        return;
+    }
+    gchar *report = host_analysis_format_all(app);
+    write_to_ai_pane(app, "Hosts: ", report, "system_tag", "body_tag");
+    g_free(report);
+}
+
+void cmd_hosts_status(AppContext *app, const char *args)
+{
+    if (!app) return;
+    while (args && g_ascii_isspace(*args)) ++args;
+    if (args && *args) {
+        write_to_ai_pane(app, "System: ", "Usage: /hosts status\n", "ai_tag", "cmd_tag");
+        return;
+    }
+    gchar *report = host_analysis_format_status(app);
+    write_to_ai_pane(app, "Hosts: ", report, "system_tag", "body_tag");
+    g_free(report);
+}
+
+void cmd_hosts_refresh(AppContext *app, const char *args)
+{
+    if (!app) return;
+    while (args && g_ascii_isspace(*args)) ++args;
+    if (args && *args) {
+        write_to_ai_pane(app, "System: ", "Usage: /hosts refresh\n", "ai_tag", "cmd_tag");
+        return;
+    }
+    if (!app->host_analysis.initialized) {
+        write_to_ai_pane(app, "Hosts: ", "Host Analysis is not initialized.\n", "system_tag", "body_tag");
+        return;
+    }
+    /* Reuse the existing collection/import path; never request SNMP polling. */
+    host_analysis_refresh_all(app);
+    write_to_ai_pane(app, "Hosts: ",
+                     "Host Analysis refreshed from local metrics and existing SNMP samples.\n",
+                     "system_tag", "body_tag");
+}
+
+static void cmd_hosts_ssh_collect(AppContext *app, const char *args)
+{
+    gchar *hostname = g_strdup(args ? args : "");
+    g_strstrip(hostname);
+    GError *error = NULL;
+    if (!host_linux_remote_collect(app, hostname, &error)) {
+        write_to_ai_pane(app, "Hosts: ", error ? error->message :
+            "Usage: /hosts ssh collect <hostname>", "system_tag", "body_tag");
+        g_clear_error(&error);
+    } else {
+        write_to_ai_pane(app, "Hosts: ", "Remote Linux collection started asynchronously.\n", "system_tag", "body_tag");
+    }
+    g_free(hostname);
+}
+
+/* Transport-only smoke test. No host registry modifications. */
+static void ssh_test_finished(AppContext *app, const HostSSHResult *result, gpointer unused)
+{
+    (void)unused;
+    gchar *report = g_strdup_printf("SSH test: %s (exit=%d%s)\n%s%s%s%s\n",
+        result->success ? "SUCCESS" : "FAILED", result->exit_status,
+        result->timed_out ? ", timeout" : "",
+        result->stdout_text ? result->stdout_text : "",
+        result->stderr_text ? result->stderr_text : "",
+        result->error_message ? "Error: " : "",
+        result->error_message ? result->error_message : "");
+    write_to_ai_pane(app, "Hosts: ", report, "system_tag", "body_tag");
+    g_free(report);
+}
+
+static void cmd_hosts_ssh_test(AppContext *app, const char *args)
+{
+    gchar **words = g_strsplit_set(args ? args : "", " \t\r\n", -1);
+    const gchar *hostname = NULL;
+    guint count = 0;
+    for (guint i = 0; words[i]; ++i) {
+        if (!words[i][0]) continue;
+        hostname = words[i];
+        ++count;
+    }
+    if (count != 1 || !hostname || hostname[0] == '-' ||
+        strpbrk(hostname, "\\/;|&$`'\"<>!(){}[]") != NULL) {
+        write_to_ai_pane(app, "Hosts: ", "Usage: /hosts ssh test <hostname>\n",
+                         "system_tag", "body_tag");
+        g_strfreev(words);
+        return;
+    }
+    HostSSHProfile profile = {0};
+    g_strlcpy(profile.hostname, hostname, sizeof(profile.hostname));
+    profile.auth_method = HOST_SSH_CONFIG;
+    profile.enabled = TRUE;
+    GError *error = NULL;
+    if (!host_ssh_execute_async(app, &profile, "uname -s", 15,
+                                ssh_test_finished, NULL, &error)) {
+        write_to_ai_pane(app, "Hosts: ", error ? error->message : "SSH launch failed",
+                         "system_tag", "body_tag");
+        g_clear_error(&error);
+    } else {
+        write_to_ai_pane(app, "Hosts: ", "SSH test started asynchronously.\n",
+                         "system_tag", "body_tag");
+    }
+    g_strfreev(words);
+}
+
 static CommandRegistry registry[] = {
     {"auto all", "Toggle (on/off/status): Tee, AutoReply, & AutoExecute", cmd_toggle_auto_all},
     {"autoreply", "Toggle real-time prompt analysis (on/off/status)", cmd_toggle_autoreply},
@@ -324,6 +436,11 @@ static CommandRegistry registry[] = {
     {"features", "Display new aiterm features", handle_features_wrapper},
     {"help", "Display this dynamic help menu", handle_help_wrapper},
     {"history", "Display mysql history", handle_history_wrapper},
+    {"hosts ssh collect", "Collect remote Linux telemetry over SSH", cmd_hosts_ssh_collect},
+    {"hosts ssh test", "Test asynchronous SSH transport to a host", cmd_hosts_ssh_test},
+    {"hosts refresh", "Refresh local Host Analysis and reimport existing SNMP samples", cmd_hosts_refresh},
+    {"hosts dump", "Display all collected Host Analysis data in the AI pane", cmd_hosts_dump},
+    {"hosts status", "Display Host Analysis and SNMP collection status", cmd_hosts_status},
     {"hw", "Display various hardware info", handle_hw_wrapper},
     {"idle", "Toggle automatic idle suspension (on/off/status)", cmd_toggle_idle},
     {"invalidate cache", "Force a reload of smart cache", cmd_invalidate_cache},
