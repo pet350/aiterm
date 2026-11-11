@@ -214,6 +214,10 @@ void apply_custom_theme() {
         ".session-dialog treeview, .session-dialog list { background-color: #1a1a1a; color: #ffffff; }"
         ".session-dialog treeview:selected, .session-dialog list row:selected { background-color: #00FF00; color: #000000; font-weight: bold; }"
 
+        /* Delta-2: Host Analysis detail view, scoped to existing manager theme. */
+        ".session-dialog textview, .session-dialog textview text { background-color: #1a1a1a; color: #ffffff; }"
+        ".session-dialog scrolledwindow { background-color: #141414; }"
+
         /* 5. Main Notebook container and tabs */
         "notebook { background-color: rgba(20, 20, 20, 0.6); border: none; }"
         "notebook header { background-color: rgba(30, 30, 30, 0.8); border-bottom: 1px solid #333333; padding: 2px; }"
@@ -287,43 +291,72 @@ void apply_custom_theme() {
     g_object_unref(provider);
 }
 
-// Global window keystroke interceptor handling focus cycles
+/* Resolve the VTE through both nested scrolled windows in each tab. */
+static GtkWidget *host_focus_find_vte(GtkWidget *widget) {
+    if (!widget) return NULL;
+    if (VTE_IS_TERMINAL(widget)) return widget;
+    if (!GTK_IS_CONTAINER(widget)) return NULL;
+    GList *children = gtk_container_get_children(GTK_CONTAINER(widget));
+    GtkWidget *result = NULL;
+    for (GList *it = children; it; it = it->next) {
+        result = host_focus_find_vte(GTK_WIDGET(it->data));
+        if (result) break;
+    }
+    g_list_free(children);
+    return result;
+}
+
+/* Centralized Ctrl+Tab focus cycling.  Resolve the active VTE from the
+ * notebook rather than relying on a potentially stale terminal pointer. */
 static gboolean on_window_key_press(GtkWidget *widget, GdkEventKey *event, gpointer data) {
     AppContext *app = (AppContext *)data;
+    (void)widget;
 
-    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
-    char *cy      = g_strdup(global_app->ansi.cyan);
-    char *yl      = g_strdup(global_app->ansi.yellow);
-    char *gr      = g_strdup(global_app->ansi.green);
-    char *red     = g_strdup(global_app->ansi.red);
-    char *nml     = g_strdup(global_app->ansi.normal);
+    if (!(event->state & GDK_CONTROL_MASK) ||
+        (event->keyval != GDK_KEY_Tab && event->keyval != GDK_KEY_ISO_Left_Tab))
+        return FALSE;
 
-    if ((event->state & GDK_CONTROL_MASK) && event->keyval == GDK_KEY_Tab) {
-        if (gtk_widget_has_focus(app->gui.entry)) {
-            if (app->gui.terminal_view) gtk_widget_grab_focus(app->gui.terminal_view);
-            DEBUG_PRINT("[ %sDEBUG%s ]: [%sFocus%s]: %sActive Terminal Tab%s\n",
-		lt_pl, nml, cy, nml, gr, nml);
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
 
-        } else if (app->gui.terminal_view && gtk_widget_has_focus(app->gui.terminal_view)) {
-            gtk_widget_grab_focus(app->gui.gemini_view);
-            DEBUG_PRINT("[ %sDEBUG%s ]: [%sFocus%s]: %s View%s\n",
-		lt_pl, nml, cy, nml, gr, nml);
-
-        } else {
-            gtk_widget_grab_focus(app->gui.entry);
-            DEBUG_PRINT("[ %sDEBUG%s ]: [;%sFocus%s]: %sInput%s\n",
-		lt_pl, nml, cy, nml, gr, nml);
+    GtkWidget *terminal = NULL;
+    if (app->gui.notebook && GTK_IS_NOTEBOOK(app->gui.notebook)) {
+        GtkNotebook *nb = GTK_NOTEBOOK(app->gui.notebook);
+        gint index = gtk_notebook_get_current_page(nb);
+        if (index >= 0) {
+            GtkWidget *page = gtk_notebook_get_nth_page(nb, index);
+            terminal = host_focus_find_vte(page);
         }
-        return TRUE;
     }
 
+    GtkWidget *next = NULL;
+    if (app->gui.entry && gtk_widget_has_focus(app->gui.entry))
+        next = terminal;
+    else if (terminal && gtk_widget_has_focus(terminal))
+        next = app->gui.gemini_view;
+    else
+        next = app->gui.entry;
+
+    if (next && gtk_widget_get_can_focus(next)) {
+        gtk_widget_grab_focus(next);
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sFocus%s]: %sCtrl+Tab -> %s%s%s\n",
+		    lt_pl, nml, cy, nml, gr, red,
+                    next == terminal ? "Terminal" :
+                    next == app->gui.gemini_view ? "AI pane" : "Input", nml);
+    }
+
+    g_free(lt_pl);
     g_free(cy);
     g_free(yl);
     g_free(gr);
     g_free(red);
     g_free(nml);
 
-    return FALSE;
+    return TRUE;
 }
 
 /* ---- Tab reporting --------------------------------------------------------
@@ -434,8 +467,7 @@ void on_tab_changed(GtkNotebook *notebook, GtkWidget *page, guint page_num, gpoi
 
     // The page added inside our scroll windows is the scrolled window container.
     // We dig out its child to grab the pure active VteTerminal instance.
-    GtkWidget *scrolled_win = page;
-    GtkWidget *terminal = gtk_bin_get_child(GTK_BIN(scrolled_win));
+    GtkWidget *terminal = host_focus_find_vte(page);
 
     if (VTE_IS_TERMINAL(terminal)) {
         app->gui.terminal_view = terminal;
@@ -539,7 +571,7 @@ void add_terminal_tab(AppContext *app) {
     }
 
     // 5. Ensure window interceptor handles input routing on the new console layer
-    g_signal_connect(new_terminal, "key-press-event", G_CALLBACK(on_window_key_press), app);
+    /* Ctrl+Tab is handled centrally by the top-level window. */
 
     // 6. Jump focus directly to our newly allocated workspace
     gtk_notebook_set_current_page(GTK_NOTEBOOK(app->gui.notebook), index);
@@ -1043,7 +1075,7 @@ void setup_gui(AppContext *app) {
         GDK_FOCUS_CHANGE_MASK);
     g_signal_connect_after(app->gui.window, "event-after",
                            G_CALLBACK(idle_event_after), app);
-    g_signal_connect_after(app->gui.window, "key-press-event",
+    g_signal_connect(app->gui.window, "key-press-event",
                            G_CALLBACK(on_window_key_press), app);
     set_icon(app);
 
@@ -1186,8 +1218,8 @@ void setup_gui(AppContext *app) {
     apply_visual_settings(app);
 
     // Ensure keyboard focus hooks run accurately across active boundaries
-    g_signal_connect(app->gui.entry, "key-press-event", G_CALLBACK(on_window_key_press), app);
-    g_signal_connect(app->gui.gemini_view, "key-press-event", G_CALLBACK(on_window_key_press), app);
+    /* Ctrl+Tab is handled centrally by the top-level window. */
+
 
     gtk_widget_show_all(app->gui.window);
 

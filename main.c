@@ -32,6 +32,7 @@
 #include "ai_retry.h"
 #include "auto_chunk.h"
 #include "snmp_manager.h"
+#include "host_analysis.h"
 #include "menu.h"
 
 AppContext *global_app = NULL;
@@ -242,6 +243,10 @@ int main(int argc, char *argv[]) {
     snmp_load_targets_from_db(app);
     snmp_start_poller(app);
 
+    // 17.0.1: Start additive local host analysis. This does not alter SNMP polling.
+    if (host_analysis_init(app) == 0)
+        host_analysis_start(app);
+
     // 17.1: Sync all Booleans
     sync_toggle_ui_elements(app);
 
@@ -264,7 +269,10 @@ int main(int argc, char *argv[]) {
     // choice.
     idle_shutdown(app);
     
-    // 19.1: Stop and join the SNMP worker before destroying AppContext resources. */
+    // 19.1: Stop the additive host-analysis collector before destroying AppContext.
+    host_analysis_shutdown(app);
+
+    // 19.2: Stop and join the existing SNMP worker before destroying AppContext resources. */
     snmp_stop_poller(app);
 
     // 19.2: The DB initialization worker owns no AppContext lifetime.  Join it so

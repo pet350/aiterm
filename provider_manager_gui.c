@@ -173,12 +173,26 @@ static gboolean apply_provider(ProviderManagerDialog *dlg, gboolean save) {
     }
 
     ai_provider_config_unlock(app);
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
 
     if (provider_changed) {
-        DEBUG_PRINT("[ DEBUG ]: [PROVIDER] Configuration changed to [%s]; asynchronous directive refresh %s.\n",
-                    app->provider_config.provider ? app->provider_config.provider : "unknown",
-                    directive_queued ? "queued" : "failed to queue");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sPROVIDER%s] %sConfiguration changed to [%s%s%s]; asynchronous directive refresh [%s%s%s]%s.\n",
+		lt_pl, nml, cy, nml, gr,
+                yl, app->provider_config.provider ? app->provider_config.provider : "unknown", gr,
+                red,  directive_queued ? "queued" : "failed to queue", gr, nml);
     }
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
 
     return TRUE;
 }

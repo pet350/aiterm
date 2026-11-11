@@ -4,7 +4,7 @@ CC ?= gcc
 MARIADB_PKG := $(shell pkg-config --exists libmariadb && echo libmariadb || (pkg-config --exists mariadb && echo mariadb || echo mysqlclient))
 
 # Base dependencies
-PKGS = gtk+-3.0 glib-2.0 vte-2.91 libcurl json-c $(MARIADB_PKG)
+PKGS = gtk+-3.0 glib-2.0 gio-2.0 vte-2.91 libcurl json-c $(MARIADB_PKG)
 
 # --- Install locations ---
 # PREFIX only affects where the *binary* goes (standard convention for a
@@ -39,7 +39,7 @@ CFLAGS += -DAITERM_SQL_DIR_DEFAULT='"$(SQLDIR)"'
 LIBS   += $(shell pkg-config --libs $(PKGS)) -lpthread -lcurl -lcrypto -luuid -lnetsnmp
 
 OBJ = ai_provider.o auto_chunk.o provider_manager_gui.o ai_retry.o autoexec.o commands.o config.o crypto.o export.o environment.o gemini.o gemini_cache.o gui.o help.o \
-      history_manager_gui.o idle.o main.o menu.o noise_filter_manager_gui.o noisefilter.o openai.o \
+      history_manager_gui.o host_analysis.o host_analysis_gui.o host_ssh.o host_linux_remote.o idle.o main.o menu.o noise_filter_manager_gui.o noisefilter.o openai.o \
       policy_dao.o policy_manager_gui.o print.o provider_keys.o ratelimit.o resources.o session_manager_gui.o \
       session_manager.o snmp_manager.o snmp_manager_gui.o status.o tee_handler.o terminal.o toggles.o \
       update.o utils.o xml_tagging.o 

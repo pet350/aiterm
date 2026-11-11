@@ -28,6 +28,7 @@
 #include "noise_filter_manager_gui.h"
 #include "policy_manager_gui.h"
 #include "session_manager_gui.h"
+#include "host_analysis_gui.h"
 #include "provider_manager_gui.h"
 #include "print.h"
 #include "export.h"
@@ -715,6 +716,7 @@ GtkWidget* create_menu_bar(AppContext *app) {
     GtkWidget *menu_item_history = gtk_menu_item_new_with_label("History Manager");
     GtkWidget *menu_item_noise   = gtk_menu_item_new_with_label("Noise Filter Manager");
     GtkWidget *menu_item_policy  = gtk_menu_item_new_with_label("Policy Manager");
+    GtkWidget *menu_item_hosts   = gtk_menu_item_new_with_label("Host Analysis Manager");
     GtkWidget *menu_item_snmp    = gtk_menu_item_new_with_label("SNMP Manager"); // Removed GtkWidget *
     GtkWidget *menu_item_provider = gtk_menu_item_new_with_label("AI Provider Manager");
 
@@ -894,6 +896,7 @@ GtkWidget* create_menu_bar(AppContext *app) {
     g_signal_connect(G_OBJECT(menu_item_history), "activate", G_CALLBACK(on_menu_history_manager_activate), app);
     g_signal_connect(G_OBJECT(menu_item_noise), "activate", G_CALLBACK(on_menu_noise_filter_manager_activate), app);
     g_signal_connect(G_OBJECT(menu_item_policy), "activate", G_CALLBACK(on_menu_policy_manager_activate), app);
+    g_signal_connect_swapped(menu_item_hosts, "activate", G_CALLBACK(host_analysis_manager_show), app);
     g_signal_connect(G_OBJECT(menu_item_snmp), "activate", G_CALLBACK(on_menu_snmp_manager_activate), app); // FIXED
     g_signal_connect(G_OBJECT(menu_item_provider), "activate", G_CALLBACK(on_menu_provider_manager_activate), app);
     g_signal_connect(session_item, "activate", G_CALLBACK(on_menu_session_manager), app);
@@ -927,6 +930,7 @@ GtkWidget* create_menu_bar(AppContext *app) {
     gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), menu_item_noise);
     gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), menu_item_policy);
     gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), menu_item_snmp);
+    gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), menu_item_hosts);
     gtk_menu_shell_append(GTK_MENU_SHELL(managers_menu), menu_item_provider);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), tee_flush);

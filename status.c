@@ -28,23 +28,39 @@ void display_status(AppContext *app) {
     // Lock the database mutex to ensure thread-safety during the status check
     mysql_thread_init();
 
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     pthread_mutex_lock(&app->access.db_mutex);
-    DEBUG_PRINT("[ DEBUG ]: [STATUS] Locked DB Mutex.\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSTATUS%s] %sLocked DB Mutex.%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
 
     gboolean is_connected = FALSE;
     int ping_res = -1;
 
-    DEBUG_PRINT("[ DEBUG ]: [STATUS] Checking database connection status...\n");
-    DEBUG_PRINT("[ DEBUG ]: [STATUS] app->database.global_db_conn pointer value: %p\n", (void*)app->database.global_db_conn);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSTATUS%s] %sChecking database connection status...%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSTATUS%s] %sapp->database.global_db_conn pointer value: [%s%p%s]%s\n", 
+	lt_pl, nml, cy, nml, gr,
+	red, (void*)app->database.global_db_conn, gr, nml);
 
     if (app->database.global_db_conn != NULL) {
         // mysql_ping returns 0 if the connection is alive
         ping_res = mysql_ping(app->database.global_db_conn);
-        DEBUG_PRINT("[ DEBUG ]: [STATUS] mysql_ping returned: %d\n", ping_res);
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSTATUS%s] %smysql_ping returned: [%s%d%s] %s\n", 
+		lt_pl, nml, cy, nml, gr,
+		lt_pl, ping_res, gr, nml);
         if (ping_res == 0) {
             is_connected = TRUE;
         } else {
-            DEBUG_PRINT("[ DEBUG ]: [STATUS] mysql_ping failed error: %s\n", mysql_error(app->database.global_db_conn));
+            DEBUG_PRINT("[ %sDEBUG%s ]: [%sSTATUS%s] %smysql_ping failed error: [%s%s%s]%s\n", 
+		lt_pl, nml, cy, nml, gr,
+		red, mysql_error(app->database.global_db_conn), gr, nml);
         }
     }
 
@@ -256,13 +272,19 @@ void display_status(AppContext *app) {
     append_ai_text(app, "\n---------------------\n\n", "body_tag");
 
     // 3. Send the raw un-tagged plain text block to the AI history
-    if (app->sys.tee_enabled) {
-        tee_handle_output(app, status_report->str);
-        tee_handle_output(app, "\n");
-        tee_flush_timed(app);
-    }
+    tee_handle_output(app, status_report->str);
+    tee_handle_output(app, "\n");
+    tee_flush_timed(app);
 
     // Cleanup
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     g_string_free(status_report, TRUE);
     mysql_thread_end();
 }
+

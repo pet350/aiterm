@@ -19,6 +19,7 @@
 #include "gui.h"
 #include "utils.h"
 #include "snmp_manager.h"
+#include "host_analysis.h"
 #include "tee_handler.h"
 
 // Initialize SNMP variables in AppContext
@@ -412,6 +413,8 @@ void snmp_poll_all_targets(AppContext *app) {
 
     /* The worker thread must never touch GTK directly.  Schedule the ticker
      * update on the GTK main context after the poll has completed. */
+    /* Publish the completed SNMP batch to Host Analysis only. */
+    host_analysis_import_snmp(app);
     g_idle_add(update_snmp_ticker_payload_wrapper, app);
     g_idle_add(update_ticker_idle_cb, app);
 }

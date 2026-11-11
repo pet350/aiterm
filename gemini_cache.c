@@ -473,7 +473,15 @@ char *gemini_cache_build_query_payload(AppContext *app, const char *new_prompt_t
 void gemini_cache_invalidate(AppContext *app) {
     if (!app) return;
 
-    DEBUG_PRINT("[ DEBUG ]: Manual cache invalidation triggered.\n");
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sCACHE%s] %sManual cache invalidation triggered.%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
 
     if (app->gemini_cache.id && ai_provider_current_config(app)->api_key) {
         const ProviderConfig *api = ai_provider_current_config(app);
@@ -495,6 +503,14 @@ void gemini_cache_invalidate(AppContext *app) {
     }
 
     gemini_cache_clear(app);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 

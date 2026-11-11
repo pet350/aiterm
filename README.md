@@ -1,3 +1,22 @@
+## Delta-3: SSH transport foundation (test candidate)
+
+This release adds `host_ssh.c/.h`, an asynchronous OpenSSH transport with
+key/config authentication, connection and execution timeouts, stdout/stderr
+capture, and exit-status reporting. It does not yet collect remote host metrics.
+
+Smoke test from AITerm's input pane: `/hosts ssh test xen.gigaware.lan`.
+The test runs `uname -s` remotely using the local user's OpenSSH config and
+returns its result to the AI pane without blocking the GTK main loop. The
+remote host key must already be trusted; interactive prompts are disabled.
+
+Other collectors, SNMP polling, the Host Analysis Manager theme, and Ctrl+Tab
+are unchanged. Password authentication is intentionally unsupported.
+
+**Build/runtime status:** source inspection only; not compiled or tested here
+because GTK/VTE/GLib development packages are absent from this environment.
+
+---
+
 # aiterm
 
 ## The AI-Augmented Terminal Emulator
@@ -1988,3 +2007,60 @@ make install-man PREFIX=/usr MANDIR=/usr/share/man DESTDIR=/tmp/aiterm-stage
 
 Remove the installed binary, SQL files, and man pages with `sudo make uninstall`
 using the same `PREFIX`, `DATADIR`, and `MANDIR` values used for installation.
+
+## 0.9.13-omega-3: Host-analysis foundation
+
+This update begins the additive host-analysis subsystem. It introduces a background local-host collector that records hostname and OS details, load average, memory and swap usage, root filesystem capacity, uptime, and collection timestamp into the existing `HostAnalysisContext`. The collector has explicit initialization, start, stop, and shutdown lifecycle functions.
+
+The existing SNMP manager and its polling lifecycle remain unchanged and independent. This release does not yet merge SNMP observations into host-analysis records or add a host-analysis UI; those are future incremental steps.
+
+### Host Analysis: incremental snapshot API (omega-4)
+
+`host_analysis_get_host(app, index, &details)` returns a mutex-protected copy
+of a collected record. `host_analysis_format_host(&details)` produces a
+`g_free()`-owned, plain-text diagnostic summary for eventual AI context use.
+No existing provider, SNMP, session manager, or GUI behavior is changed.
+These APIs are intentionally opt-in and are not yet wired into AI prompts.
+
+### Host Analysis dump (0.9.13-omega-5)
+`/hosts dump` prints a read-only snapshot of all collected hosts in the AI pane. It does not trigger polling or contact an AI provider. Local metrics not yet collected are labeled accordingly.
+
+### 0.9.14-alpha-2
+Implemented `/hosts status` in the local command registry. It reports the current host inventory and existing SNMP target/sample counts, and explicitly identifies that SNMP-to-host import is not yet implemented in this source baseline. No SNMP polling behavior changed.
+
+## Delta-3 SSH transport foundation (test candidate)
+
+New `host_ssh.c` and `host_ssh.h` implement `host_ssh_execute()` and
+`host_ssh_result_clear()` using OpenSSH and GLib's GSubprocess.
+
+This is a **transport API only**. No remote collectors, profile manager UI,
+or automatic SSH scheduling have been enabled. The caller must execute the
+transport from a background worker and must free result allocations with
+`host_ssh_result_clear()`. An OpenSSH configuration alias can be supplied
+in `HostSSHProfile.hostname`; empty username and port defer to ssh config.
+Host-key verification follows the user's existing OpenSSH configuration.
+Password authentication and interactive prompts are not supported.
+
+A nonzero remote exit status is reported as failure while preserving stdout,
+stderr, and exit status. A deadline force-terminates the SSH child. This
+transport is intentionally not yet wired to host record mutation.
+
+### Next validation
+
+Build with `make clean && make` on the OpenSUSE host. Once compiled, the
+transport can be exercised from a dedicated worker-based harness before
+connecting it to the remote Linux collectors in Delta-4.
+
+## Delta-4 remote Linux collection (test candidate)
+
+New command: `/hosts ssh collect xen.gigaware.lan` (or any SSH-configured hostname).
+Uses the Delta-3 asynchronous OpenSSH transport to read uname, /proc/uptime,
+/proc/loadavg, /proc/meminfo and df for /. Results are stored in distinct
+remote fields in the shared mutex-protected Host Analysis record, alongside
+existing SNMP and local data. The Host Analysis Manager shows remote telemetry
+via its existing detail formatter; use Refresh Display after completion.
+
+Requires noninteractive OpenSSH authentication and remote Linux tools (awk,
+df, uname). SSH host key checking remains strict. No periodic remote polling
+or credential storage is added. Failures preserve previous good measurements
+and report an error. This build has not been compiled or runtime tested here.

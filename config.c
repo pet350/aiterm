@@ -81,9 +81,18 @@ static char* SKIP_VAL(AppContext *app) {
 
 // Function to save config file
 void save_config(AppContext *app) {
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
     FILE *fp = fopen(CONFIG_FILE, "w");
+
     if (!fp) {
-        DEBUG_PRINT("[ DEBUG ]: Error opening config file for writing\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sConfig%s] %sError%s opening config file for writing%s\n",
+		lt_pl, nml, cy, nml, red, yl, nml);
         return;
     }
 
@@ -157,7 +166,16 @@ void save_config(AppContext *app) {
     fprintf(fp, "# End of Config file.\n\n");
 
     fclose(fp);
-    DEBUG_PRINT("[ DEBUG ]: Settings saved to aiterm.conf\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sConfig%s] %sSettings saved to aiterm.conf%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 static gboolean parse_provider_key_line(AppContext *app, const char *line) {
