@@ -1,0 +1,11 @@
+AITerm 0.9.14-beta: SNMP observation organization
+- Reads existing enabled and sampled SnmpMetric entries under SnmpContext.lock.
+- Groups by exact configured target address into HostAnalysisContext host records.
+- Copies OID, label, value and timestamp into owned observation snapshot.
+- Rebuilds SNMP records each refresh; preserves local and other-source hosts.
+- /hosts dump shows each imported SNMP observation beneath its target host.
+- /hosts status reports imported host and observation counts.
+- Does not change SNMP polling, configuration, or SNMP manager.
+Build not verified in this environment: GTK3/VTE development dependencies absent.
+
+Beta-1: /hosts refresh registered; synchronously refreshes local data and reimports cached SNMP samples. No new SNMP polling.

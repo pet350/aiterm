@@ -1,0 +1,15 @@
+AITerm 0.9.14-gamma-2b
+Based on the gamma-2a source archive.
+
+- Added HostDetails.source_flags (bit flags) independent of the legacy primary source.
+- Local, Systemd and SNMP collectors mark their own source membership.
+- SNMP import clears stale SNMP membership and removes SNMP-only host records before rebuilding observations; mixed-source records survive.
+- Local refresh preserves other collectors' source flags and the newer last-update timestamp.
+- /hosts dump and host formatter report all collector sources.
+- /hosts status continues to count local, SNMP-only and other unique host records.
+- SNMP poller unchanged; SNMP observations still snapshotted under the SNMP lock before Host Analysis lock.
+
+Testing requested: build on OpenSUSE; /hosts refresh, /hosts dump, /hosts status;
+confirm 11 hosts, opensusevm sources Local/Systemd/SNMP and router SNMP.
+
+Note: Full build not performed here: GTK3/VTE development headers unavailable.
