@@ -8,14 +8,16 @@
 // Assisted by: OpenAI and MS Copilot
 // October 2026
 
-#include "host_analysis.h"
-
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/statvfs.h>
 #include <sys/utsname.h>
 #include <unistd.h>
+
+#include "host_db.h"
+#include "host_analysis.h"
+#include "host_linux_remote.h"
 
 static void read_local_host(HostDetails *host)
 {
@@ -202,11 +204,12 @@ static void host_analysis_refresh_local(AppContext *app)
         if (existing_update > host->last_update) host->last_update = existing_update;
     }
     pthread_mutex_unlock(&ctx->mutex);
+    host_db_save_local(app, &local_host);
 }
 
 /* Snapshot SNMP under its own lock, then update Host Analysis under its lock.
  * Never hold both locks, poll SNMP, or run external commands here. */
-void host_analysis_import_snmp(AppContext *app)
+static void import_snmp(AppContext *app, gboolean persist_samples)
 {
     if (!app || !app->host_analysis.initialized) return;
     GArray *samples = g_array_new(FALSE, FALSE, sizeof(SnmpHost));
@@ -259,8 +262,18 @@ void host_analysis_import_snmp(AppContext *app)
     g_free(ctx->snmp_observations);
     ctx->snmp_observations = observations;
     ctx->snmp_observation_count = nobs;
+    HostSnmpObservation *persist = persist_samples ? g_new(HostSnmpObservation, nobs) : NULL;
+    if (persist && nobs) memcpy(persist, observations, nobs * sizeof(*persist));
     pthread_mutex_unlock(&ctx->mutex);
+    if (persist)
+        for (guint i = 0; i < nobs; i++) host_db_save_snmp(app, &persist[i]);
+    g_free(persist);
     g_array_free(samples, TRUE);
+}
+
+void host_analysis_import_snmp(AppContext *app)
+{
+    import_snmp(app, FALSE); /* ticker updates live view only */
 }
 
 /* Full refresh entry point for manual requests and the periodic timer. */
@@ -268,7 +281,7 @@ void host_analysis_refresh_all(AppContext *app)
 {
     if (!app || !app->host_analysis.initialized) return;
     host_analysis_refresh_local(app);
-    host_analysis_import_snmp(app);
+    import_snmp(app, TRUE);
 }
 
 /* Compatibility with existing callers. */
@@ -309,6 +322,66 @@ static void *host_analysis_collector_main(void *argument)
     return NULL;
 }
 
+/* Epsilon-1: explicit, runtime-only SSH opt-in. Timer runs on GTK main loop,
+ * so callbacks and OpenSSH launches never touch GTK from the collector thread. */
+static gboolean ssh_schedule_tick(gpointer data)
+{
+    AppContext *app = data;
+    HostAnalysisContext *ctx = &app->host_analysis;
+    if (!ctx->initialized || !ctx->running) return G_SOURCE_REMOVE;
+    for (guint i = 0; ctx->ssh_schedule_hosts && i < ctx->ssh_schedule_hosts->len; i++) {
+        const char *hostname = g_ptr_array_index(ctx->ssh_schedule_hosts, i);
+        GError *error = NULL;
+        if (!host_linux_remote_collect_scheduled(app, hostname, &error)) {
+            g_message("Host Analysis schedule %s: %s", hostname,
+                      error ? error->message : "collection not started");
+            g_clear_error(&error);
+        }
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+gboolean host_analysis_schedule_add(AppContext *app, const char *hostname)
+{
+    if (!app || !app->host_analysis.initialized || !hostname || !*hostname ||
+        strlen(hostname) >= sizeof(((HostDetails *)0)->hostname) ||
+        hostname[0] == '-' || strpbrk(hostname, "\\/;|&$`'\"<>!(){}[] \t\n")) return FALSE;
+    HostAnalysisContext *ctx = &app->host_analysis;
+    if (!ctx->ssh_schedule_hosts)
+        ctx->ssh_schedule_hosts = g_ptr_array_new_with_free_func(g_free);
+    for (guint i = 0; i < ctx->ssh_schedule_hosts->len; i++)
+        if (g_ascii_strcasecmp(hostname, g_ptr_array_index(ctx->ssh_schedule_hosts, i)) == 0)
+            return TRUE;
+    g_ptr_array_add(ctx->ssh_schedule_hosts, g_strdup(hostname));
+    host_db_save_schedule(app, hostname, TRUE);
+    return TRUE;
+}
+
+gboolean host_analysis_schedule_remove(AppContext *app, const char *hostname)
+{
+    if (!app || !app->host_analysis.ssh_schedule_hosts || !hostname) return FALSE;
+    GPtrArray *hosts = app->host_analysis.ssh_schedule_hosts;
+    for (guint i = 0; i < hosts->len; i++)
+        if (g_ascii_strcasecmp(hostname, g_ptr_array_index(hosts, i)) == 0) {
+            g_ptr_array_remove_index(hosts, i);
+            host_db_save_schedule(app, hostname, FALSE);
+            return TRUE;
+        }
+    return FALSE;
+}
+
+gchar *host_analysis_schedule_list(AppContext *app)
+{
+    if (!app || !app->host_analysis.ssh_schedule_hosts ||
+        !app->host_analysis.ssh_schedule_hosts->len)
+        return g_strdup("No SSH hosts scheduled. Add with /hosts ssh schedule add <hostname>\n");
+    GString *out = g_string_new("Scheduled SSH hosts (300-second interval, persistent):\n");
+    GPtrArray *hosts = app->host_analysis.ssh_schedule_hosts;
+    for (guint i = 0; i < hosts->len; i++)
+        g_string_append_printf(out, "  %s\n", (char *)g_ptr_array_index(hosts, i));
+    return g_string_free(out, FALSE);
+}
+
 int host_analysis_init(AppContext *app)
 {
     HostAnalysisContext *context;
@@ -324,6 +397,8 @@ int host_analysis_init(AppContext *app)
     context->collector_started = FALSE;
     context->refresh_interval = 300;
     context->analysis_interval = 600;
+    context->ssh_schedule_hosts = NULL;
+    context->ssh_schedule_source = 0;
 
     if (pthread_mutex_init(&context->mutex, NULL) != 0)
         return -1;
@@ -365,6 +440,8 @@ void host_analysis_start(AppContext *app)
     pthread_mutex_lock(&context->mutex);
     context->collector_started = TRUE;
     pthread_mutex_unlock(&context->mutex);
+    if (!context->ssh_schedule_source)
+        context->ssh_schedule_source = g_timeout_add_seconds(300, ssh_schedule_tick, app);
 }
 
 void host_analysis_stop(AppContext *app)
@@ -387,6 +464,10 @@ void host_analysis_stop(AppContext *app)
 
     if (join_thread)
         pthread_join(context->collector_thread, NULL);
+    if (context->ssh_schedule_source) {
+        g_source_remove(context->ssh_schedule_source);
+        context->ssh_schedule_source = 0;
+    }
 }
 
 void host_analysis_shutdown(AppContext *app)
@@ -400,6 +481,14 @@ void host_analysis_shutdown(AppContext *app)
         return;
 
     host_analysis_stop(app);
+    if (context->ssh_schedule_source) {
+        g_source_remove(context->ssh_schedule_source);
+        context->ssh_schedule_source = 0;
+    }
+    if (context->ssh_schedule_hosts) {
+        g_ptr_array_free(context->ssh_schedule_hosts, TRUE);
+        context->ssh_schedule_hosts = NULL;
+    }
     g_free(context->snmp_observations);
     context->snmp_observations = NULL;
     context->snmp_observation_count = 0;
@@ -488,7 +577,19 @@ gchar *host_analysis_format_host(const HostDetails *host)
 }
 
 /* Read-only dump: copy the entire table under its mutex, then format it. */
-gchar *host_analysis_format_all(AppContext *app)
+/* Exact hostname (case insensitive), optional glob, and any matching source. */
+gboolean host_analysis_matches(const HostDetails *host, const char *pattern, guint sources)
+{
+    if (!host || (sources && !(host->source_flags & sources))) return FALSE;
+    if (!pattern || !*pattern) return TRUE;
+    gchar *name = g_ascii_strdown(host->hostname, -1);
+    gchar *glob = g_ascii_strdown(pattern, -1);
+    gboolean match = g_pattern_match_simple(glob, name);
+    g_free(name); g_free(glob);
+    return match;
+}
+
+gchar *host_analysis_format_filtered(AppContext *app, const char *pattern, guint sources)
 {
     if (!app || !app->host_analysis.initialized)
         return g_strdup("Host Analysis is not initialized.\n");
@@ -507,11 +608,16 @@ gchar *host_analysis_format_all(AppContext *app)
     GString *out = g_string_new("========================================\n"
                                 "       AITerm Host Analysis Dump\n"
                                 "========================================\n");
-    g_string_append_printf(out, "Collector: %s | Hosts: %u\n",
-                           running ? "running" : "stopped", count);
-    if (!count) g_string_append(out, "No host observations collected yet.\n");
+    guint matched = 0, shown = 0;
+    for (guint i = 0; i < count; ++i)
+        if (host_analysis_matches(&snapshot[i], pattern, sources)) ++matched;
+    g_string_append_printf(out, "Collector: %s | Hosts: %u of %u\n",
+                           running ? "running" : "stopped", matched, count);
+    if (!matched) g_string_append(out, "No matching host observations.\n");
     for (guint i = 0; i < count; ++i) {
         const HostDetails *host = &snapshot[i];
+        if (!host_analysis_matches(host, pattern, sources)) continue;
+        ++shown;
         gchar *source = host_analysis_source_names(host->source_flags);
         const char *state = host->state == HOST_ONLINE ? "Online" :
                             host->state == HOST_OFFLINE ? "Offline" :
@@ -530,11 +636,17 @@ gchar *host_analysis_format_all(AppContext *app)
             "Swap           : %ld / %ld bytes used\n"
             "Root disk      : %ld / %ld bytes used\n"
             "Uptime         : %ld seconds\n",
-            i + 1, count, host->hostname, host->description, source, state,
+            shown, matched, host->hostname, host->description, source, state,
             timestamp, host->load_avg, host->memory_used, host->memory_total,
             host->swap_used, host->swap_total, host->disk_used, host->disk_total,
             host->uptime_seconds);
         g_free(source);
+        if (host->source_flags & HOST_COLLECTOR_SSH) {
+            gchar *remote = host_analysis_format_host(host);
+            const gchar *section = strstr(remote, "\nRemote Linux (SSH):");
+            if (section) g_string_append_printf(out, "%s\n", section);
+            g_free(remote);
+        }
         if (host->source_flags & HOST_COLLECTOR_LOCAL)
             g_string_append(out,
                 "CPU utilization: Not collected yet\n");
@@ -578,6 +690,11 @@ gchar *host_analysis_format_all(AppContext *app)
     g_free(observations);
     g_string_append(out, "\n========================================\n");
     return g_string_free(out, FALSE);
+}
+
+gchar *host_analysis_format_all(AppContext *app)
+{
+    return host_analysis_format_filtered(app, NULL, 0);
 }
 
 /* Report existing collector and SNMP state without polling or modifying either. */

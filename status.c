@@ -145,7 +145,8 @@ void display_status(AppContext *app) {
     g_string_append(status_report, "---------------------");
 
     pthread_mutex_unlock(&app->access.db_mutex);
-    DEBUG_PRINT("[ DEBUG ]: [STATUS] Unlocked DB Mutex.\n");
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSTATUS%s] %sUnlocked DB Mutex.%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
 
     // 2. Display to the User in the AI Pane with granular coloring
     append_ai_text(app, "[ Local Status ]\n", "cmd_tag");

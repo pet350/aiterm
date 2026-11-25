@@ -1,3 +1,4 @@
+#include "host_db.h"
 // Main program file for aiterm	project
 // The terminal emulator with AI assistance
 // By: Peter Talbott
@@ -244,8 +245,10 @@ int main(int argc, char *argv[]) {
     snmp_start_poller(app);
 
     // 17.0.1: Start additive local host analysis. This does not alter SNMP polling.
-    if (host_analysis_init(app) == 0)
+    if (host_analysis_init(app) == 0) {
+        host_db_init(app);
         host_analysis_start(app);
+    }
 
     // 17.1: Sync all Booleans
     sync_toggle_ui_elements(app);
@@ -271,6 +274,7 @@ int main(int argc, char *argv[]) {
     
     // 19.1: Stop the additive host-analysis collector before destroying AppContext.
     host_analysis_shutdown(app);
+    host_db_shutdown(app);
 
     // 19.2: Stop and join the existing SNMP worker before destroying AppContext resources. */
     snmp_stop_poller(app);

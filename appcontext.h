@@ -119,6 +119,15 @@ typedef struct {
     unsigned long journal_errors;
 
     /* Delta-4: remote Linux telemetry, separate from local collector fields. */
+    /* Epsilon-3: adaptive SSH timing, protected by host_analysis.mutex.
+     * Runtime-only until SSH profile persistence is implemented. */
+    guint ssh_last_duration_ms;
+    guint ssh_recent_max_ms;
+    guint ssh_timeout_seconds;
+    guint ssh_success_count;
+    guint ssh_timeout_count;
+    gboolean remote_linux_in_flight;
+    time_t remote_linux_last_success;
     gboolean remote_linux_valid;
     HostCollectorResult remote_linux_result;
     time_t remote_linux_collected_at;
@@ -154,7 +163,22 @@ typedef struct {
     gboolean collector_started;
     guint refresh_interval;
     guint analysis_interval;
+    GPtrArray *ssh_schedule_hosts; /* explicitly opted-in hosts, main thread */
+    guint ssh_schedule_source; /* GLib main-loop timer ID */
 } HostAnalysisContext;
+
+/* Zeta-1: dedicated Host Analysis persistence worker; connection owned by worker. */
+typedef struct {
+    GThread *thread;
+    GAsyncQueue *queue;
+    GMutex mutex;              /* status only; GAsyncQueue synchronizes jobs */
+    MYSQL *connection;         /* worker-thread exclusive */
+    gboolean running;
+    gboolean connected;
+    gboolean restore_complete;
+    guint64 jobs_processed;
+    guint64 jobs_failed;
+} HostDBContext;
 
 // 0.9.13-omega
 // moved from config.h
@@ -631,6 +655,7 @@ typedef struct AppContext {
     ExportConfig	export_opts;			// Data export settings
     GeminiCacheState	gemini_cache;			// Smart Cache state and token tracking
     SysWidgets		gui;				// Core system GUI widgets and theme providers
+    HostDBContext hostdb;                     // Dedicated Host Analysis MariaDB worker
     HostAnalysisContext host_analysis;			// Subsystem for storing multiple host statistics
     RateLimiter		limiter;			// API rate-limiting structures
     LocalCommand	local;				// Shell command history cache

@@ -9,29 +9,33 @@
 // Assisted by: OpenAI               
 // October - November 2026
 
-#include "host_linux_remote.h"
-#include "host_ssh.h"
-#include "host_analysis.h"
-#include "gui.h"
-#include "update.h"
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct { gchar *hostname; } RemoteJob;
+#include "host_db.h"
+#include "host_linux_remote.h"
+#include "host_ssh.h"
+#include "host_analysis.h"
+#include "gui.h"
+#include "utils.h"
+#include "update.h"
 
-/* Output is deliberately machine-readable and the command contains no user input.
+typedef struct { gchar *hostname; gboolean quiet; } RemoteJob;
+
+/* Epsilon-1a: printf %.0f avoids awk scientific notation for byte counts.
+ * Output is deliberately machine-readable and the command contains no user input.
  * Requires a POSIX shell, awk, df, uname and Linux /proc files. */
 static const char *remote_command =
     "LC_ALL=C; export LC_ALL; "
     "printf 'KERNEL='; uname -sr; "
     "awk '{print \"UPTIME=\" int($1)}' /proc/uptime; "
     "awk '{print \"LOAD=\" $1}' /proc/loadavg; "
-    "awk '/^MemTotal:/ {print \"MEM_TOTAL=\" $2 * 1024} "
-    "/^MemAvailable:/ {print \"MEM_AVAILABLE=\" $2 * 1024} "
-    "/^SwapTotal:/ {print \"SWAP_TOTAL=\" $2 * 1024} "
-    "/^SwapFree:/ {print \"SWAP_FREE=\" $2 * 1024}' /proc/meminfo; "
+    "awk '/^MemTotal:/ {printf \"MEM_TOTAL=%.0f\\n\", $2 * 1024} "
+    "/^MemAvailable:/ {printf \"MEM_AVAILABLE=%.0f\\n\", $2 * 1024} "
+    "/^SwapTotal:/ {printf \"SWAP_TOTAL=%.0f\\n\", $2 * 1024} "
+    "/^SwapFree:/ {printf \"SWAP_FREE=%.0f\\n\", $2 * 1024}' /proc/meminfo; "
     "df -B1 -P / | awk 'NR==2 {print \"DISK_TOTAL=\" $2; print \"DISK_USED=\" $3}'";
 
 static gboolean parse_long(const char *s, long long *out)
@@ -81,6 +85,15 @@ static void finished(AppContext *app, const HostSSHResult *result, gpointer data
     HostDetails sample = {0};
     gboolean ok = result->success && parse_sample(result->stdout_text, &sample);
     HostAnalysisContext *ctx = &app->host_analysis;
+    HostDetails persistence_snapshot = {0};
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     if (ctx->initialized) {
         pthread_mutex_lock(&ctx->mutex);
         HostDetails *h = host_analysis_find_or_create_locked(ctx, job->hostname);
@@ -88,6 +101,8 @@ static void finished(AppContext *app, const HostSSHResult *result, gpointer data
             h->source_flags |= HOST_COLLECTOR_SSH;
             h->remote_linux_collected_at = time(NULL);
             h->remote_linux_result = ok ? HOST_COLLECT_OK : HOST_COLLECT_ERROR;
+            h->remote_linux_in_flight = FALSE;
+            if (ok) h->remote_linux_last_success = h->remote_linux_collected_at;
             if (ok) {
                 h->remote_linux_valid = TRUE;
                 g_strlcpy(h->remote_linux_kernel, sample.remote_linux_kernel, sizeof(h->remote_linux_kernel));
@@ -110,15 +125,37 @@ static void finished(AppContext *app, const HostSSHResult *result, gpointer data
                     sizeof(h->remote_linux_error));
             }
         }
+        if (h) persistence_snapshot = *h;
         pthread_mutex_unlock(&ctx->mutex);
     }
+    if (persistence_snapshot.hostname[0])
+        host_db_save_collection_result(app, &persistence_snapshot, ok,
+            result->elapsed_ms,
+            ok ? "" : (result->error_message ? result->error_message :
+                (result->success ? "Incomplete remote Linux response" : "SSH command failed")));
     gchar *message = g_strdup_printf("SSH Linux collection %s: %s%s%s\n",
         ok ? "SUCCESS" : "FAILED", job->hostname,
         ok ? "" : " : ", ok ? "" : (result->error_message ? result->error_message : "Incomplete response or SSH failure"));
-    write_to_ai_pane(app, "Hosts: ", message, "system_tag", "body_tag");
-    g_free(message); g_free(job->hostname); g_free(job);
+    if (!job->quiet) write_to_ai_pane(app, "Hosts: ", message, "system_tag", "body_tag");
+    else {
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sSSH%s] %sHost Analysis scheduled SSH: %s%s%s\n", 
+		lt_pl, nml, cy, nml, gr,
+		red, message, nml);
+    }
+    g_free(message);
+    g_free(job->hostname);
+    g_free(job);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
-gboolean host_linux_remote_collect(AppContext *app, const char *hostname, GError **error)
+
+static gboolean collect_impl(AppContext *app, const char *hostname, gboolean quiet, GError **error)
 {
     if (!app || !app->host_analysis.initialized || !hostname || !*hostname ||
         strlen(hostname) >= sizeof(((HostDetails *)0)->hostname) ||
@@ -126,14 +163,40 @@ gboolean host_linux_remote_collect(AppContext *app, const char *hostname, GError
         g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Invalid SSH host or Host Analysis not initialized");
         return FALSE;
     }
+    HostAnalysisContext *ctx = &app->host_analysis;
+    pthread_mutex_lock(&ctx->mutex);
+    HostDetails *host = host_analysis_find_or_create_locked(ctx, hostname);
+    if (!host) {
+        pthread_mutex_unlock(&ctx->mutex);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NO_SPACE, "Host registry full");
+        return FALSE;
+    }
+    if (host->remote_linux_in_flight) {
+        pthread_mutex_unlock(&ctx->mutex);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_PENDING, "SSH collection already in progress");
+        return FALSE;
+    }
+    host->remote_linux_in_flight = TRUE;
+    pthread_mutex_unlock(&ctx->mutex);
     HostSSHProfile profile = {0};
     g_strlcpy(profile.hostname, hostname, sizeof(profile.hostname));
     profile.auth_method = HOST_SSH_CONFIG;
     profile.enabled = TRUE;
     RemoteJob *job = g_new0(RemoteJob, 1);
     job->hostname = g_strdup(hostname);
-    if (!host_ssh_execute_async(app, &profile, remote_command, 20, finished, job, error)) {
+    job->quiet = quiet;
+    if (!host_ssh_execute_async(app, &profile, remote_command, host_ssh_adaptive_timeout(app, hostname, FALSE), finished, job, error)) {
+        pthread_mutex_lock(&ctx->mutex);
+        host = host_analysis_find_or_create_locked(ctx, hostname);
+        if (host) host->remote_linux_in_flight = FALSE;
+        pthread_mutex_unlock(&ctx->mutex);
         g_free(job->hostname); g_free(job); return FALSE;
     }
     return TRUE;
 }
+
+gboolean host_linux_remote_collect(AppContext *app, const char *hostname, GError **error)
+{ return collect_impl(app, hostname, FALSE, error); }
+
+gboolean host_linux_remote_collect_scheduled(AppContext *app, const char *hostname, GError **error)
+{ return collect_impl(app, hostname, TRUE, error); }

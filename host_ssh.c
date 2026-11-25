@@ -10,20 +10,89 @@
 // Assisted by: OpenAI               
 // October 2026
 
-#include "host_ssh.h"
 #include <string.h>
+#include "host_db.h"
+#include "host_ssh.h"
+#include "host_analysis.h"
+#include "utils.h"
 
-typedef struct {
-    AppContext *app;
-    GSubprocess *process;
-    GCancellable *cancellable;
-    HostSSHCompletion completion;
-    gpointer user_data;
-    guint timeout_id;
-    gboolean timed_out;
-} SSHJob;
+/* Only the host registry owns adaptive timing; no SSH I/O under its mutex. */
+guint host_ssh_adaptive_timeout(AppContext *app, const char *hostname, gboolean test)
+{
+    if (test) return 60;
+    guint seconds = 60; /* safe initial collection before calibration */
+    if (!app || !hostname || !app->host_analysis.initialized) return seconds;
+    HostAnalysisContext *ctx = &app->host_analysis;
+    pthread_mutex_lock(&ctx->mutex);
+    HostDetails *host = host_analysis_find_or_create_locked(ctx, hostname);
+    if (host && host->ssh_success_count) {
+        guint ms = host->ssh_recent_max_ms;
+        seconds = (ms + 999) / 1000 + 5;
+        if (seconds < 15) seconds = 15;
+        if (seconds > 120) seconds = 120;
+    }
+    if (host) host->ssh_timeout_seconds = seconds;
+    pthread_mutex_unlock(&ctx->mutex);
+    return seconds;
+}
 
-static gboolean ssh_timeout(gpointer data)
+void record_ssh_timing(SSHJob *job, const HostSSHResult *result)
+{
+    if (!job->app->host_analysis.initialized) return;
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
+    HostAnalysisContext *ctx = &job->app->host_analysis;
+    pthread_mutex_lock(&ctx->mutex);
+    HostDetails *host = host_analysis_find_or_create_locked(ctx, job->hostname);
+    if (host) {
+        host->ssh_last_duration_ms = result->elapsed_ms;
+        if (result->success) {
+            /* Retain the highest recent observation. A new fast sample must
+             * not immediately erase the slow-host safety allowance. */
+            if (result->elapsed_ms > host->ssh_recent_max_ms)
+                host->ssh_recent_max_ms = result->elapsed_ms;
+            host->ssh_success_count++;
+        } else if (result->timed_out) {
+            host->ssh_timeout_count++;
+            guint ms = job->timeout_seconds * 1000;
+            if (ms > host->ssh_recent_max_ms) host->ssh_recent_max_ms = ms;
+        }
+    }
+    HostDetails snapshot = {0};
+    if (host) snapshot = *host;
+    pthread_mutex_unlock(&ctx->mutex);
+    if (snapshot.hostname[0]) host_db_save_timing(job->app, &snapshot);
+    char *SUCCESS_VAL = g_malloc(64);
+    char *FAIL_VAL = g_malloc(64);
+    snprintf(SUCCESS_VAL, 64, "%sSUCCESS%s", gr, nml);
+    snprintf(FAIL_VAL, 64, "%sFAILED%s", red, nml);
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sSSH%s] %sHost SSH [%s%s%s] : %s %selapsed=%s%u ms%s, limit=%s%u s%s, exit=%s%d%s\n",
+	lt_pl, nml, cy, nml, gr,
+        red, job->hostname, gr,
+	result->success ? SUCCESS_VAL : FAIL_VAL, gr,
+        yl, result->elapsed_ms, gr,
+	yl, job->timeout_seconds, gr, 
+	red, result->exit_status, nml);
+
+    g_free(SUCCESS_VAL);
+    g_free(FAIL_VAL);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
+}
+
+gboolean ssh_timeout(gpointer data)
 {
     SSHJob *job = data;
     job->timeout_id = 0;
@@ -33,13 +102,14 @@ static gboolean ssh_timeout(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
-static void ssh_complete(GObject *source, GAsyncResult *async, gpointer data)
+void ssh_complete(GObject *source, GAsyncResult *async, gpointer data)
 {
     SSHJob *job = data;
     HostSSHResult result = {0};
     GError *error = NULL;
     result.exit_status = -1;
     result.timed_out = job->timed_out;
+    result.elapsed_ms = (guint)MIN((g_get_monotonic_time() - job->started_us) / 1000, G_MAXUINT);
     if (job->timeout_id) g_source_remove(job->timeout_id);
     gboolean communicated = g_subprocess_communicate_utf8_finish(
         G_SUBPROCESS(source), async, &result.stdout_text, &result.stderr_text, &error);
@@ -54,12 +124,14 @@ static void ssh_complete(GObject *source, GAsyncResult *async, gpointer data)
     } else if (!result.success) {
         result.error_message = g_strdup_printf("SSH exited with status %d", result.exit_status);
     }
+    record_ssh_timing(job, &result);
     if (job->completion) job->completion(job->app, &result, job->user_data);
     g_free(result.stdout_text);
     g_free(result.stderr_text);
     g_free(result.error_message);
     g_object_unref(job->process);
     g_object_unref(job->cancellable);
+    g_free(job->hostname);
     g_free(job);
 }
 
@@ -118,7 +190,10 @@ gboolean host_ssh_execute_async(AppContext *app, const HostSSHProfile *profile,
     job->cancellable = g_cancellable_new();
     job->completion = completion;
     job->user_data = user_data;
-    job->timeout_id = g_timeout_add_seconds(timeout_seconds ? timeout_seconds : 15,
+    job->hostname = g_strdup(profile->hostname);
+    job->started_us = g_get_monotonic_time();
+    job->timeout_seconds = timeout_seconds ? timeout_seconds : 60;
+    job->timeout_id = g_timeout_add_seconds(job->timeout_seconds,
                                             ssh_timeout, job);
     g_subprocess_communicate_utf8_async(process, NULL, job->cancellable,
                                         ssh_complete, job);
