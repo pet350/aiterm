@@ -1,0 +1,2 @@
+-- Zeta-1: Host Analysis tables are initialized by the dedicated Host DB worker.
+-- This migration marker is informational; see host_db.c for idempotent DDL.
