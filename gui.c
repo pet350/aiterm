@@ -316,13 +316,6 @@ static gboolean on_window_key_press(GtkWidget *widget, GdkEventKey *event, gpoin
         (event->keyval != GDK_KEY_Tab && event->keyval != GDK_KEY_ISO_Left_Tab))
         return FALSE;
 
-    char *lt_pl   = g_strdup(app->ansi.lt_purple);
-    char *cy      = g_strdup(app->ansi.cyan);
-    char *yl      = g_strdup(app->ansi.yellow);
-    char *gr      = g_strdup(app->ansi.green);
-    char *red     = g_strdup(app->ansi.red);
-    char *nml     = g_strdup(app->ansi.normal);
-
     GtkWidget *terminal = NULL;
     if (app->gui.notebook && GTK_IS_NOTEBOOK(app->gui.notebook)) {
         GtkNotebook *nb = GTK_NOTEBOOK(app->gui.notebook);
@@ -332,6 +325,13 @@ static gboolean on_window_key_press(GtkWidget *widget, GdkEventKey *event, gpoin
             terminal = host_focus_find_vte(page);
         }
     }
+
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
 
     GtkWidget *next = NULL;
     if (app->gui.entry && gtk_widget_has_focus(app->gui.entry))

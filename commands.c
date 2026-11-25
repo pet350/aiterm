@@ -40,6 +40,7 @@
 #include "host_analysis.h"
 #include "host_ssh.h"
 #include "host_linux_remote.h"
+#include "host_db.h"
 
 extern const char* HIGHLIGHT_STRING;
 extern const char* GENERAL_DIRECTIVES;
@@ -283,10 +284,12 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
             char *nml     = g_strdup(global_app->ansi.normal);
 
             if (encrypted) {
-        	DEBUG_PRINT("Encrypted string: %s\n", encrypted);
+        	DEBUG_PRINT("[ %sDEEBUG%s ]: [%sCrypt%s] %sEncrypted string: %s%s%s\n", 
+			lt_pl, nml, cy, nml, gr, yl, encrypted, nml);
         	free(encrypted);
             } else {
-        	DEBUG_PRINT("Error: Encryption failed.\n");
+        	DEBUG_PRINT("[ %sDEBUG%s ]: [%sCrypt%s] %sError%s:%s Encryption failed.%s\n",
+			lt_pl, nml, cy, nml, red, nml, yl, nml);
             }
 
             g_free(lt_pl);
@@ -308,12 +311,28 @@ void parse_command_line_options(AppContext *app, int argc, char *argv[]) {
 void cmd_hosts_dump(AppContext *app, const char *args)
 {
     if (!app) return;
-    while (args && g_ascii_isspace(*args)) ++args;
-    if (args && *args) {
-        write_to_ai_pane(app, "System: ", "Usage: /hosts dump\n", "ai_tag", "cmd_tag");
-        return;
+    gchar *filter = g_strdup(args ? args : "");
+    g_strstrip(filter);
+    guint sources = 0;
+    const char *pattern = filter;
+    if (g_str_has_prefix(filter, "source:")) {
+        gchar *space = strpbrk(filter, " \t");
+        if (space) { *space++ = 0; pattern = g_strstrip(space); }
+        else pattern = NULL;
+        const char *source = filter + 7;
+        if (!g_ascii_strcasecmp(source, "local")) sources = HOST_COLLECTOR_LOCAL;
+        else if (!g_ascii_strcasecmp(source, "snmp")) sources = HOST_COLLECTOR_SNMP;
+        else if (!g_ascii_strcasecmp(source, "ssh")) sources = HOST_COLLECTOR_SSH;
+        else if (!g_ascii_strcasecmp(source, "systemd")) sources = HOST_COLLECTOR_SYSTEMD;
+        else if (!g_ascii_strcasecmp(source, "database")) sources = HOST_COLLECTOR_DATABASE;
+        else {
+            write_to_ai_pane(app, "System: ", "Usage: /hosts dump [source:local|snmp|ssh|systemd|database] [hostname/glob]\n", "ai_tag", "cmd_tag");
+            g_free(filter);
+            return;
+        }
     }
-    gchar *report = host_analysis_format_all(app);
+    gchar *report = host_analysis_format_filtered(app, pattern, sources);
+    g_free(filter);
     write_to_ai_pane(app, "Hosts: ", report, "system_tag", "body_tag");
     g_free(report);
 }
@@ -402,7 +421,7 @@ static void cmd_hosts_ssh_test(AppContext *app, const char *args)
     profile.auth_method = HOST_SSH_CONFIG;
     profile.enabled = TRUE;
     GError *error = NULL;
-    if (!host_ssh_execute_async(app, &profile, "uname -s", 15,
+    if (!host_ssh_execute_async(app, &profile, "uname -s", host_ssh_adaptive_timeout(app, hostname, TRUE),
                                 ssh_test_finished, NULL, &error)) {
         write_to_ai_pane(app, "Hosts: ", error ? error->message : "SSH launch failed",
                          "system_tag", "body_tag");
@@ -410,6 +429,72 @@ static void cmd_hosts_ssh_test(AppContext *app, const char *args)
     } else {
         write_to_ai_pane(app, "Hosts: ", "SSH test started asynchronously.\n",
                          "system_tag", "body_tag");
+    }
+    g_strfreev(words);
+}
+
+static void cmd_hosts_ssh_schedule(AppContext *app, const char *args)
+{
+    gchar **parts = g_strsplit_set(args ? args : "", " \t\r\n", -1);
+    const char *words[3] = {0};
+    guint n = 0;
+    for (guint i = 0; parts[i]; i++)
+        if (*parts[i]) { if (n < 3) words[n] = parts[i]; n++; }
+    if (n == 1 && g_ascii_strcasecmp(words[0], "list") == 0) {
+        gchar *report = host_analysis_schedule_list(app);
+        write_to_ai_pane(app, "Hosts: ", report, "system_tag", "body_tag");
+        g_free(report);
+    } else if (n == 2 && g_ascii_strcasecmp(words[0], "add") == 0) {
+        gboolean ok = host_analysis_schedule_add(app, words[1]);
+        write_to_ai_pane(app, "Hosts: ", ok ? "SSH host added to schedule.\n" : "Invalid SSH hostname.\n", "system_tag", "body_tag");
+    } else if (n == 2 && g_ascii_strcasecmp(words[0], "remove") == 0) {
+        gboolean ok = host_analysis_schedule_remove(app, words[1]);
+        write_to_ai_pane(app, "Hosts: ", ok ? "SSH host removed from schedule.\n" : "SSH host not scheduled.\n", "system_tag", "body_tag");
+    } else
+        write_to_ai_pane(app, "Hosts: ", "Usage: /hosts ssh schedule add|remove <hostname> OR /hosts ssh schedule list\n", "system_tag", "body_tag");
+    g_strfreev(parts);
+}
+
+static void cmd_hosts_db(AppContext *app, const char *args)
+{
+    gchar *command = g_strdup(args ? args : "");
+    g_strstrip(command);
+    if (g_ascii_strcasecmp(command, "status") == 0) {
+        gchar *report = host_db_format_status(app);
+        write_to_ai_pane(app, "Host DB: ", report, "system_tag", "body_tag");
+        g_free(report);
+    } else if (g_ascii_strcasecmp(command, "cleanup") == 0) {
+        host_db_queue_cleanup(app);
+        write_to_ai_pane(app, "Host DB: ", "History cleanup queued.\n", "system_tag", "body_tag");
+    } else {
+        write_to_ai_pane(app, "Host DB: ", "Usage: /hosts db status|cleanup\n", "system_tag", "body_tag");
+    }
+    g_free(command);
+}
+
+static void history_to_ai(AppContext *app, const char *report, gpointer data)
+{
+    (void)data;
+    write_to_ai_pane(app, "Host history: ", report, "system_tag", "body_tag");
+}
+
+static void cmd_hosts_history(AppContext *app, const char *args)
+{
+    gchar **words = g_strsplit_set(args ? args : "", " \t\r\n", -1);
+    const char *tokens[3] = {0};
+    guint count = 0;
+    for (guint i = 0; words[i]; ++i)
+        if (*words[i]) { if (count < 3) tokens[count] = words[i]; count++; }
+    if (count < 1 || count > 2 || !tokens[0] ||
+        strlen(tokens[0]) >= sizeof(((HostDetails *)0)->hostname) ||
+        tokens[0][0] == '-' || strpbrk(tokens[0], "\\/;|&$`'\"<>!(){}[]") ||
+        (count == 2 && (!g_ascii_isdigit(tokens[1][0]) ||
+         strspn(tokens[1], "0123456789") != strlen(tokens[1])))) {
+        write_to_ai_pane(app, "Hosts: ", "Usage: /hosts history <hostname> [hours]\n", "system_tag", "body_tag");
+    } else {
+        guint hours = count == 2 ? (guint)g_ascii_strtoull(tokens[1], NULL, 10) : 24;
+        host_db_query_history(app, tokens[0], hours, 50, history_to_ai, NULL);
+        write_to_ai_pane(app, "Hosts: ", "History query queued.\n", "system_tag", "body_tag");
     }
     g_strfreev(words);
 }
@@ -436,10 +521,13 @@ static CommandRegistry registry[] = {
     {"features", "Display new aiterm features", handle_features_wrapper},
     {"help", "Display this dynamic help menu", handle_help_wrapper},
     {"history", "Display mysql history", handle_history_wrapper},
+    {"hosts db", "Host Analysis database status and retention cleanup", cmd_hosts_db},
+    {"hosts history", "Query stored Host Analysis SSH history", cmd_hosts_history},
+    {"hosts ssh schedule", "Manage explicitly opted-in SSH collection hosts (add/remove/list)", cmd_hosts_ssh_schedule},
     {"hosts ssh collect", "Collect remote Linux telemetry over SSH", cmd_hosts_ssh_collect},
     {"hosts ssh test", "Test asynchronous SSH transport to a host", cmd_hosts_ssh_test},
     {"hosts refresh", "Refresh local Host Analysis and reimport existing SNMP samples", cmd_hosts_refresh},
-    {"hosts dump", "Display all collected Host Analysis data in the AI pane", cmd_hosts_dump},
+    {"hosts dump", "Display Host Analysis data [source:TYPE] [hostname/glob]", cmd_hosts_dump},
     {"hosts status", "Display Host Analysis and SNMP collection status", cmd_hosts_status},
     {"hw", "Display various hardware info", handle_hw_wrapper},
     {"idle", "Toggle automatic idle suspension (on/off/status)", cmd_toggle_idle},
@@ -883,15 +971,32 @@ void handle_list_models_wrapper(AppContext *app, const char *args) {
 }
 
 void handle_reset_state_wrapper(AppContext *app, const char *args) {
+    char *lt_pl   = g_strdup(global_app->ansi.lt_purple);
+    char *cy      = g_strdup(global_app->ansi.cyan);
+    char *yl      = g_strdup(global_app->ansi.yellow);
+    char *gr      = g_strdup(global_app->ansi.green);
+    char *red     = g_strdup(global_app->ansi.red);
+    char *nml     = g_strdup(global_app->ansi.normal);
+
     write_to_ai_pane(app, "AI State:", "Reset processing state", "system_tag", "ai_tag");
     if (g_atomic_int_get(&app->sys.is_processing)) {
         g_atomic_int_set(&app->sys.is_processing, 0);
-        DEBUG_PRINT("[ DEBUG ]: RESET_STATE: cleared is_processing flag\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sRESET STATE%s]: %scleared %sis_processing %sflag%s\n",
+		lt_pl, nml, cy, nml, gr, yl, gr, nml);
     }
     if (g_atomic_int_get(&app->sys.ai_busy)) {
         g_atomic_int_set(&app->sys.ai_busy, 0);
-        DEBUG_PRINT("[ DEBUG ]: RESET_STATE: cleared ai_busy flag\n");
+        DEBUG_PRINT("[ %sDEBUG%s ]: [%sRESET STATE%s]: %scleared %sai_busy %sflag%s\n",
+		lt_pl, nml, cy, nml, gr, yl, gr, nml);
     }
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
     gemini_cache_invalidate(app);
 }
 
@@ -1053,34 +1158,114 @@ void cmd_session_no_default(AppContext *app, const char *args) {
 }
 
 void cmd_session_manager_wrapper(AppContext *app, const char *args) {
-    DEBUG_PRINT("[ DEBUG ]: [Commands]: Opening Session Manager Window\n");
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sCommands%s]: %sOpening Session Manager Window%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
     write_to_ai_pane(app, "System: ", "Opening session manager window", "ai_tag", "cmd_tag");
     open_session_manager_window(app);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 void cmd_history_manager_wrapper(AppContext *app, const char *args) {
-    DEBUG_PRINT("[ DEBUG ]: [Commands]: Opening History Manager Window\n");
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sCommands%s]: %sOpening History Manager Window%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
     write_to_ai_pane(app, "System: ", "Opening history manager window", "ai_tag", "cmd_tag");
     open_history_manager_window(app);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 void cmd_noisefilter_manager_wrapper(AppContext *app, const char *args) {
-    DEBUG_PRINT("[ DEBUG ]: [Commands]: Opening Noise Filter Manager Window\n");
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sCommands%s]: %sOpening Noise Filter Manager Window%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
     noise_filter_load_from_db(app);
     write_to_ai_pane(app, "System: ", "Opening noise filter manager window", "ai_tag", "cmd_tag");
     open_noise_filter_manager_window(app);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 void cmd_provider_manager_wrapper(AppContext *app, const char *args) {
-    DEBUG_PRINT("[ DEBUG ]: [Commands]: Opening AI Provider Manager Window\n");
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sCommands%s]: %sOpening AI Provider Manager Window%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
     write_to_ai_pane(app, "System: ", "Opening AI Provider Manager window", "ai_tag", "cmd_tag");
     open_provider_manager_window(app);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 void cmd_policy_manager_wrapper(AppContext *app, const char *args) {
-    DEBUG_PRINT("[ DEBUG ]: [Commands]: Opening Policy Manager Window\n");
+    char *lt_pl   = g_strdup(app->ansi.lt_purple);
+    char *cy      = g_strdup(app->ansi.cyan);
+    char *yl      = g_strdup(app->ansi.yellow);
+    char *gr      = g_strdup(app->ansi.green);
+    char *red     = g_strdup(app->ansi.red);
+    char *nml     = g_strdup(app->ansi.normal);
+
+    DEBUG_PRINT("[ %sDEBUG%s ]: [%sCommands%s]: %sOpening Policy Manager Window%s\n",
+	lt_pl, nml, cy, nml, gr, nml);
     write_to_ai_pane(app, "System: ", "Opening policy manager window", "ai_tag", "cmd_tag");
     open_policy_manager_window(app);
+
+    g_free(lt_pl);
+    g_free(cy);
+    g_free(yl);
+    g_free(gr);
+    g_free(red);
+    g_free(nml);
+
 }
 
 // -------------------------------

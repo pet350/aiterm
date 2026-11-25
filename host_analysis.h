@@ -20,6 +20,9 @@ void host_analysis_stop(AppContext *app);
 void host_analysis_analyze_all(AppContext *app); /* compatibility */
 void host_analysis_refresh_all(AppContext *app);
 void host_analysis_import_snmp(AppContext *app);
+gboolean host_analysis_schedule_add(AppContext *app, const char *hostname);
+gboolean host_analysis_schedule_remove(AppContext *app, const char *hostname);
+gchar *host_analysis_schedule_list(AppContext *app);
 /* Local systemd collection is part of host_analysis_refresh_all(). */
 
 /* Thread-safe copy of a host record; caller owns the output. */
@@ -27,6 +30,8 @@ gboolean host_analysis_get_host(AppContext *app, guint index, HostDetails *out);
 
 /* Formats a snapshot for future AI-context integration. Caller frees with g_free(). */
 gchar *host_analysis_format_host(const HostDetails *host);
+gboolean host_analysis_matches(const HostDetails *host, const char *pattern, guint sources);
+gchar *host_analysis_format_filtered(AppContext *app, const char *pattern, guint sources);
 gchar *host_analysis_format_all(AppContext *app);
 gchar *host_analysis_format_status(AppContext *app);
 
